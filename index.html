@@ -925,6 +925,7 @@
       if (!supabaseClient) {
         window.localStorage.setItem("firelight-kit-unlocked", "true");
         window.localStorage.setItem("firelight-student-email", email);
+        window.localStorage.setItem("firelight-student-name", name);
         return;
       }
 
@@ -968,6 +969,8 @@
 
       setupAction.disabled = true;
       setupAction.textContent = "Lighting...";
+      window.localStorage.setItem("firelight-student-name", name);
+      window.localStorage.setItem("firelight-student-email", email);
       setSetupFeedback(supabaseClient ? "Checking your Firelight kit..." : "Camp lit locally. Supabase keys can be added on Cloudflare.", "");
 
       try {

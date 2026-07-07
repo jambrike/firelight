@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Morse Tutorial</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --cream: #fff2ce;
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --ink: #05070d;
+      --panel: rgba(4, 7, 12, 0.88);
+      --teal: #1f6f72;
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: var(--cream);
+      font-family: var(--pixel);
+      letter-spacing: 0;
+    }
+
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    .site {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 50% 72%, rgba(255, 123, 24, 0.22), transparent 22rem),
+        linear-gradient(#050714 0%, #071120 48%, #0c1b1c 100%);
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+    }
+
+    .vignette {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 60%, transparent 0 16rem, rgba(0, 0, 0, 0.3) 34rem),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.58), transparent 24%, transparent 78%, rgba(0, 0, 0, 0.62)),
+        linear-gradient(rgba(0, 0, 0, 0.12), transparent 34%, rgba(0, 0, 0, 0.62));
+    }
+
+    .back {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      z-index: 7;
+      padding: 0.75rem 0.85rem;
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 4px solid #2e1305;
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+      text-decoration: none;
+      font-size: 0.65rem;
+    }
+
+    .lesson {
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+      display: grid;
+      grid-template-columns: minmax(23rem, 0.86fr) minmax(34rem, 1.32fr);
+      gap: clamp(1rem, 2vw, 1.6rem);
+      padding: clamp(5rem, 7vw, 6.2rem) clamp(1rem, 4vw, 4rem) clamp(1rem, 3vw, 2rem);
+    }
+
+    .coach-panel,
+    .code-card,
+    .terminal-card {
+      background:
+        linear-gradient(rgba(5, 8, 14, 0.94), rgba(4, 7, 12, 0.9)),
+        repeating-linear-gradient(90deg, rgba(255, 138, 32, 0.035) 0 2px, transparent 2px 18px);
+      border: 3px solid #1c3441;
+      box-shadow:
+        inset -5px -5px 0 rgba(0, 0, 0, 0.4),
+        inset 5px 5px 0 rgba(90, 132, 122, 0.14),
+        0 1rem 3rem rgba(0, 0, 0, 0.48),
+        0 0 2.4rem rgba(255, 122, 24, 0.12);
+    }
+
+    .coach-panel {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      gap: 0.9rem;
+      padding: 1rem;
+    }
+
+    .kicker {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.65rem;
+      line-height: 1.6;
+    }
+
+    h1 {
+      margin: 0;
+      color: #fff4d3;
+      font-size: clamp(1.45rem, 3vw, 2.35rem);
+      line-height: 1.25;
+      text-shadow: 0 0 1.3rem rgba(255, 122, 24, 0.28);
+    }
+
+    .copy {
+      margin: 0;
+      color: rgba(255, 242, 206, 0.88);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.35rem, 2.2vw, 1.8rem);
+      line-height: 1.05;
+    }
+
+    .name-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.6rem;
+      align-items: end;
+    }
+
+    .name-row label {
+      display: grid;
+      gap: 0.4rem;
+      color: rgba(255, 242, 206, 0.68);
+      font-size: 0.55rem;
+      line-height: 1.6;
+    }
+
+    .name-row input {
+      width: 100%;
+      min-height: 3rem;
+      padding: 0.75rem;
+      color: #fff7df;
+      background: rgba(2, 5, 12, 0.78);
+      border: 3px solid #1c3441;
+      box-shadow:
+        inset 4px 4px 0 rgba(0, 0, 0, 0.42),
+        inset -4px -4px 0 rgba(74, 111, 109, 0.18);
+      font-size: 0.7rem;
+      outline: none;
+    }
+
+    .small-button {
+      min-height: 3rem;
+      padding: 0.65rem 0.75rem;
+      color: #211108;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid #2e1305;
+      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffd06b, 0 3px 0 #1f0c02;
+      cursor: pointer;
+      font-size: 0.6rem;
+    }
+
+    .letter-board {
+      min-height: 10rem;
+      display: grid;
+      gap: 0.55rem;
+      align-content: start;
+      overflow: auto;
+      padding-right: 0.1rem;
+    }
+
+    .letter-tile {
+      display: grid;
+      grid-template-columns: 2.4rem 1fr auto;
+      gap: 0.65rem;
+      align-items: center;
+      padding: 0.7rem;
+      background: rgba(11, 13, 18, 0.82);
+      border: 2px solid rgba(255, 198, 64, 0.14);
+      color: rgba(255, 242, 206, 0.8);
+    }
+
+    .letter-tile.active {
+      border-color: rgba(255, 198, 64, 0.7);
+      box-shadow: 0 0 1.5rem rgba(255, 122, 24, 0.16);
+    }
+
+    .letter-tile.done {
+      border-color: rgba(44, 198, 123, 0.65);
+      color: #d9ffdf;
+    }
+
+    .letter {
+      display: grid;
+      place-items: center;
+      width: 2.25rem;
+      height: 2.25rem;
+      color: #241100;
+      background: linear-gradient(#ffd36f, #f09a22);
+      border: 3px solid #2e1305;
+      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffe08c;
+      font-size: 0.7rem;
+    }
+
+    .morse {
+      font-size: 0.86rem;
+      color: #fff1c7;
+    }
+
+    .tile-status {
+      width: 1rem;
+      height: 1rem;
+      background: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 0 0.7rem rgba(255, 255, 255, 0.08);
+    }
+
+    .letter-tile.done .tile-status {
+      background: #8dff8d;
+      box-shadow: 0 0 1rem rgba(141, 255, 141, 0.5);
+    }
+
+    .tool-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.55rem;
+    }
+
+    .tool-row button,
+    .actions button {
+      min-height: 3rem;
+      color: #211108;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid #2e1305;
+      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffd06b, 0 3px 0 #1f0c02;
+      cursor: pointer;
+      font-size: 0.58rem;
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 1rem;
+    }
+
+    .code-card {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .code-title,
+    .terminal-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.9rem 1rem;
+      background: rgba(2, 3, 7, 0.7);
+      border-bottom: 3px solid #1c3441;
+      color: #ffc46a;
+      font-size: 0.68rem;
+      line-height: 1.6;
+    }
+
+    .board-pill {
+      color: rgba(255, 242, 206, 0.72);
+    }
+
+    textarea {
+      width: 100%;
+      height: 100%;
+      resize: none;
+      padding: 1.1rem;
+      color: #fff7df;
+      background: rgba(0, 3, 8, 0.92);
+      border: 0;
+      outline: none;
+      font-family: "Courier New", monospace;
+      font-size: clamp(0.82rem, 1.18vw, 1.05rem);
+      line-height: 1.5;
+      tab-size: 2;
+    }
+
+    .terminal-card {
+      display: grid;
+      grid-template-columns: minmax(17rem, 0.78fr) minmax(0, 1fr);
+      min-height: 12.5rem;
+    }
+
+    .actions {
+      display: grid;
+      gap: 0.65rem;
+      padding: 1rem;
+      border-right: 3px solid #1c3441;
+    }
+
+    .actions button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .status-wrap {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+    }
+
+    .status {
+      padding: 0.9rem 1rem;
+      color: #fff2ce;
+      font-family: var(--readable-pixel);
+      font-size: 1.45rem;
+      line-height: 1.05;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 0 1rem 1rem;
+      color: #decda8;
+      font-family: "Courier New", monospace;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .compile-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 240ms ease, visibility 240ms ease;
+      background: rgba(0, 0, 0, 0.38);
+    }
+
+    body.is-compiling .compile-overlay {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .compile-cloud {
+      width: min(33rem, calc(100vw - 2rem));
+      padding: 1rem;
+      background: rgba(19, 10, 5, 0.94);
+      border: 4px solid #8d3a08;
+      box-shadow: 0 0 0 4px #2e1305, 0 0 3rem rgba(255, 122, 24, 0.26);
+      color: #fff2ce;
+      text-align: center;
+    }
+
+    .compile-title {
+      color: #ffc46a;
+      font-size: 0.85rem;
+    }
+
+    .compile-progress-shell {
+      height: 1.2rem;
+      margin: 1rem 0 0.7rem;
+      background: #08090d;
+      border: 3px solid #1c3441;
+      overflow: hidden;
+    }
+
+    .compile-progress-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff7a18, #ffc640);
+      transition: width 180ms steps(6, end);
+    }
+
+    .compile-percent {
+      color: rgba(255, 242, 206, 0.76);
+      font-size: 0.72rem;
+    }
+
+    @media (max-width: 980px) {
+      body {
+        overflow: auto;
+      }
+
+      .site {
+        min-height: 100vh;
+        height: auto;
+      }
+
+      .lesson {
+        position: relative;
+        grid-template-columns: 1fr;
+        padding-top: 5.5rem;
+      }
+
+      .terminal-card {
+        grid-template-columns: 1fr;
+      }
+
+      .actions {
+        border-right: 0;
+        border-bottom: 3px solid #1c3441;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="site" aria-label="Firelight Morse tutorial">
+    <canvas id="scene-canvas" aria-hidden="true"></canvas>
+    <div class="vignette" aria-hidden="true"></div>
+    <a class="back" href="../tutorial.html">Back</a>
+
+    <section class="lesson">
+      <aside class="coach-panel" aria-label="Morse code coach">
+        <p class="kicker">Second Tutorial</p>
+        <h1>Send your name in Morse.</h1>
+        <p class="copy">Use the LED like a tiny signal lamp. Firelight gives you <code>dot()</code> and <code>dash()</code>. You build the message.</p>
+
+        <div class="name-row">
+          <label>
+            Your name
+            <input id="student-name" type="text" maxlength="12" autocomplete="name" />
+          </label>
+          <button class="small-button" id="use-name" type="button">Set</button>
+        </div>
+
+        <div class="letter-board" id="letter-board" aria-live="polite"></div>
+
+        <div class="tool-row" aria-label="Code helpers">
+          <button type="button" data-insert="dot();">dot()</button>
+          <button type="button" data-insert="dash();">dash()</button>
+          <button type="button" data-insert="delay(600);">pause</button>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div class="code-card">
+          <div class="code-title">
+            <span>NameSignal.ino</span>
+            <span class="board-pill">Arduino Nano</span>
+          </div>
+          <textarea id="code" spellcheck="false" aria-label="Arduino Morse code editor"></textarea>
+        </div>
+
+        <div class="terminal-card">
+          <div class="actions">
+            <button id="check" type="button">Check message</button>
+            <button id="compile" type="button" disabled>Compile</button>
+            <button id="connect" type="button" disabled>Connect to board</button>
+            <button id="upload" type="button" disabled>Send to board</button>
+          </div>
+          <div class="status-wrap">
+            <div class="terminal-title">
+              <span>Signal Terminal</span>
+              <span>Morse name</span>
+            </div>
+            <div class="status" id="status">Type the Morse calls for your name.</div>
+            <pre id="log" aria-live="polite"></pre>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <div class="compile-overlay" aria-live="polite" aria-hidden="true">
+      <div class="compile-cloud">
+        <div class="compile-title" id="compile-title">Compiling signal...</div>
+        <div class="compile-progress-shell">
+          <div class="compile-progress-bar" id="compile-progress-bar"></div>
+        </div>
+        <div class="compile-percent" id="compile-percent">0%</div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    const ARDUINO_API_URL = "https://fya5q3cjgtd6loh65krkrknqce0ulqbk.lambda-url.eu-west-1.on.aws";
+    const MORSE = {
+      A: ".-", B: "-...", C: "-.-.", D: "-..", E: ".", F: "..-.", G: "--.", H: "....",
+      I: "..", J: ".---", K: "-.-", L: ".-..", M: "--", N: "-.", O: "---", P: ".--.",
+      Q: "--.-", R: ".-.", S: "...", T: "-", U: "..-", V: "...-", W: ".--", X: "-..-",
+      Y: "-.--", Z: "--.."
+    };
+    const BOARD = {
+      fqbn: "arduino:avr:nano",
+      baud: 57600,
+      pageSize: 128
+    };
+
+    const nameInput = document.querySelector("#student-name");
+    const useNameButton = document.querySelector("#use-name");
+    const letterBoard = document.querySelector("#letter-board");
+    const codeInput = document.querySelector("#code");
+    const checkButton = document.querySelector("#check");
+    const compileButton = document.querySelector("#compile");
+    const connectButton = document.querySelector("#connect");
+    const uploadButton = document.querySelector("#upload");
+    const statusBox = document.querySelector("#status");
+    const logBox = document.querySelector("#log");
+    const compileTitle = document.querySelector("#compile-title");
+    const compileProgressBar = document.querySelector("#compile-progress-bar");
+    const compilePercent = document.querySelector("#compile-percent");
+    const insertButtons = [...document.querySelectorAll("[data-insert]")];
+
+    let studentName = cleanName(window.localStorage.getItem("firelight-student-name") || "James");
+    let port;
+    let compileResult;
+    let compileProgress = 0;
+    let compileProgressTimer;
+
+    function cleanName(value) {
+      const letters = String(value || "").toUpperCase().replace(/[^A-Z]/g, "");
+      return letters || "JAMES";
+    }
+
+    function titleName(value) {
+      return value.charAt(0) + value.slice(1).toLowerCase();
+    }
+
+    function expectedLetters() {
+      return [...studentName].map((letter) => ({ letter, morse: MORSE[letter] })).filter((item) => item.morse);
+    }
+
+    function codeTemplate(name) {
+      return `void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  // Build ${titleName(name)} in Morse here.
+  // Use dot(); dash(); and delay(600); between letters.
+  // START YOUR NAME
+
+  // END YOUR NAME
+
+  delay(1400);
+}
+
+void dot() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(200);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(200);
+}
+
+void dash() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(600);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(200);
+}
+`;
+    }
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    function log(message) {
+      logBox.textContent += `${message}\n`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function renderLetters(progress = 0) {
+      letterBoard.innerHTML = "";
+      expectedLetters().forEach((item, index) => {
+        const tile = document.createElement("div");
+        tile.className = "letter-tile";
+        tile.classList.toggle("done", index < progress);
+        tile.classList.toggle("active", index === progress);
+        tile.innerHTML = `
+          <span class="letter">${item.letter}</span>
+          <span class="morse">${item.morse.replaceAll(".", "dot ").replaceAll("-", "dash ").trim()}</span>
+          <span class="tile-status" aria-hidden="true"></span>
+        `;
+        letterBoard.append(tile);
+      });
+    }
+
+    function extractChallengeCode() {
+      const match = codeInput.value.match(/\/\/ START YOUR NAME([\s\S]*?)\/\/ END YOUR NAME/);
+      return match ? match[1] : "";
+    }
+
+    function challengeTokens() {
+      const tokens = [];
+      const challenge = extractChallengeCode();
+      const tokenRegex = /\b(dot|dash)\s*\(\s*\)\s*;|delay\s*\(\s*600\s*\)\s*;/g;
+      let match;
+      while ((match = tokenRegex.exec(challenge))) {
+        if (match[1] === "dot") tokens.push(".");
+        else if (match[1] === "dash") tokens.push("-");
+        else tokens.push("/");
+      }
+      return tokens;
+    }
+
+    function expectedTokens() {
+      const tokens = [];
+      expectedLetters().forEach((item, index, list) => {
+        tokens.push(...item.morse.split(""));
+        if (index < list.length - 1) tokens.push("/");
+      });
+      return tokens;
+    }
+
+    function matchingLetters(tokens) {
+      let cursor = 0;
+      let done = 0;
+      const list = expectedLetters();
+      for (let index = 0; index < list.length; index += 1) {
+        const item = list[index];
+        const required = item.morse.split("");
+        const got = tokens.slice(cursor, cursor + required.length);
+        if (got.join("") !== required.join("")) break;
+        cursor += required.length;
+        if (index < list.length - 1) {
+          if (tokens[cursor] !== "/") break;
+          cursor += 1;
+        }
+        done += 1;
+      }
+      return done;
+    }
+
+    function checkChallenge(showMessage = true) {
+      const got = challengeTokens();
+      const expected = expectedTokens();
+      const done = matchingLetters(got);
+      const complete = got.join("") === expected.join("") || got.join("") === `${expected.join("")}/`;
+      renderLetters(done);
+      compileButton.disabled = !complete;
+      if (showMessage) {
+        if (complete) setStatus(`${titleName(studentName)} is ready. Compile the signal.`);
+        else setStatus(`Matched ${done} of ${expectedLetters().length} letters. Keep building the signal.`);
+      }
+      return complete;
+    }
+
+    function insertSnippet(snippet) {
+      const start = codeInput.selectionStart;
+      const end = codeInput.selectionEnd;
+      const prefix = codeInput.value.slice(0, start);
+      const suffix = codeInput.value.slice(end);
+      const line = `  ${snippet}\n`;
+      codeInput.value = `${prefix}${line}${suffix}`;
+      codeInput.focus();
+      const next = start + line.length;
+      codeInput.setSelectionRange(next, next);
+      checkChallenge(false);
+    }
+
+    function resetForName(nextName) {
+      studentName = cleanName(nextName);
+      window.localStorage.setItem("firelight-student-name", titleName(studentName));
+      nameInput.value = titleName(studentName);
+      codeInput.value = codeTemplate(studentName);
+      compileButton.disabled = true;
+      connectButton.disabled = true;
+      uploadButton.disabled = true;
+      compileResult = null;
+      renderLetters(0);
+      setStatus(`Build ${titleName(studentName)} one letter at a time.`);
+      const marker = codeInput.value.indexOf("// START YOUR NAME") + "// START YOUR NAME\n".length;
+      codeInput.setSelectionRange(marker, marker);
+    }
+
+    function setCompileProgress(value, label = "Compiling signal...") {
+      compileProgress = Math.max(0, Math.min(100, Math.round(value)));
+      compileTitle.textContent = label;
+      compileProgressBar.style.width = `${compileProgress}%`;
+      compilePercent.textContent = `${compileProgress}%`;
+    }
+
+    function startCompileOverlay() {
+      clearInterval(compileProgressTimer);
+      document.body.classList.add("is-compiling");
+      setCompileProgress(4);
+      compileProgressTimer = setInterval(() => {
+        if (compileProgress >= 95) {
+          setCompileProgress(95, "Still compiling...");
+          return;
+        }
+        setCompileProgress(Math.min(95, compileProgress + Math.floor(Math.random() * 9) + 4));
+      }, 520);
+    }
+
+    function finishCompileOverlay(success) {
+      clearInterval(compileProgressTimer);
+      setCompileProgress(success ? 100 : compileProgress, success ? "Signal compiled!" : "Compile failed");
+      window.setTimeout(() => {
+        document.body.classList.remove("is-compiling");
+      }, success ? 650 : 1100);
+    }
+
+    function base64ToText(value) {
+      const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+
+    insertButtons.forEach((button) => {
+      button.addEventListener("click", () => insertSnippet(button.dataset.insert));
+    });
+
+    useNameButton.addEventListener("click", () => resetForName(nameInput.value));
+    nameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") resetForName(nameInput.value);
+    });
+    codeInput.addEventListener("input", () => checkChallenge(false));
+    checkButton.addEventListener("click", () => checkChallenge(true));
+
+    compileButton.addEventListener("click", async () => {
+      if (!checkChallenge(true)) return;
+      compileButton.disabled = true;
+      uploadButton.disabled = true;
+      logBox.textContent = "";
+      setStatus("Compiling your Morse signal...");
+      startCompileOverlay();
+
+      try {
+        const res = await fetch(`${ARDUINO_API_URL}/compile`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            fqbn: BOARD.fqbn,
+            sketchName: "NameSignal",
+            code: codeInput.value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Compile failed");
+        compileResult = data;
+        log(data.stderr || data.stdout || "Compile complete.");
+        setStatus("Compiled. Connect your Nano, then send it.");
+        connectButton.disabled = false;
+        uploadButton.disabled = !port;
+        finishCompileOverlay(true);
+      } catch (error) {
+        setStatus(error.message);
+        log(String(error.stack || error));
+        finishCompileOverlay(false);
+      } finally {
+        compileButton.disabled = !checkChallenge(false);
+      }
+    });
+
+    connectButton.addEventListener("click", async () => {
+      if (!("serial" in navigator)) {
+        setStatus("Web Serial needs Chrome or Edge over HTTPS or localhost.");
+        return;
+      }
+      try {
+        setStatus("Pick your Arduino Nano serial port.");
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: BOARD.baud, bufferSize: 1024 });
+        setStatus("Nano connected. Send your name to the board.");
+        uploadButton.disabled = !compileResult;
+      } catch (error) {
+        setStatus(error.message || "Connection cancelled.");
+      }
+    });
+
+    uploadButton.addEventListener("click", async () => {
+      if (!port || !compileResult) return;
+      uploadButton.disabled = true;
+      try {
+        const hex = compileResult.artifacts.find((artifact) => artifact.name.endsWith(".hex"));
+        if (!hex) throw new Error("Compile succeeded but no .hex file was returned.");
+        await uploadAvrHex(port, base64ToText(hex.contentBase64), BOARD);
+        setStatus(`Upload finished. Watch the LED blink ${titleName(studentName)}.`);
+      } catch (error) {
+        setStatus(`Upload failed: ${error.message}`);
+        log(String(error.stack || error));
+      } finally {
+        uploadButton.disabled = false;
+      }
+    });
+
+    function parseIntelHex(hex) {
+      const memory = new Map();
+      let upper = 0;
+      let max = 0;
+      for (const rawLine of hex.trim().split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (line[0] !== ":") throw new Error("Invalid HEX line.");
+        const bytes = [];
+        for (let i = 1; i < line.length; i += 2) bytes.push(Number.parseInt(line.slice(i, i + 2), 16));
+        const len = bytes[0];
+        const addr = (bytes[1] << 8) | bytes[2];
+        const type = bytes[3];
+        const data = bytes.slice(4, 4 + len);
+        const sum = bytes.reduce((acc, byte) => (acc + byte) & 0xff, 0);
+        if (sum !== 0) throw new Error("HEX checksum failed.");
+        if (type === 0x00) {
+          const absolute = upper + addr;
+          data.forEach((byte, index) => memory.set(absolute + index, byte));
+          max = Math.max(max, absolute + data.length);
+        } else if (type === 0x01) {
+          break;
+        } else if (type === 0x04) {
+          upper = ((data[0] << 8) | data[1]) << 16;
+        }
+      }
+      const image = new Uint8Array(max).fill(0xff);
+      for (const [addr, byte] of memory) image[addr] = byte;
+      return image;
+    }
+
+    async function uploadAvrHex(serialPort, hex, board) {
+      const image = parseIntelHex(hex);
+      const writer = serialPort.writable.getWriter();
+      const reader = serialPort.readable.getReader();
+      const rxQueue = [];
+      async function readByte(timeout = 1000) {
+        if (rxQueue.length) return rxQueue.shift();
+        const timer = new Promise((_, reject) => setTimeout(() => reject(new Error("Serial timeout")), timeout));
+        const read = reader.read().then(({ value, done }) => {
+          if (done || !value?.length) throw new Error("Serial disconnected");
+          rxQueue.push(...value);
+          return rxQueue.shift();
+        });
+        return Promise.race([read, timer]);
+      }
+      async function command(bytes, timeout) {
+        await writer.write(new Uint8Array([...bytes, 0x20]));
+        const first = await readByte(timeout);
+        const second = await readByte(timeout);
+        if (first !== 0x14 || second !== 0x10) {
+          throw new Error(`Bootloader rejected command (${first.toString(16)} ${second.toString(16)}).`);
+        }
+      }
+      try {
+        log(`Flashing ${image.length} bytes...`);
+        await serialPort.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        await serialPort.setSignals({ dataTerminalReady: true, requestToSend: true });
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        let synced = false;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            await command([0x30], 500);
+            synced = true;
+            break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 80));
+          }
+        }
+        if (!synced) throw new Error("Could not sync with bootloader.");
+        await command([0x50], 1000);
+        for (let offset = 0; offset < image.length; offset += board.pageSize) {
+          const page = image.slice(offset, offset + board.pageSize);
+          const wordAddress = offset >> 1;
+          await command([0x55, wordAddress & 0xff, (wordAddress >> 8) & 0xff], 1000);
+          await command([0x64, (page.length >> 8) & 0xff, page.length & 0xff, 0x46, ...page], 2000);
+          log(`Wrote ${Math.min(offset + board.pageSize, image.length)} / ${image.length}`);
+        }
+        await command([0x51], 1000);
+      } finally {
+        reader.releaseLock();
+        writer.releaseLock();
+      }
+    }
+
+    function setupSceneCanvas() {
+      const canvas = document.querySelector("#scene-canvas");
+      const ctx = canvas.getContext("2d");
+      const baseWidth = 360;
+      const baseHeight = 202;
+      let frame = 0;
+
+      function px(x, y, w, h, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      }
+
+      function poly(points, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      function tree(x, y, scale) {
+        px(x - 2 * scale, y - 24 * scale, 4 * scale, 28 * scale, "#2b1a0f");
+        poly([[x, y - 64 * scale], [x - 22 * scale, y - 28 * scale], [x + 22 * scale, y - 28 * scale]], "#0c2b28");
+        poly([[x, y - 48 * scale], [x - 26 * scale, y - 12 * scale], [x + 26 * scale, y - 12 * scale]], "#123b34");
+        poly([[x, y - 30 * scale], [x - 20 * scale, y + 5 * scale], [x + 20 * scale, y + 5 * scale]], "#0d302b");
+      }
+
+      function drawCampfire(x, y) {
+        px(x - 20, y + 10, 40, 5, "#2d180c");
+        px(x - 24, y + 13, 18, 4, "#5b2c12");
+        px(x + 6, y + 13, 18, 4, "#5b2c12");
+        px(x - 2, y - 10 + Math.round(Math.sin(frame / 10) * 2), 5, 18, "#fff0a6");
+        px(x - 9, y - 4 + Math.round(Math.cos(frame / 9) * 2), 9, 19, "#ff8a19");
+        px(x + 2, y - 1 + Math.round(Math.sin(frame / 8) * 2), 9, 16, "#f44313");
+      }
+
+      function draw() {
+        const scale = Math.max(canvas.width / baseWidth, canvas.height / baseHeight);
+        const width = canvas.width / scale;
+        const height = canvas.height / scale;
+        const offsetX = (baseWidth - width) / 2;
+        const offsetY = (baseHeight - height) / 2;
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(scale, 0, 0, scale, -offsetX * scale, -offsetY * scale);
+        const gradient = ctx.createLinearGradient(0, 0, 0, baseHeight);
+        gradient.addColorStop(0, "#050918");
+        gradient.addColorStop(0.55, "#102b46");
+        gradient.addColorStop(1, "#101410");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, baseWidth, baseHeight);
+        for (let i = 0; i < 70; i += 1) {
+          const x = (i * 47) % baseWidth;
+          const y = 8 + ((i * 29) % 70);
+          const bright = (i + Math.floor(frame / 18)) % 6 === 0;
+          px(x, y, bright ? 2 : 1, bright ? 2 : 1, bright ? "#fff0bd" : "#5b7392");
+        }
+        poly([[0, 112], [42, 48], [87, 112]], "#0b2133");
+        poly([[58, 120], [124, 44], [184, 120]], "#12314d");
+        poly([[238, 116], [314, 44], [382, 116]], "#102d45");
+        px(0, 108, 360, 94, "#0c1e1b");
+        poly([[0, 158], [70, 126], [135, 140], [202, 120], [282, 136], [360, 120], [360, 202], [0, 202]], "#173b32");
+        poly([[0, 180], [82, 166], [151, 178], [225, 162], [288, 175], [360, 166], [360, 202], [0, 202]], "#1b332c");
+        tree(22, 146, 0.72);
+        tree(321, 145, 0.82);
+        tree(286, 139, 0.56);
+        drawCampfire(180, 164);
+        px(0, 195, baseWidth, 7, "#030509");
+        ctx.restore();
+      }
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
+        draw();
+      }
+
+      function animate() {
+        frame += 1;
+        draw();
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      animate();
+    }
+
+    nameInput.value = titleName(studentName);
+    resetForName(studentName);
+    setupSceneCanvas();
+  </script>
+</body>
+</html>
