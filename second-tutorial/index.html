@@ -539,6 +539,54 @@
       outline: none;
     }
 
+    .hint-wrap {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+    }
+
+    .hint-button {
+      display: grid;
+      place-items: center;
+      width: 2.35rem;
+      height: 2.35rem;
+      color: #241100;
+      background: linear-gradient(#d6eca9, #7aa36a);
+      border: 3px solid var(--wood-dark);
+      box-shadow:
+        inset -3px -3px 0 #4a713e,
+        inset 3px 3px 0 #eff9c8,
+        0 3px 0 #1f0c02;
+      font-size: 0.78rem;
+      line-height: 1;
+    }
+
+    .hint-button[aria-expanded="true"] {
+      filter: brightness(1.08);
+    }
+
+    .hint-popout {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 0.55rem);
+      right: -0.15rem;
+      width: min(22rem, calc(100vw - 2rem));
+      padding: 0.78rem;
+      color: rgba(255, 242, 206, 0.92);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255, 198, 64, 0.1), transparent 7rem),
+        rgba(4, 7, 12, 0.96);
+      border: 3px solid rgba(122, 163, 106, 0.72);
+      box-shadow:
+        0 0 0 3px rgba(16, 7, 2, 0.82),
+        inset -3px -3px 0 rgba(0, 0, 0, 0.28),
+        inset 3px 3px 0 rgba(214, 236, 169, 0.08),
+        0 1rem 2rem rgba(0, 0, 0, 0.46);
+      font-family: var(--readable-pixel);
+      font-size: 1.2rem;
+      line-height: 1.05;
+    }
+
     .board-pill {
       color: rgba(255, 242, 206, 0.7);
       font-size: 0.62rem;
@@ -1846,6 +1894,10 @@
               Name
               <input id="student-name" type="text" maxlength="12" autocomplete="name" />
             </label>
+            <span class="hint-wrap">
+              <button class="hint-button" id="morse-hint" type="button" aria-label="Morse hint" aria-expanded="false" aria-controls="morse-hint-popout">?</button>
+              <span class="hint-popout" id="morse-hint-popout" hidden>Tap or write the morse code per each letter so if it says dash dash dot click dash dash dot and then click pause when u are finished a letter.</span>
+            </span>
             <button class="soft-button" id="use-name" type="button">Set</button>
             <span class="board-pill">Arduino Nano</span>
           </div>
@@ -1948,6 +2000,8 @@
     const nextSlideButton = document.querySelector("#next-slide");
     const nameInput = document.querySelector("#student-name");
     const useNameButton = document.querySelector("#use-name");
+    const hintButton = document.querySelector("#morse-hint");
+    const hintPopout = document.querySelector("#morse-hint-popout");
     const targetTitle = document.querySelector("#target-title");
     const nameMeter = document.querySelector("#name-meter");
     const currentLetter = document.querySelector("#current-letter");
@@ -2342,6 +2396,11 @@ void dash() {
       return new TextDecoder().decode(bytes);
     }
 
+    function setHintOpen(isOpen) {
+      hintButton.setAttribute("aria-expanded", String(isOpen));
+      hintPopout.hidden = !isOpen;
+    }
+
     prevSlideButton.addEventListener("click", () => {
       slideIndex = Math.max(0, slideIndex - 1);
       renderSlide();
@@ -2362,6 +2421,15 @@ void dash() {
     });
 
     useNameButton.addEventListener("click", () => resetForName(nameInput.value));
+    hintButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setHintOpen(hintPopout.hidden);
+    });
+    hintPopout.addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => setHintOpen(false));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") setHintOpen(false);
+    });
     nameInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter") resetForName(nameInput.value);
     });
