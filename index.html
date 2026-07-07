@@ -881,6 +881,7 @@
     }
 
     function startIntro() {
+      if (introActive) return;
       clearStoryTimers();
       introActive = true;
       index = -1;
@@ -888,6 +889,7 @@
       currentLine = "";
       lineEl.textContent = "";
       lineEl.classList.remove("visible");
+      beginStoryButton.blur();
       body.classList.remove("intro-done", "intro-hint-hidden", "camp-setup", "setup-complete");
       body.classList.add("fire-lit", "home-ready");
       hintTimer = window.setTimeout(() => {
@@ -901,6 +903,7 @@
       const key = event.key;
       if (key === " " || key === "Enter") {
         event.preventDefault();
+        if (event.repeat) return;
         if (isTyping) {
           completeCurrentLine();
         } else {
