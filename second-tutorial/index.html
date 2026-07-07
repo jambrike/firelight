@@ -1301,6 +1301,324 @@
       background: rgba(2, 5, 9, 0.86);
     }
 
+    /* Clean app layout for the actual coding step. */
+    .workshop {
+      place-items: center;
+      padding: clamp(4.8rem, 7vh, 5.6rem) clamp(1rem, 3vw, 2.5rem) clamp(1rem, 3vh, 2rem);
+      overflow: auto;
+    }
+
+    .workshop::before,
+    .workshop::after {
+      display: none;
+    }
+
+    .workshop .mission-card {
+      width: min(76rem, calc(100vw - 3rem));
+      height: min(42rem, calc(100vh - 7rem));
+      min-height: 34rem;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      padding: 1rem;
+      background:
+        radial-gradient(circle at 50% 115%, rgba(255, 122, 24, 0.12), transparent 26rem),
+        linear-gradient(rgba(24, 15, 10, 0.94), rgba(4, 8, 13, 0.94));
+      border: 4px solid #74421f;
+      box-shadow:
+        0 0 0 4px rgba(24, 10, 3, 0.9),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.32),
+        inset 5px 5px 0 rgba(255, 197, 108, 0.1),
+        0 1.4rem 4rem rgba(0, 0, 0, 0.52);
+      transform: none;
+    }
+
+    .workshop .mission-card::before,
+    .workshop .mission-card::after,
+    .workshop .target-panel::before,
+    .workshop .target-panel::after,
+    .workshop .code-panel::before,
+    .workshop .code-panel::after,
+    .workshop .terminal-panel::before,
+    .workshop .terminal-panel::after {
+      display: none;
+    }
+
+    .workshop .mission-top {
+      position: static;
+      width: auto;
+      min-height: 0;
+      display: flex;
+      padding: 0 0 0.85rem;
+      background: transparent;
+      border: 0;
+      border-bottom: 3px solid rgba(255, 198, 64, 0.18);
+      box-shadow: none;
+      transform: none;
+    }
+
+    .workshop .mission-title {
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .workshop .kicker {
+      font-size: 0.52rem;
+    }
+
+    .workshop .name-tools {
+      gap: 0.65rem;
+      justify-content: flex-end;
+    }
+
+    .workshop .name-tools label {
+      color: rgba(255, 242, 206, 0.64);
+      font-size: 0.52rem;
+    }
+
+    .workshop .name-tools input {
+      width: 8.8rem;
+      min-height: 2.35rem;
+      background: rgba(2, 5, 12, 0.72);
+      border-color: rgba(95, 167, 160, 0.56);
+    }
+
+    .workshop .soft-button {
+      min-height: 2.35rem;
+      padding: 0 0.75rem;
+    }
+
+    .workshop .board-pill {
+      display: inline;
+      color: rgba(255, 242, 206, 0.62);
+      font-size: 0.54rem;
+    }
+
+    .workshop .mission-body {
+      position: static;
+      display: grid;
+      grid-template-columns: minmax(15rem, 0.68fr) minmax(0, 1.45fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 0.9rem;
+      width: 100%;
+      height: 100%;
+      padding-top: 0.9rem;
+    }
+
+    .workshop .target-panel,
+    .workshop .code-panel,
+    .workshop .terminal-panel {
+      position: static;
+      width: auto;
+      height: auto;
+      min-height: 0;
+      background:
+        radial-gradient(circle at 50% 110%, rgba(255, 122, 24, 0.055), transparent 18rem),
+        rgba(3, 7, 12, 0.82);
+      border: 3px solid rgba(95, 167, 160, 0.42);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.26),
+        inset 4px 4px 0 rgba(116, 144, 124, 0.08);
+      transform: none;
+      backdrop-filter: none;
+    }
+
+    .workshop .target-panel {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      padding: 0.9rem;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 0.75rem;
+      border-color: rgba(122, 163, 106, 0.48);
+    }
+
+    .workshop .code-panel {
+      grid-column: 2;
+      grid-row: 1;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+
+    .workshop .terminal-panel {
+      grid-column: 2;
+      grid-row: 2;
+      display: grid;
+      grid-template-columns: minmax(18rem, 0.95fr) minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      overflow: hidden;
+    }
+
+    .workshop .mini-label,
+    .workshop .terminal-top,
+    .workshop .terminal-hint,
+    .workshop .helper-note,
+    .workshop .write-brief .brief-icon {
+      display: none;
+    }
+
+    .workshop .panel-title {
+      font-size: 0.68rem;
+    }
+
+    .workshop .name-meter {
+      margin-top: 0.55rem;
+      gap: 0.25rem;
+    }
+
+    .workshop .meter-step {
+      width: 1.05rem;
+      height: 0.5rem;
+    }
+
+    .workshop .meter-step:nth-child(2n) {
+      height: 0.5rem;
+      transform: none;
+    }
+
+    .workshop .current-card {
+      min-height: 7.4rem;
+      grid-template-columns: 3.6rem minmax(0, 1fr);
+      gap: 0.7rem;
+      padding: 0.75rem;
+      background:
+        radial-gradient(circle at 18% 50%, rgba(255, 198, 64, 0.18), transparent 4.8rem),
+        rgba(13, 19, 20, 0.82);
+      border-color: rgba(255, 198, 64, 0.34);
+      box-shadow: inset -3px -3px 0 rgba(0, 0, 0, 0.24);
+      transform: none;
+    }
+
+    .workshop .current-letter {
+      width: 3.3rem;
+      height: 3.3rem;
+      font-size: 1rem;
+    }
+
+    .workshop .current-title {
+      font-size: 0.54rem;
+    }
+
+    .workshop .current-pattern {
+      font-size: 1.35rem;
+    }
+
+    .workshop .letter-board {
+      gap: 0.4rem;
+      padding: 0;
+    }
+
+    .workshop .letter-tile,
+    .workshop .letter-tile:nth-child(2n) {
+      transform: none;
+    }
+
+    .workshop .letter-tile {
+      grid-template-columns: 2rem minmax(0, 1fr) 1rem;
+      padding: 0.45rem;
+      background: rgba(0, 3, 8, 0.45);
+      border-color: rgba(255, 198, 64, 0.08);
+    }
+
+    .workshop .letter-code {
+      display: none;
+    }
+
+    .workshop .letter-status {
+      justify-self: end;
+    }
+
+    .workshop .code-top {
+      min-height: 2.8rem;
+      padding: 0.72rem 0.85rem;
+      background: rgba(0, 0, 0, 0.24);
+      border-bottom-color: rgba(95, 167, 160, 0.38);
+    }
+
+    .workshop .code-top span:last-child {
+      display: none;
+    }
+
+    .workshop .write-brief {
+      display: block;
+      padding: 0.72rem 0.85rem;
+      background: rgba(0, 0, 0, 0.16);
+      border-bottom-color: rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .brief-text {
+      font-size: 1.1rem;
+      color: rgba(255, 242, 206, 0.78);
+    }
+
+    .workshop textarea {
+      padding: 1rem;
+      background:
+        repeating-linear-gradient(transparent 0 2.8rem, rgba(255, 198, 64, 0.032) 2.8rem calc(2.8rem + 2px)),
+        rgba(1, 4, 9, 0.8);
+      font-size: 1rem;
+      line-height: 1.68;
+    }
+
+    .workshop .quick-row {
+      padding: 0.75rem;
+      gap: 0.55rem;
+      background: rgba(0, 0, 0, 0.18);
+      border-top-color: rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .quick-row .pixel-button {
+      min-height: 2.8rem;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+    }
+
+    .workshop .action-stack {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+      padding: 0.75rem;
+      background: transparent;
+      border-bottom: 0;
+      border-right: 3px solid rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .action-stack .pixel-button,
+    .workshop .action-stack .pixel-button:nth-child(n) {
+      min-height: 2.85rem;
+      padding: 0 0.65rem;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+      font-size: 0.52rem;
+    }
+
+    .workshop .status {
+      grid-column: 2;
+      grid-row: 1;
+      min-height: 0;
+      padding: 0.78rem 0.85rem;
+      background: rgba(0, 0, 0, 0.16);
+      border-bottom: 3px solid rgba(95, 167, 160, 0.28);
+      font-size: 1.16rem;
+    }
+
+    .workshop pre {
+      grid-column: 2;
+      grid-row: 2;
+      max-height: 6rem;
+      background: rgba(1, 4, 9, 0.76);
+      color: rgba(255, 221, 162, 0.86);
+      font-size: 0.72rem;
+    }
+
     .compile-overlay {
       position: fixed;
       inset: 0;
@@ -1557,7 +1875,7 @@
             </div>
             <div class="write-brief">
               <span class="brief-icon" id="brief-icon">J</span>
-              <p class="brief-text" id="brief-text">Type the calls for the glowing letter. Use pause when you move to the next one.</p>
+              <p class="brief-text" id="brief-text">Write the pattern shown on the left.</p>
             </div>
             <textarea id="code" spellcheck="false" aria-label="Write Morse code calls"></textarea>
             <div class="quick-row" aria-label="Code helpers">
@@ -1876,27 +2194,27 @@
       const letters = expectedLetters();
       if (parsed.invalid.length) {
         const first = parsed.invalid[0];
-        currentTitle.textContent = "Check this line";
+        currentTitle.textContent = "Fix this";
         currentLetter.textContent = "!";
         briefIcon.textContent = "!";
-        briefText.textContent = "Something extra slipped in. Keep this tiny: dot(); dash(); or delay(600);";
-        nextHint.textContent = `Line ${first.line} is not one of the three calls yet. Use dot(); dash(); or delay(600);`;
+        briefText.textContent = "Use only dot(); dash(); or delay(600);";
+        nextHint.textContent = `Line ${first.line}`;
         return;
       }
       if (done >= letters.length) {
         currentTitle.textContent = "Signal ready";
         currentLetter.textContent = "OK";
         briefIcon.textContent = "OK";
-        briefText.textContent = "Every letter is glowing. Compile it, then send it to the Nano.";
-        nextHint.textContent = `${titleName(studentName)} is complete. Compile the signal.`;
+        briefText.textContent = "Compile it, then send it to the Nano.";
+        nextHint.textContent = `${titleName(studentName)} is ready`;
         return;
       }
       const current = letters[done];
       currentTitle.textContent = done === 0 ? "First letter" : "Next letter";
       currentLetter.textContent = current.letter;
       briefIcon.textContent = current.letter;
-      const pause = done > 0 ? "Start with delay(600); if you just finished the last letter. " : "";
-      briefText.textContent = `${pause}Now type ${commandsForLetter(current).join(" ")}`;
+      const pause = done > 0 ? "Add pause first, then write this pattern." : "Write this pattern.";
+      briefText.textContent = pause;
       nextHint.textContent = `${current.letter} = ${commandsForLetter(current).join(" ")}`;
     }
 
@@ -1910,11 +2228,11 @@
       compileButton.disabled = !complete;
       if (showMessage) {
         if (parsed.invalid.length) {
-          setStatus("Use only dot(); dash(); and delay(600); in this challenge.");
+          setStatus("Fix the highlighted line.");
         } else if (complete) {
-          setStatus(`${titleName(studentName)} is ready. Compile the signal.`);
+          setStatus("Ready to compile.");
         } else {
-          setStatus(`Matched ${done} of ${expectedLetters().length} letters. Keep going.`);
+          setStatus(`${done} of ${expectedLetters().length} letters done.`);
         }
       }
       return complete;
