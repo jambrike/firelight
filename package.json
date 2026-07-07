@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && mkdir -p dist/second-tutorial && cp index.html product.html tutorial.html _headers favicon.ico favicon.svg kit-box-closed.png kit-box-open-1.png kit-box-open-2.png kit-box-top.png dist/ && cp second-tutorial/index.html dist/second-tutorial/",
+    "build": "rm -rf dist && mkdir -p dist && mkdir -p dist/second-tutorial && cp index.html dashboard.html product.html tutorial.html _headers favicon.ico favicon.svg kit-box-closed.png kit-box-open-1.png kit-box-open-2.png kit-box-top.png dist/ && cp second-tutorial/index.html dist/second-tutorial/",
     "deploy": "npm run build && npx wrangler pages deploy ./dist --project-name=firelight --branch=main"
   },
   "devDependencies": {

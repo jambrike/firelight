@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Dashboard</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --cream: #fff2ce;
+      --soft-cream: rgba(255, 242, 206, 0.78);
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --wood: #7b421c;
+      --wood-dark: #2e1305;
+      --teal: #285c59;
+      --moss: #7aa36a;
+      --ink: #05070d;
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      color: var(--cream);
+      background:
+        radial-gradient(circle at 50% 100%, rgba(255, 122, 24, 0.2), transparent 27rem),
+        radial-gradient(circle at 12% 10%, rgba(95, 167, 160, 0.12), transparent 19rem),
+        linear-gradient(#050714, #071120 48%, #0c1818);
+      font-family: var(--pixel);
+      letter-spacing: 0;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(0, 0, 0, 0.52), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.56)),
+        radial-gradient(circle at 50% 70%, transparent 0 20rem, rgba(0, 0, 0, 0.4) 36rem);
+    }
+
+    a,
+    button {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: min(1180px, calc(100vw - 2rem));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 1rem 0 2.4rem;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.55rem 0 1.2rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: #fff7df;
+      text-decoration: none;
+      text-shadow: 0 0 1rem rgba(255, 122, 24, 0.36);
+    }
+
+    .brand-mark {
+      width: 2rem;
+      height: 2rem;
+      image-rendering: pixelated;
+      background:
+        linear-gradient(45deg, transparent 0 30%, var(--ember) 30% 70%, transparent 70%),
+        linear-gradient(135deg, transparent 0 30%, var(--gold) 30% 72%, transparent 72%);
+      filter: drop-shadow(0 0 0.65rem rgba(255, 122, 24, 0.7));
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.7rem;
+    }
+
+    .pixel-button,
+    .soft-button {
+      min-height: 3rem;
+      padding: 0 1rem;
+      border: 3px solid var(--wood-dark);
+      text-decoration: none;
+      display: inline-grid;
+      place-items: center;
+      font-size: 0.58rem;
+      line-height: 1.4;
+    }
+
+    .pixel-button {
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+    }
+
+    .soft-button {
+      color: rgba(255, 242, 206, 0.88);
+      background: rgba(8, 18, 22, 0.78);
+      border-color: rgba(95, 167, 160, 0.55);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.28),
+        inset 4px 4px 0 rgba(95, 167, 160, 0.12);
+    }
+
+    .pixel-button:active,
+    .soft-button:active {
+      transform: translateY(3px);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(18rem, 0.72fr);
+      gap: 1rem;
+      align-items: stretch;
+    }
+
+    .panel,
+    .card {
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255, 198, 64, 0.12), transparent 10rem),
+        linear-gradient(rgba(45, 25, 13, 0.92), rgba(5, 9, 15, 0.9));
+      border: 3px solid var(--wood);
+      box-shadow:
+        0 0 0 3px rgba(28, 12, 4, 0.94),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.32),
+        inset 5px 5px 0 rgba(255, 195, 100, 0.12),
+        0 1.1rem 3rem rgba(0, 0, 0, 0.45);
+    }
+
+    .panel {
+      min-height: 21rem;
+      padding: 1.1rem;
+      display: grid;
+      align-content: space-between;
+      gap: 1rem;
+    }
+
+    .eyebrow {
+      margin: 0 0 0.85rem;
+      color: #ffc46a;
+      font-size: 0.62rem;
+      line-height: 1.6;
+    }
+
+    h1 {
+      margin: 0;
+      color: #fff4d3;
+      font-size: clamp(2rem, 5.8vw, 4.4rem);
+      line-height: 1;
+      text-shadow:
+        0 4px 0 #2b0f00,
+        0 0 1.5rem rgba(255, 122, 24, 0.38);
+    }
+
+    .copy {
+      max-width: 42rem;
+      margin: 1rem 0 0;
+      color: var(--soft-cream);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.25rem, 2.7vw, 1.85rem);
+      line-height: 1.05;
+    }
+
+    .profile-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      align-items: center;
+    }
+
+    .chip {
+      padding: 0.72rem 0.85rem;
+      color: rgba(255, 242, 206, 0.84);
+      background: rgba(2, 5, 12, 0.6);
+      border: 2px solid rgba(95, 167, 160, 0.42);
+      font-family: var(--readable-pixel);
+      font-size: 1.18rem;
+      line-height: 1;
+    }
+
+    .fire-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .fire-art {
+      position: absolute;
+      left: 50%;
+      bottom: 2.4rem;
+      width: 12rem;
+      height: 9rem;
+      transform: translateX(-50%);
+      image-rendering: pixelated;
+    }
+
+    .fire-art::before {
+      content: "";
+      position: absolute;
+      left: 4.6rem;
+      bottom: 1.2rem;
+      width: 2.8rem;
+      height: 4.6rem;
+      background:
+        linear-gradient(135deg, transparent 0 22%, #ff7a18 22% 55%, transparent 55%),
+        linear-gradient(45deg, transparent 0 25%, #ffc640 25% 62%, transparent 62%);
+      box-shadow:
+        0 0 2.2rem rgba(255, 122, 24, 0.7),
+        -1.8rem 3.8rem 0 #5d2a0d,
+        1.8rem 3.8rem 0 #7b421c;
+      animation: flicker 900ms steps(2, end) infinite;
+    }
+
+    .fire-art::after {
+      content: "";
+      position: absolute;
+      left: 1.8rem;
+      bottom: 0.8rem;
+      width: 8.4rem;
+      height: 1.1rem;
+      background: #5d2a0d;
+      box-shadow: 0 0.75rem 0 #2e1305;
+      transform: rotate(-4deg);
+    }
+
+    .next-build {
+      position: relative;
+      z-index: 1;
+      margin-top: auto;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .card {
+      min-height: 15rem;
+      padding: 1rem;
+      display: grid;
+      gap: 0.8rem;
+      align-content: space-between;
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.8rem;
+      align-items: start;
+    }
+
+    .card h2 {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+
+    .status {
+      color: #241100;
+      background: linear-gradient(#d6eca9, #7aa36a);
+      border: 2px solid var(--wood-dark);
+      padding: 0.45rem 0.55rem;
+      font-size: 0.48rem;
+      white-space: nowrap;
+    }
+
+    .status.waiting {
+      color: rgba(255, 242, 206, 0.76);
+      background: rgba(2, 5, 12, 0.68);
+      border-color: rgba(95, 167, 160, 0.42);
+    }
+
+    .card p {
+      margin: 0;
+      color: rgba(255, 242, 206, 0.82);
+      font-family: var(--readable-pixel);
+      font-size: 1.32rem;
+      line-height: 1.05;
+    }
+
+    .progress {
+      display: grid;
+      gap: 0.45rem;
+      margin-top: 1rem;
+    }
+
+    .progress-row {
+      display: grid;
+      grid-template-columns: 7rem minmax(0, 1fr);
+      gap: 0.65rem;
+      align-items: center;
+      color: rgba(255, 242, 206, 0.72);
+      font-size: 0.52rem;
+      line-height: 1.5;
+    }
+
+    .bar {
+      height: 0.8rem;
+      background: rgba(2, 5, 12, 0.72);
+      border: 2px solid rgba(95, 167, 160, 0.42);
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff7a18, #ffc640);
+      box-shadow: 0 0 1rem rgba(255, 122, 24, 0.45);
+    }
+
+    .locked-only {
+      display: none;
+    }
+
+    body.locked .account-only {
+      display: none;
+    }
+
+    body.locked .locked-only {
+      display: inline-grid;
+    }
+
+    @keyframes flicker {
+      0%,
+      100% {
+        filter: brightness(1);
+      }
+
+      50% {
+        filter: brightness(1.25);
+      }
+    }
+
+    @media (max-width: 860px) {
+      .hero,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .fire-card {
+        min-height: 17rem;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .progress-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body class="locked">
+  <main class="shell" aria-label="Firelight dashboard">
+    <header class="topbar">
+      <a class="brand" href="./index.html" aria-label="Firelight home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Firelight</span>
+      </a>
+      <div class="top-actions">
+        <a class="soft-button" href="./product.html">Buy a Kit</a>
+        <button class="soft-button account-only" id="sign-out" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <article class="panel">
+        <div>
+          <p class="eyebrow" id="dashboard-eyebrow">Camp Dashboard</p>
+          <h1 id="dashboard-title">Welcome back.</h1>
+          <p class="copy" id="dashboard-copy">Your kit, lessons, and builds are gathered here so you can jump back in without hunting around.</p>
+        </div>
+        <div class="profile-strip account-only">
+          <span class="chip" id="profile-name">Builder</span>
+          <span class="chip" id="profile-email">No email saved</span>
+          <span class="chip" id="profile-kit">Kit lit</span>
+        </div>
+        <div class="profile-strip locked-only">
+          <span class="chip">No camp session found</span>
+        </div>
+      </article>
+
+      <article class="panel fire-card">
+        <p class="eyebrow">Next Build</p>
+        <div class="fire-art" aria-hidden="true"></div>
+        <div class="next-build">
+          <p class="copy account-only" id="next-copy">Pick up where you left off.</p>
+          <a class="pixel-button account-only" id="next-action" href="./tutorial.html">Start building</a>
+          <p class="copy locked-only">Light your kit first, then the dashboard opens.</p>
+          <a class="pixel-button locked-only" href="./index.html">Light a kit</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid account-only" aria-label="Lesson progress">
+      <article class="card">
+        <div class="card-top">
+          <h2>First Spark</h2>
+          <span class="status waiting" id="first-status">Ready</span>
+        </div>
+        <p>Compile and upload your first Arduino Nano blink sketch.</p>
+        <a class="pixel-button" href="./tutorial.html">Open</a>
+      </article>
+
+      <article class="card">
+        <div class="card-top">
+          <h2>Morse Name Signal</h2>
+          <span class="status waiting" id="morse-status">Ready</span>
+        </div>
+        <p>Turn your name into dots and dashes, then send it to the LED.</p>
+        <a class="pixel-button" href="./second-tutorial/">Open</a>
+      </article>
+
+      <article class="card">
+        <div class="card-top">
+          <h2>Kit Path</h2>
+          <span class="status waiting">Soon</span>
+        </div>
+        <p>More Firelight builds will unlock here as the kit grows.</p>
+        <a class="soft-button" href="./product.html">View kit</a>
+      </article>
+    </section>
+
+    <section class="panel account-only" style="margin-top: 1rem;">
+      <p class="eyebrow">Progress</p>
+      <div class="progress">
+        <div class="progress-row">
+          <span>First Spark</span>
+          <span class="bar"><span id="first-bar"></span></span>
+        </div>
+        <div class="progress-row">
+          <span>Morse Signal</span>
+          <span class="bar"><span id="morse-bar"></span></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    window.FIRELIGHT_CONFIG = {
+      kitKey: "123456",
+      supabaseUrl: "",
+      supabaseAnonKey: ""
+    };
+  </script>
+  <script src="/config"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const firelightConfig = window.FIRELIGHT_CONFIG || {};
+    const supabaseClient = firelightConfig.supabaseUrl && firelightConfig.supabaseAnonKey && window.supabase
+      ? window.supabase.createClient(firelightConfig.supabaseUrl, firelightConfig.supabaseAnonKey)
+      : null;
+
+    const body = document.body;
+    const title = document.getElementById("dashboard-title");
+    const copy = document.getElementById("dashboard-copy");
+    const profileName = document.getElementById("profile-name");
+    const profileEmail = document.getElementById("profile-email");
+    const nextAction = document.getElementById("next-action");
+    const nextCopy = document.getElementById("next-copy");
+    const firstStatus = document.getElementById("first-status");
+    const morseStatus = document.getElementById("morse-status");
+    const firstBar = document.getElementById("first-bar");
+    const morseBar = document.getElementById("morse-bar");
+    const signOutButton = document.getElementById("sign-out");
+
+    function titleName(value) {
+      const clean = String(value || "Builder").trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+
+    function hasAccess() {
+      return window.localStorage.getItem("firelight-kit-unlocked") === "true";
+    }
+
+    function rememberSession(user) {
+      if (!user) return;
+      window.localStorage.setItem("firelight-kit-unlocked", "true");
+      if (user.email) window.localStorage.setItem("firelight-student-email", user.email);
+      if (user.user_metadata?.name) window.localStorage.setItem("firelight-student-name", user.user_metadata.name);
+    }
+
+    function clearSession() {
+      [
+        "firelight-kit-unlocked",
+        "firelight-kit-code",
+        "firelight-student-email",
+        "firelight-student-name",
+        "firelight-first-tutorial-complete",
+        "firelight-second-tutorial-complete"
+      ].forEach((key) => window.localStorage.removeItem(key));
+    }
+
+    function setComplete(element, status, complete) {
+      status.textContent = complete ? "Done" : "Ready";
+      status.classList.toggle("waiting", !complete);
+      element.style.width = complete ? "100%" : "18%";
+    }
+
+    function renderDashboard() {
+      const unlocked = hasAccess();
+      body.classList.toggle("locked", !unlocked);
+      if (!unlocked) {
+        title.textContent = "Camp not lit yet.";
+        copy.textContent = "Log in or claim a Firelight kit to open your dashboard.";
+        return;
+      }
+
+      const name = titleName(window.localStorage.getItem("firelight-student-name"));
+      const email = window.localStorage.getItem("firelight-student-email") || "No email saved";
+      const firstDone = window.localStorage.getItem("firelight-first-tutorial-complete") === "true";
+      const morseDone = window.localStorage.getItem("firelight-second-tutorial-complete") === "true";
+
+      title.textContent = `Welcome back, ${name}.`;
+      copy.textContent = "Your Firelight kit is lit. Pick up the next build whenever you are ready.";
+      profileName.textContent = name;
+      profileEmail.textContent = email;
+      setComplete(firstBar, firstStatus, firstDone);
+      setComplete(morseBar, morseStatus, morseDone);
+
+      if (!firstDone) {
+        nextAction.href = "./tutorial.html";
+        nextAction.textContent = "Start tutorial";
+        nextCopy.textContent = "Your first Arduino upload is ready.";
+      } else if (!morseDone) {
+        nextAction.href = "./second-tutorial/";
+        nextAction.textContent = "Continue";
+        nextCopy.textContent = "Next up: make your LED spell your name.";
+      } else {
+        nextAction.href = "./product.html";
+        nextAction.textContent = "View kit";
+        nextCopy.textContent = "Nice work. The next Firelight tutorial is coming soon.";
+      }
+    }
+
+    async function hydrateSession() {
+      if (!supabaseClient) {
+        renderDashboard();
+        return;
+      }
+
+      const result = await supabaseClient.auth.getSession();
+      rememberSession(result.data?.session?.user);
+      renderDashboard();
+    }
+
+    signOutButton.addEventListener("click", async () => {
+      if (supabaseClient) await supabaseClient.auth.signOut();
+      clearSession();
+      window.location.href = "./index.html";
+    });
+
+    hydrateSession();
+  </script>
+</body>
+</html>

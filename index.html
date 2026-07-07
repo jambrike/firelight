@@ -240,6 +240,7 @@
     .skip-intro:focus-visible,
     .home-cta:focus-visible,
     .nav-button:focus-visible,
+    .mode-button:focus-visible,
     .setup-action:focus-visible,
     .tutorial-action:focus-visible,
     .setup-field input:focus-visible {
@@ -327,6 +328,20 @@
         inset 4px 4px 0 #ffe385,
         0 4px 0 #3a1d00;
       cursor: pointer;
+    }
+
+    .nav-button[hidden] {
+      display: none;
+    }
+
+    .nav-button.secondary-nav {
+      color: rgba(255, 242, 206, 0.9);
+      background: rgba(12, 22, 26, 0.74);
+      border-color: rgba(255, 198, 64, 0.32);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.34),
+        inset 4px 4px 0 rgba(255, 198, 64, 0.1),
+        0 4px 0 #1f0c02;
     }
 
     .hero-copy {
@@ -529,6 +544,42 @@
       margin-top: 0.2rem;
     }
 
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+    }
+
+    .mode-button {
+      min-height: 2.8rem;
+      color: rgba(255, 242, 206, 0.72);
+      background: rgba(2, 5, 12, 0.66);
+      border: 3px solid #1c3441;
+      box-shadow:
+        inset -3px -3px 0 rgba(0, 0, 0, 0.34),
+        inset 3px 3px 0 rgba(74, 111, 109, 0.14);
+      cursor: pointer;
+      font-size: 0.58rem;
+    }
+
+    .mode-button.active {
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border-color: #2e1305;
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+    }
+
+    .login-note {
+      margin: -0.2rem 0 0;
+      color: rgba(255, 242, 206, 0.65);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1rem, 2.3vw, 1.25rem);
+      line-height: 1;
+    }
+
     .setup-field {
       display: grid;
       gap: 0.35rem;
@@ -708,6 +759,7 @@
           <span>Kits</span>
           <span>Build</span>
           <span>Community</span>
+          <button class="nav-button secondary-nav" type="button" id="dashboard-link" hidden>Dashboard</button>
           <button class="nav-button" type="button" id="buy-kit">Buy a Kit!</button>
         </nav>
       </header>
@@ -738,9 +790,13 @@
     <section class="camp-stage" aria-label="Firelight campsite setup">
       <div class="setup-panel">
         <p class="setup-title">Set Up Camp</p>
-        <p class="setup-copy">Sign in, claim your kit, and keep your first build waiting by the fire.</p>
+        <p class="setup-copy" id="setup-copy">Claim your kit, make your account, and keep your first build waiting by the fire.</p>
         <form class="setup-form" id="setup-form">
-          <label class="setup-field">
+          <div class="auth-tabs" aria-label="Account mode">
+            <button class="mode-button active" id="mode-claim" type="button" data-auth-mode="claim">Light kit</button>
+            <button class="mode-button" id="mode-login" type="button" data-auth-mode="login">Log in</button>
+          </div>
+          <label class="setup-field" id="name-field">
             Name
             <input id="setup-name" name="name" type="text" autocomplete="name" required />
           </label>
@@ -748,10 +804,11 @@
             Email
             <input id="setup-email" name="email" type="email" autocomplete="email" required />
           </label>
-          <label class="setup-field">
-            Kit Code
+          <label class="setup-field" id="kit-code-field">
+            <span id="kit-code-label">Kit Code</span>
             <input id="setup-code" name="kit-code" type="text" autocomplete="off" required />
           </label>
+          <p class="login-note" id="login-note">Already lit your camp? Switch to Log in.</p>
           <p class="setup-feedback" id="setup-feedback" aria-live="polite"></p>
           <button class="setup-action" type="submit">Light the camp!</button>
         </form>
@@ -798,10 +855,18 @@
     const skipButton = document.getElementById("skip-intro");
     const beginStoryButton = document.getElementById("begin-story");
     const buyKitButton = document.getElementById("buy-kit");
+    const dashboardLink = document.getElementById("dashboard-link");
     const setupForm = document.getElementById("setup-form");
+    const setupCopy = document.getElementById("setup-copy");
+    const nameField = document.getElementById("name-field");
+    const kitCodeLabel = document.getElementById("kit-code-label");
+    const setupNameInput = document.getElementById("setup-name");
+    const setupEmailInput = document.getElementById("setup-email");
+    const setupCodeInput = document.getElementById("setup-code");
     const setupFeedback = document.getElementById("setup-feedback");
     const setupAction = document.querySelector(".setup-action");
     const tutorialAction = document.querySelector(".tutorial-action");
+    const authModeButtons = [...document.querySelectorAll("[data-auth-mode]")];
     const firelightConfig = window.FIRELIGHT_CONFIG || {};
     const requiredKitKey = String(firelightConfig.kitKey || "123456").trim();
     const supabaseClient = firelightConfig.supabaseUrl && firelightConfig.supabaseAnonKey && window.supabase
@@ -815,6 +880,7 @@
     let currentLine = "";
     let isTyping = false;
     let introActive = false;
+    let authMode = "claim";
 
     function clearStoryTimers() {
       clearTimeout(timer);
@@ -876,6 +942,7 @@
       clearStoryTimers();
       body.classList.add("fire-lit", "home-ready", "intro-done", "intro-hint-hidden", "camp-setup");
       body.classList.remove("setup-complete");
+      if (hasLocalAccess()) body.classList.add("setup-complete");
       lineEl.classList.remove("visible");
       lineEl.textContent = "";
     }
@@ -919,44 +986,127 @@
       setupFeedback.className = `setup-feedback${type ? ` ${type}` : ""}`;
     }
 
+    function hasLocalAccess() {
+      return window.localStorage.getItem("firelight-kit-unlocked") === "true";
+    }
+
+    function rememberProfile({ name = "", email = "", kitCode = "" } = {}) {
+      if (name) window.localStorage.setItem("firelight-student-name", name);
+      if (email) window.localStorage.setItem("firelight-student-email", email);
+      if (kitCode) window.localStorage.setItem("firelight-kit-code", kitCode);
+      window.localStorage.setItem("firelight-kit-unlocked", "true");
+    }
+
+    function goToDashboard() {
+      window.location.href = "./dashboard.html";
+    }
+
+    function updateDashboardLink() {
+      dashboardLink.hidden = !hasLocalAccess();
+    }
+
+    function setSetupLoading(isLoading, text) {
+      setupAction.disabled = isLoading;
+      setupAction.textContent = text;
+    }
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      const isLogin = mode === "login";
+      authModeButtons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.authMode === mode);
+      });
+      setupCopy.textContent = isLogin
+        ? "Log in with the email and kit code you used to light your camp."
+        : "Claim your kit, make your account, and keep your first build waiting by the fire.";
+      nameField.hidden = isLogin;
+      setupNameInput.required = !isLogin;
+      kitCodeLabel.textContent = isLogin ? "Kit Code / Password" : "Kit Code";
+      setupAction.textContent = isLogin ? "Enter camp" : "Light the camp!";
+      document.getElementById("login-note").textContent = isLogin
+        ? "New here? Switch to Light kit."
+        : "Already lit your camp? Switch to Log in.";
+      setSetupFeedback("");
+    }
+
     function unlockTutorial() {
       body.classList.add("setup-complete");
+      updateDashboardLink();
       tutorialAction.focus();
     }
 
-    async function signIntoFirelight(email, kitCode, name) {
+    async function claimFirelightKit(email, kitCode, name) {
       if (!supabaseClient) {
-        window.localStorage.setItem("firelight-kit-unlocked", "true");
-        window.localStorage.setItem("firelight-student-email", email);
-        window.localStorage.setItem("firelight-student-name", name);
-        return;
+        rememberProfile({ name, email, kitCode });
+        return { returning: false };
       }
 
       const password = kitCode;
       let result = await supabaseClient.auth.signInWithPassword({ email, password });
 
-      if (result.error) {
-        result = await supabaseClient.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              name,
-              kit_code: kitCode
-            }
-          }
-        });
+      if (!result.error) {
+        const profileName = result.data.user?.user_metadata?.name || name;
+        rememberProfile({ name: profileName, email, kitCode });
+        return { returning: true };
       }
+
+      result = await supabaseClient.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name,
+            kit_code: kitCode
+          }
+        }
+      });
 
       if (result.error) {
         throw result.error;
       }
+
+      rememberProfile({ name, email, kitCode });
+      return { returning: false };
+    }
+
+    async function loginToFirelight(email, kitCode) {
+      if (!supabaseClient) {
+        const savedEmail = String(window.localStorage.getItem("firelight-student-email") || "").toLowerCase();
+        const savedCode = window.localStorage.getItem("firelight-kit-code") || requiredKitKey;
+        if (!hasLocalAccess() || (savedEmail && savedEmail !== email) || savedCode !== kitCode) {
+          throw new Error("No local camp found for that login yet.");
+        }
+        rememberProfile({ email, kitCode });
+        return;
+      }
+
+      const result = await supabaseClient.auth.signInWithPassword({ email, password: kitCode });
+      if (result.error) throw result.error;
+      const name = result.data.user?.user_metadata?.name || window.localStorage.getItem("firelight-student-name") || "";
+      rememberProfile({ name, email, kitCode });
+    }
+
+    async function hydrateSupabaseSession() {
+      if (!supabaseClient) return;
+      const result = await supabaseClient.auth.getSession();
+      const user = result.data?.session?.user;
+      if (!user) return;
+      rememberProfile({
+        name: user.user_metadata?.name || window.localStorage.getItem("firelight-student-name") || "",
+        email: user.email || "",
+        kitCode: window.localStorage.getItem("firelight-kit-code") || requiredKitKey
+      });
+      updateDashboardLink();
     }
 
     skipButton.addEventListener("click", finishIntro);
     beginStoryButton.addEventListener("click", startIntro);
     buyKitButton.addEventListener("click", () => {
       window.location.href = "./product.html";
+    });
+    dashboardLink.addEventListener("click", goToDashboard);
+    authModeButtons.forEach((button) => {
+      button.addEventListener("click", () => setAuthMode(button.dataset.authMode));
     });
     setupForm.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -965,30 +1115,51 @@
       const email = String(formData.get("email") || "").trim().toLowerCase();
       const kitCode = String(formData.get("kit-code") || "").trim();
 
+      if (!email || !kitCode || (authMode === "claim" && !name)) {
+        setSetupFeedback("Fill in the camp details first.", "error");
+        return;
+      }
+
       if (kitCode !== requiredKitKey) {
         setSetupFeedback("That kit code is not lit yet. Try 123456.", "error");
         return;
       }
 
-      setupAction.disabled = true;
-      setupAction.textContent = "Lighting...";
-      window.localStorage.setItem("firelight-student-name", name);
-      window.localStorage.setItem("firelight-student-email", email);
-      setSetupFeedback(supabaseClient ? "Checking your Firelight kit..." : "Camp lit locally. Supabase keys can be added on Cloudflare.", "");
+      setSetupLoading(true, authMode === "login" ? "Opening..." : "Lighting...");
+      setSetupFeedback(supabaseClient ? "Checking your Firelight account..." : "Using local prototype login.", "");
 
       try {
-        await signIntoFirelight(email, kitCode, name);
-        setSetupFeedback("Camp lit. Welcome to Firelight.", "success");
+        if (authMode === "login") {
+          await loginToFirelight(email, kitCode);
+          setSetupFeedback("Welcome back. Opening your dashboard.", "success");
+          window.setTimeout(goToDashboard, 450);
+          return;
+        }
+
+        const result = await claimFirelightKit(email, kitCode, name);
+        if (result.returning) {
+          setSetupFeedback("Welcome back. Opening your dashboard.", "success");
+          window.setTimeout(goToDashboard, 450);
+          return;
+        }
+
+        setSetupFeedback("Camp lit. Your first build is waiting.", "success");
         window.setTimeout(unlockTutorial, 450);
       } catch (error) {
-        setupAction.disabled = false;
-        setupAction.textContent = "Light the camp!";
+        setSetupLoading(false, authMode === "login" ? "Enter camp" : "Light the camp!");
         setSetupFeedback(error.message || "Could not light the camp yet.", "error");
       }
     });
     tutorialAction.addEventListener("click", () => {
       window.location.href = "./tutorial.html";
     });
+
+    setupNameInput.value = window.localStorage.getItem("firelight-student-name") || "";
+    setupEmailInput.value = window.localStorage.getItem("firelight-student-email") || "";
+    setupCodeInput.value = window.localStorage.getItem("firelight-kit-code") || "";
+    setAuthMode("claim");
+    updateDashboardLink();
+    hydrateSupabaseSession();
 
     function setupFireShader() {
       const canvas = document.getElementById("fire-canvas");

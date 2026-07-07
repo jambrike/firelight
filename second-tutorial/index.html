@@ -2608,7 +2608,8 @@ void dash() {
     });
 
     finishTutorialButton.addEventListener("click", () => {
-      window.location.href = "../index.html";
+      window.localStorage.setItem("firelight-second-tutorial-complete", "true");
+      window.location.href = "../dashboard.html";
     });
 
     function parseIntelHex(hex) {
