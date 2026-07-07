@@ -13,11 +13,14 @@
     :root {
       color-scheme: dark;
       --cream: #fff2ce;
+      --soft-cream: rgba(255, 242, 206, 0.82);
       --ember: #ff7a18;
       --gold: #ffc640;
+      --wood: #7b421c;
+      --wood-dark: #2e1305;
       --ink: #05070d;
-      --panel: rgba(4, 7, 12, 0.88);
-      --teal: #1f6f72;
+      --panel: rgba(6, 10, 16, 0.9);
+      --teal: #285c59;
       --pixel: "Press Start 2P", "Courier New", monospace;
       --readable-pixel: "VT323", "Courier New", monospace;
     }
@@ -44,14 +47,22 @@
       font: inherit;
     }
 
+    button {
+      cursor: pointer;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
     .site {
       position: relative;
       width: 100vw;
       height: 100vh;
       isolation: isolate;
       background:
-        radial-gradient(circle at 50% 72%, rgba(255, 123, 24, 0.22), transparent 22rem),
-        linear-gradient(#050714 0%, #071120 48%, #0c1b1c 100%);
+        radial-gradient(circle at 50% 78%, rgba(255, 122, 24, 0.18), transparent 22rem),
+        linear-gradient(#050714 0%, #071120 48%, #0d1918 100%);
     }
 
     canvas {
@@ -69,8 +80,8 @@
       z-index: 1;
       pointer-events: none;
       background:
-        radial-gradient(circle at 50% 60%, transparent 0 16rem, rgba(0, 0, 0, 0.3) 34rem),
-        linear-gradient(90deg, rgba(0, 0, 0, 0.58), transparent 24%, transparent 78%, rgba(0, 0, 0, 0.62)),
+        radial-gradient(circle at 50% 60%, transparent 0 15rem, rgba(0, 0, 0, 0.32) 35rem),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.6), transparent 22%, transparent 78%, rgba(0, 0, 0, 0.64)),
         linear-gradient(rgba(0, 0, 0, 0.12), transparent 34%, rgba(0, 0, 0, 0.62));
     }
 
@@ -78,279 +89,590 @@
       position: fixed;
       top: 1rem;
       left: 1rem;
-      z-index: 7;
-      padding: 0.75rem 0.85rem;
+      z-index: 8;
+      display: inline-grid;
+      place-items: center;
+      min-height: 2.8rem;
+      padding: 0 0.85rem;
       color: #241100;
       background: linear-gradient(#f4b945, #e89122);
-      border: 4px solid #2e1305;
+      border: 4px solid var(--wood-dark);
       box-shadow:
         inset -4px -4px 0 #8d3a08,
         inset 4px 4px 0 #ffd06b,
         0 4px 0 #1f0c02;
       text-decoration: none;
-      font-size: 0.65rem;
+      font-size: 0.58rem;
     }
 
-    .lesson {
+    .back:active,
+    .pixel-button:active,
+    .soft-button:active {
+      transform: translateY(3px);
+    }
+
+    .deck,
+    .workshop {
       position: fixed;
       inset: 0;
       z-index: 3;
       display: grid;
-      grid-template-columns: minmax(23rem, 0.86fr) minmax(34rem, 1.32fr);
-      gap: clamp(1rem, 2vw, 1.6rem);
-      padding: clamp(5rem, 7vw, 6.2rem) clamp(1rem, 4vw, 4rem) clamp(1rem, 3vw, 2rem);
+      place-items: center;
+      padding: 4.8rem 1.25rem 1.25rem;
     }
 
-    .coach-panel,
-    .code-card,
-    .terminal-card {
+    .slide-card,
+    .mission-card {
       background:
-        linear-gradient(rgba(5, 8, 14, 0.94), rgba(4, 7, 12, 0.9)),
-        repeating-linear-gradient(90deg, rgba(255, 138, 32, 0.035) 0 2px, transparent 2px 18px);
-      border: 3px solid #1c3441;
+        linear-gradient(rgba(45, 25, 13, 0.94), rgba(5, 9, 15, 0.92)),
+        repeating-linear-gradient(90deg, rgba(255, 188, 92, 0.05) 0 3px, transparent 3px 18px);
+      border: 4px solid var(--wood);
       box-shadow:
-        inset -5px -5px 0 rgba(0, 0, 0, 0.4),
-        inset 5px 5px 0 rgba(90, 132, 122, 0.14),
-        0 1rem 3rem rgba(0, 0, 0, 0.48),
-        0 0 2.4rem rgba(255, 122, 24, 0.12);
+        0 0 0 4px rgba(28, 12, 4, 0.96),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.36),
+        inset 5px 5px 0 rgba(255, 195, 100, 0.14),
+        0 1.4rem 4rem rgba(0, 0, 0, 0.55),
+        0 0 3rem rgba(255, 122, 24, 0.16);
     }
 
-    .coach-panel {
-      min-height: 0;
+    .slide-card {
+      width: min(54rem, calc(100vw - 2.5rem));
+      min-height: 30rem;
       display: grid;
-      grid-template-rows: auto auto auto 1fr auto;
-      gap: 0.9rem;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 1rem;
       padding: 1rem;
     }
 
-    .kicker {
+    .slide-top,
+    .mission-top,
+    .code-top,
+    .terminal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      min-width: 0;
+    }
+
+    .kicker,
+    .slide-kicker {
       margin: 0;
       color: #ffc46a;
-      font-size: 0.65rem;
-      line-height: 1.6;
+      font-size: 0.62rem;
+      line-height: 1.65;
     }
 
-    h1 {
-      margin: 0;
+    .spark-track {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .spark-dot {
+      width: 0.58rem;
+      height: 0.58rem;
+      background: rgba(255, 242, 206, 0.2);
+      box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.3);
+    }
+
+    .spark-dot.done,
+    .spark-dot.active {
+      background: #ffb13b;
+      box-shadow: 0 0 0.8rem rgba(255, 122, 24, 0.58);
+    }
+
+    .spark-dot.active {
+      background: #fff0a6;
+    }
+
+    .slide-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 12rem;
+      gap: 1rem;
+      align-items: center;
+      min-height: 0;
+    }
+
+    .slide-title {
+      margin: 0.3rem 0 0;
       color: #fff4d3;
-      font-size: clamp(1.45rem, 3vw, 2.35rem);
-      line-height: 1.25;
-      text-shadow: 0 0 1.3rem rgba(255, 122, 24, 0.28);
+      font-size: 1.55rem;
+      line-height: 1.28;
+      text-shadow: 0 0 1.2rem rgba(255, 122, 24, 0.32);
     }
 
-    .copy {
-      margin: 0;
-      color: rgba(255, 242, 206, 0.88);
+    .slide-copy,
+    .panel-copy,
+    .status {
+      margin: 0.85rem 0 0;
+      color: var(--soft-cream);
       font-family: var(--readable-pixel);
-      font-size: clamp(1.35rem, 2.2vw, 1.8rem);
+      font-size: 1.55rem;
       line-height: 1.05;
     }
 
-    .name-row {
+    .slide-art {
+      min-height: 18rem;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 0.6rem;
-      align-items: end;
+      place-items: center;
+      padding: 1rem;
     }
 
-    .name-row label {
+    .coach {
+      position: relative;
+      width: 5.8rem;
+      height: 6.4rem;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 0 1rem rgba(255, 122, 24, 0.32));
+    }
+
+    .coach::before {
+      content: "";
+      position: absolute;
+      left: 1.55rem;
+      top: 0.1rem;
+      width: 2.6rem;
+      height: 2.35rem;
+      background: #ffd292;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        -0.65rem -0.15rem 0 #5b2a16,
+        0.65rem -0.15rem 0 #5b2a16,
+        inset 0.35rem 0 0 rgba(255, 255, 255, 0.24);
+    }
+
+    .coach::after {
+      content: "";
+      position: absolute;
+      left: 1rem;
+      top: 2.45rem;
+      width: 3.6rem;
+      height: 3rem;
+      background: #d8572c;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -0.42rem -0.42rem 0 #8d2d18,
+        inset 0.36rem 0.36rem 0 #ff8f45;
+    }
+
+    .coach-face {
+      position: absolute;
+      left: 2.15rem;
+      top: 1.15rem;
+      z-index: 1;
+      width: 0.28rem;
+      height: 0.28rem;
+      background: var(--wood-dark);
+      box-shadow: 1rem 0 0 var(--wood-dark), 0.5rem 0.65rem 0 #a9482a;
+    }
+
+    .lamp-art,
+    .ready-art {
+      position: relative;
+      width: 10rem;
+      height: 10rem;
+    }
+
+    .lamp-stand {
+      position: absolute;
+      left: 4.5rem;
+      bottom: 1.8rem;
+      width: 1rem;
+      height: 4.8rem;
+      background: #5b2c12;
+      border: 3px solid var(--wood-dark);
+    }
+
+    .lamp-light {
+      position: absolute;
+      left: 2.7rem;
+      top: 1.6rem;
+      width: 4.6rem;
+      height: 4.1rem;
+      background: #ffc640;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -0.65rem -0.65rem 0 #f08218,
+        inset 0.45rem 0.45rem 0 #fff0a6,
+        0 0 2.2rem rgba(255, 198, 64, 0.6);
+    }
+
+    .signal-beam {
+      position: absolute;
+      left: -1.3rem;
+      top: 3.1rem;
+      width: 2.2rem;
+      height: 0.7rem;
+      background: #fff0a6;
+      box-shadow:
+        3.1rem -1.35rem 0 #ffb13b,
+        6.1rem 0.55rem 0 #fff0a6,
+        8.6rem -0.85rem 0 #ffb13b;
+      animation: twinkle 1200ms steps(2, end) infinite;
+    }
+
+    .helper-stack {
+      width: min(18rem, 100%);
       display: grid;
-      gap: 0.4rem;
-      color: rgba(255, 242, 206, 0.68);
+      gap: 0.7rem;
+    }
+
+    .helper-line,
+    .name-chip,
+    .hint-box {
+      color: #fff4d3;
+      background: rgba(3, 7, 12, 0.76);
+      border: 3px solid #315b55;
+      box-shadow:
+        inset -3px -3px 0 rgba(0, 0, 0, 0.28),
+        inset 3px 3px 0 rgba(105, 169, 143, 0.16);
+    }
+
+    .helper-line {
+      padding: 0.72rem;
+      font-family: "Courier New", monospace;
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    .name-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+
+    .name-chip {
+      min-width: 4.2rem;
+      padding: 0.62rem;
+      text-align: center;
       font-size: 0.55rem;
+      line-height: 1.5;
+    }
+
+    .name-chip strong {
+      display: block;
+      margin-bottom: 0.35rem;
+      color: #ffc46a;
+      font-size: 0.78rem;
+    }
+
+    .ready-art {
+      display: grid;
+      align-content: center;
+      gap: 0.52rem;
+    }
+
+    .ready-line {
+      height: 0.8rem;
+      background: #ffc640;
+      box-shadow:
+        2rem 0 0 #ff7a18,
+        4.2rem 0 0 #ffc640,
+        6.6rem 0 0 #ff7a18;
+      animation: blinkLine 1200ms steps(2, end) infinite;
+    }
+
+    .slide-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+
+    .pixel-button,
+    .soft-button {
+      min-height: 3.15rem;
+      border: 4px solid var(--wood-dark);
+      transition: transform 120ms ease, filter 160ms ease, box-shadow 160ms ease;
+    }
+
+    .pixel-button {
+      padding: 0 1.1rem;
+      color: #1f0c02;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -5px -5px 0 #8d3a08,
+        inset 5px 5px 0 #ffd06b,
+        0 5px 0 #1f0c02,
+        0 0 1.1rem rgba(255, 122, 24, 0.22);
+      font-size: 0.62rem;
+    }
+
+    .soft-button {
+      padding: 0 1rem;
+      color: #ffe8b4;
+      background: rgba(22, 36, 38, 0.78);
+      border-color: #315b55;
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.3),
+        inset 4px 4px 0 rgba(105, 169, 143, 0.16);
+      font-size: 0.58rem;
+    }
+
+    .pixel-button:hover,
+    .soft-button:hover {
+      filter: brightness(1.08);
+    }
+
+    .pixel-button:disabled,
+    .soft-button:disabled {
+      opacity: 0.48;
+      cursor: not-allowed;
+      filter: grayscale(0.45);
+    }
+
+    .mission-card {
+      width: min(92rem, calc(100vw - 2.5rem));
+      height: min(45rem, calc(100vh - 6rem));
+      min-height: 35rem;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      padding: 1rem;
+    }
+
+    .mission-top {
+      padding: 0.2rem 0 0.95rem;
+      border-bottom: 3px solid rgba(255, 198, 64, 0.16);
+    }
+
+    .name-tools {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      min-width: 0;
+    }
+
+    .name-tools label {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 0;
+      color: rgba(255, 242, 206, 0.72);
+      font-size: 0.58rem;
       line-height: 1.6;
     }
 
-    .name-row input {
-      width: 100%;
-      min-height: 3rem;
-      padding: 0.75rem;
+    .name-tools input {
+      width: 10.5rem;
+      min-height: 2.5rem;
+      padding: 0.55rem;
       color: #fff7df;
       background: rgba(2, 5, 12, 0.78);
-      border: 3px solid #1c3441;
+      border: 3px solid #315b55;
       box-shadow:
         inset 4px 4px 0 rgba(0, 0, 0, 0.42),
         inset -4px -4px 0 rgba(74, 111, 109, 0.18);
-      font-size: 0.7rem;
+      font-size: 0.62rem;
       outline: none;
     }
 
-    .small-button {
-      min-height: 3rem;
-      padding: 0.65rem 0.75rem;
-      color: #211108;
-      background: linear-gradient(#f4b945, #e89122);
-      border: 3px solid #2e1305;
-      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffd06b, 0 3px 0 #1f0c02;
-      cursor: pointer;
-      font-size: 0.6rem;
+    .board-pill {
+      color: rgba(255, 242, 206, 0.7);
+      font-size: 0.62rem;
+      line-height: 1.6;
+      white-space: nowrap;
+    }
+
+    .mission-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(17rem, 0.82fr) minmax(26rem, 1.15fr) minmax(19rem, 0.78fr);
+      gap: 1rem;
+      padding-top: 1rem;
+    }
+
+    .target-panel,
+    .code-panel,
+    .terminal-panel {
+      min-height: 0;
+      background:
+        linear-gradient(rgba(8, 16, 19, 0.86), rgba(2, 6, 11, 0.88)),
+        repeating-linear-gradient(90deg, rgba(255, 188, 92, 0.025) 0 2px, transparent 2px 18px);
+      border: 3px solid #29504c;
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.34),
+        inset 4px 4px 0 rgba(90, 132, 122, 0.12),
+        0 1.2rem 3.2rem rgba(0, 0, 0, 0.42);
+    }
+
+    .target-panel,
+    .terminal-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      padding: 0.9rem;
+    }
+
+    .panel-title {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.8rem;
+      line-height: 1.55;
+    }
+
+    .panel-copy {
+      margin-top: 0.55rem;
+      font-size: 1.3rem;
     }
 
     .letter-board {
-      min-height: 10rem;
+      min-height: 0;
       display: grid;
-      gap: 0.55rem;
       align-content: start;
+      gap: 0.55rem;
       overflow: auto;
+      margin-top: 0.85rem;
       padding-right: 0.1rem;
     }
 
     .letter-tile {
       display: grid;
-      grid-template-columns: 2.4rem 1fr auto;
+      grid-template-columns: 2.35rem minmax(0, 1fr);
       gap: 0.65rem;
       align-items: center;
-      padding: 0.7rem;
-      background: rgba(11, 13, 18, 0.82);
+      padding: 0.65rem;
+      background: rgba(3, 7, 12, 0.66);
       border: 2px solid rgba(255, 198, 64, 0.14);
       color: rgba(255, 242, 206, 0.8);
     }
 
     .letter-tile.active {
-      border-color: rgba(255, 198, 64, 0.7);
-      box-shadow: 0 0 1.5rem rgba(255, 122, 24, 0.16);
+      border-color: rgba(255, 198, 64, 0.8);
+      box-shadow: 0 0 1.35rem rgba(255, 122, 24, 0.16);
     }
 
     .letter-tile.done {
-      border-color: rgba(44, 198, 123, 0.65);
-      color: #d9ffdf;
+      border-color: rgba(125, 255, 139, 0.72);
+      color: #e5ffe7;
     }
 
     .letter {
       display: grid;
       place-items: center;
-      width: 2.25rem;
-      height: 2.25rem;
+      width: 2.2rem;
+      height: 2.2rem;
       color: #241100;
       background: linear-gradient(#ffd36f, #f09a22);
-      border: 3px solid #2e1305;
+      border: 3px solid var(--wood-dark);
       box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffe08c;
-      font-size: 0.7rem;
+      font-size: 0.68rem;
     }
 
-    .morse {
-      font-size: 0.86rem;
+    .letter-code {
+      min-width: 0;
       color: #fff1c7;
+      font-family: var(--readable-pixel);
+      font-size: 1.25rem;
+      line-height: 1;
     }
 
-    .tile-status {
-      width: 1rem;
-      height: 1rem;
-      background: rgba(255, 255, 255, 0.18);
-      box-shadow: 0 0 0.7rem rgba(255, 255, 255, 0.08);
+    .hint-box {
+      margin-top: 0.85rem;
+      padding: 0.75rem;
+      font-family: var(--readable-pixel);
+      font-size: 1.25rem;
+      line-height: 1.05;
     }
 
-    .letter-tile.done .tile-status {
-      background: #8dff8d;
-      box-shadow: 0 0 1rem rgba(141, 255, 141, 0.5);
-    }
-
-    .tool-row {
+    .code-panel {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0.55rem;
-    }
-
-    .tool-row button,
-    .actions button {
-      min-height: 3rem;
-      color: #211108;
-      background: linear-gradient(#f4b945, #e89122);
-      border: 3px solid #2e1305;
-      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffd06b, 0 3px 0 #1f0c02;
-      cursor: pointer;
-      font-size: 0.58rem;
-    }
-
-    .workspace {
-      min-height: 0;
-      display: grid;
-      grid-template-rows: minmax(0, 1fr) auto;
-      gap: 1rem;
-    }
-
-    .code-card {
-      min-height: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
       overflow: hidden;
     }
 
-    .code-title,
-    .terminal-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.9rem 1rem;
-      background: rgba(2, 3, 7, 0.7);
-      border-bottom: 3px solid #1c3441;
+    .code-top,
+    .terminal-top {
+      min-height: 3.1rem;
+      padding: 0.75rem 0.85rem;
       color: #ffc46a;
-      font-size: 0.68rem;
-      line-height: 1.6;
-    }
-
-    .board-pill {
-      color: rgba(255, 242, 206, 0.72);
+      background: rgba(0, 0, 0, 0.25);
+      border-bottom: 3px solid #29504c;
+      font-size: 0.58rem;
+      line-height: 1.5;
     }
 
     textarea {
+      display: block;
       width: 100%;
-      height: 100%;
+      min-height: 0;
       resize: none;
-      padding: 1.1rem;
-      color: #fff7df;
-      background: rgba(0, 3, 8, 0.92);
       border: 0;
       outline: none;
+      padding: 1rem;
+      color: #fff6dc;
+      background:
+        radial-gradient(circle at 50% 105%, rgba(255, 122, 24, 0.07), transparent 26rem),
+        rgba(2, 5, 10, 0.76);
       font-family: "Courier New", monospace;
-      font-size: clamp(0.82rem, 1.18vw, 1.05rem);
-      line-height: 1.5;
+      font-size: 1rem;
+      line-height: 1.55;
+      letter-spacing: 0;
       tab-size: 2;
     }
 
-    .terminal-card {
+    .quick-row {
       display: grid;
-      grid-template-columns: minmax(17rem, 0.78fr) minmax(0, 1fr);
-      min-height: 12.5rem;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.55rem;
+      padding: 0.85rem;
+      border-top: 3px solid rgba(41, 80, 76, 0.82);
     }
 
-    .actions {
+    .helper-note {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.55rem;
+      padding: 0 0.85rem 0.85rem;
+    }
+
+    .helper-note span {
+      min-width: 0;
+      padding: 0.55rem;
+      color: rgba(255, 242, 206, 0.76);
+      background: rgba(0, 0, 0, 0.24);
+      border: 2px solid rgba(255, 198, 64, 0.12);
+      font-family: var(--readable-pixel);
+      font-size: 1.12rem;
+      line-height: 1;
+    }
+
+    .terminal-panel {
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .action-stack {
       display: grid;
       gap: 0.65rem;
-      padding: 1rem;
-      border-right: 3px solid #1c3441;
-    }
-
-    .actions button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    .status-wrap {
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      min-width: 0;
+      padding: 0.85rem;
+      border-bottom: 3px solid #29504c;
     }
 
     .status {
-      padding: 0.9rem 1rem;
-      color: #fff2ce;
-      font-family: var(--readable-pixel);
-      font-size: 1.45rem;
-      line-height: 1.05;
+      min-height: 5rem;
+      margin: 0;
+      padding: 0.85rem;
+      color: rgba(255, 242, 206, 0.86);
+      background: rgba(1, 4, 9, 0.72);
+      border-bottom: 3px solid #29504c;
+      font-size: 1.28rem;
     }
 
     pre {
       margin: 0;
       min-height: 0;
       overflow: auto;
-      padding: 0 1rem 1rem;
-      color: #decda8;
-      font-family: "Courier New", monospace;
-      font-size: 0.84rem;
-      line-height: 1.45;
       white-space: pre-wrap;
+      padding: 0.85rem;
+      color: #ffdda2;
+      background: #05070b;
+      font-family: "Courier New", monospace;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      letter-spacing: 0;
     }
 
     .compile-overlay {
@@ -363,7 +685,7 @@
       opacity: 0;
       visibility: hidden;
       transition: opacity 240ms ease, visibility 240ms ease;
-      background: rgba(0, 0, 0, 0.38);
+      background: rgba(0, 0, 0, 0.4);
     }
 
     body.is-compiling .compile-overlay {
@@ -372,25 +694,26 @@
     }
 
     .compile-cloud {
-      width: min(33rem, calc(100vw - 2rem));
+      width: min(34rem, calc(100vw - 2rem));
       padding: 1rem;
       background: rgba(19, 10, 5, 0.94);
       border: 4px solid #8d3a08;
-      box-shadow: 0 0 0 4px #2e1305, 0 0 3rem rgba(255, 122, 24, 0.26);
-      color: #fff2ce;
+      box-shadow: 0 0 0 4px var(--wood-dark), 0 0 3rem rgba(255, 122, 24, 0.28);
+      color: var(--cream);
       text-align: center;
     }
 
     .compile-title {
       color: #ffc46a;
       font-size: 0.85rem;
+      line-height: 1.5;
     }
 
     .compile-progress-shell {
       height: 1.2rem;
       margin: 1rem 0 0.7rem;
       background: #08090d;
-      border: 3px solid #1c3441;
+      border: 3px solid #29504c;
       overflow: hidden;
     }
 
@@ -402,11 +725,34 @@
     }
 
     .compile-percent {
-      color: rgba(255, 242, 206, 0.76);
+      color: rgba(255, 242, 206, 0.78);
       font-size: 0.72rem;
+      line-height: 1.5;
     }
 
-    @media (max-width: 980px) {
+    @keyframes twinkle {
+      0%,
+      100% {
+        opacity: 0.45;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @keyframes blinkLine {
+      0%,
+      100% {
+        opacity: 0.35;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 1180px) {
       body {
         overflow: auto;
       }
@@ -416,19 +762,59 @@
         height: auto;
       }
 
-      .lesson {
+      .deck,
+      .workshop {
         position: relative;
-        grid-template-columns: 1fr;
-        padding-top: 5.5rem;
+        min-height: 100vh;
       }
 
-      .terminal-card {
+      .mission-card {
+        height: auto;
+        min-height: 0;
+      }
+
+      .mission-body {
         grid-template-columns: 1fr;
       }
 
-      .actions {
-        border-right: 0;
-        border-bottom: 3px solid #1c3441;
+      .target-panel,
+      .code-panel,
+      .terminal-panel {
+        min-height: 20rem;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .slide-card {
+        min-height: 0;
+      }
+
+      .slide-body {
+        grid-template-columns: 1fr;
+      }
+
+      .slide-art {
+        min-height: 11rem;
+      }
+
+      .slide-title {
+        font-size: 1.1rem;
+      }
+
+      .slide-copy,
+      .panel-copy,
+      .status {
+        font-size: 1.25rem;
+      }
+
+      .mission-top {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .quick-row,
+      .helper-note {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -439,60 +825,89 @@
     <div class="vignette" aria-hidden="true"></div>
     <a class="back" href="../tutorial.html">Back</a>
 
-    <section class="lesson">
-      <aside class="coach-panel" aria-label="Morse code coach">
-        <p class="kicker">Second Tutorial</p>
-        <h1>Send your name in Morse.</h1>
-        <p class="copy">Use the LED like a tiny signal lamp. Firelight gives you <code>dot()</code> and <code>dash()</code>. You build the message.</p>
-
-        <div class="name-row">
-          <label>
-            Your name
-            <input id="student-name" type="text" maxlength="12" autocomplete="name" />
-          </label>
-          <button class="small-button" id="use-name" type="button">Set</button>
+    <section class="deck" id="deck" aria-label="Morse lesson slides">
+      <article class="slide-card">
+        <div class="slide-top">
+          <p class="slide-kicker" id="slide-kicker">Second Tutorial</p>
+          <div class="spark-track" id="spark-track" aria-label="Lesson progress"></div>
         </div>
-
-        <div class="letter-board" id="letter-board" aria-live="polite"></div>
-
-        <div class="tool-row" aria-label="Code helpers">
-          <button type="button" data-insert="dot();">dot()</button>
-          <button type="button" data-insert="dash();">dash()</button>
-          <button type="button" data-insert="delay(600);">pause</button>
-        </div>
-      </aside>
-
-      <section class="workspace">
-        <div class="code-card">
-          <div class="code-title">
-            <span>NameSignal.ino</span>
-            <span class="board-pill">Arduino Nano</span>
+        <div class="slide-body">
+          <div>
+            <h1 class="slide-title" id="slide-title">Teach your LED to speak.</h1>
+            <p class="slide-copy" id="slide-copy"></p>
           </div>
-          <textarea id="code" spellcheck="false" aria-label="Arduino Morse code editor"></textarea>
+          <div class="slide-art" id="slide-art" aria-hidden="true"></div>
+        </div>
+        <div class="slide-actions">
+          <button class="soft-button" id="prev-slide" type="button">Back</button>
+          <button class="pixel-button" id="next-slide" type="button">Next</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="workshop" id="workshop" aria-label="Build your Morse signal" hidden>
+      <article class="mission-card">
+        <div class="mission-top">
+          <div class="name-tools">
+            <p class="kicker">Morse Name Signal</p>
+            <label>
+              Name
+              <input id="student-name" type="text" maxlength="12" autocomplete="name" />
+            </label>
+            <button class="soft-button" id="use-name" type="button">Set</button>
+          </div>
+          <span class="board-pill">Arduino Nano</span>
         </div>
 
-        <div class="terminal-card">
-          <div class="actions">
-            <button id="check" type="button">Check message</button>
-            <button id="compile" type="button" disabled>Compile</button>
-            <button id="connect" type="button" disabled>Connect to board</button>
-            <button id="upload" type="button" disabled>Send to board</button>
-          </div>
-          <div class="status-wrap">
-            <div class="terminal-title">
-              <span>Signal Terminal</span>
-              <span>Morse name</span>
+        <div class="mission-body">
+          <section class="target-panel" aria-label="Name pattern">
+            <div>
+              <h2 class="panel-title" id="target-title">Build your name</h2>
+              <p class="panel-copy">Write one blink call per line. Pause between letters.</p>
+            </div>
+            <div class="hint-box" id="next-hint">Start with your first letter.</div>
+            <div class="letter-board" id="letter-board" aria-live="polite"></div>
+          </section>
+
+          <section class="code-panel" aria-label="Code challenge">
+            <div class="code-top">
+              <span>Your lines</span>
+              <span>only dot, dash, pause</span>
+            </div>
+            <textarea id="code" spellcheck="false" aria-label="Write Morse code calls"></textarea>
+            <div class="quick-row" aria-label="Code helpers">
+              <button class="pixel-button" type="button" data-insert="dot();">dot();</button>
+              <button class="pixel-button" type="button" data-insert="dash();">dash();</button>
+              <button class="pixel-button" type="button" data-insert="delay(600);">pause</button>
+            </div>
+            <div class="helper-note" aria-label="Helper meanings">
+              <span>dot(); short blink</span>
+              <span>dash(); long blink</span>
+              <span>delay(600); next letter</span>
+            </div>
+          </section>
+
+          <section class="terminal-panel" aria-label="Signal controls">
+            <div class="terminal-top">
+              <span>Camp Terminal</span>
+              <span>Morse</span>
+            </div>
+            <div class="action-stack">
+              <button class="pixel-button" id="check" type="button">Check signal</button>
+              <button class="pixel-button" id="compile" type="button" disabled>Compile</button>
+              <button class="pixel-button" id="connect" type="button" disabled>Connect to board</button>
+              <button class="pixel-button" id="upload" type="button" disabled>Send to board</button>
             </div>
             <div class="status" id="status">Type the Morse calls for your name.</div>
             <pre id="log" aria-live="polite"></pre>
-          </div>
+          </section>
         </div>
-      </section>
+      </article>
     </section>
 
     <div class="compile-overlay" aria-live="polite" aria-hidden="true">
       <div class="compile-cloud">
-        <div class="compile-title" id="compile-title">Compiling signal...</div>
+        <div class="compile-title" id="compile-title">Compiling name signal...</div>
         <div class="compile-progress-shell">
           <div class="compile-progress-bar" id="compile-progress-bar"></div>
         </div>
@@ -515,8 +930,19 @@
       pageSize: 128
     };
 
+    const deck = document.querySelector("#deck");
+    const workshop = document.querySelector("#workshop");
+    const slideKicker = document.querySelector("#slide-kicker");
+    const slideTitle = document.querySelector("#slide-title");
+    const slideCopy = document.querySelector("#slide-copy");
+    const slideArt = document.querySelector("#slide-art");
+    const sparkTrack = document.querySelector("#spark-track");
+    const prevSlideButton = document.querySelector("#prev-slide");
+    const nextSlideButton = document.querySelector("#next-slide");
     const nameInput = document.querySelector("#student-name");
     const useNameButton = document.querySelector("#use-name");
+    const targetTitle = document.querySelector("#target-title");
+    const nextHint = document.querySelector("#next-hint");
     const letterBoard = document.querySelector("#letter-board");
     const codeInput = document.querySelector("#code");
     const checkButton = document.querySelector("#check");
@@ -531,6 +957,7 @@
     const insertButtons = [...document.querySelectorAll("[data-insert]")];
 
     let studentName = cleanName(window.localStorage.getItem("firelight-student-name") || "James");
+    let slideIndex = 0;
     let port;
     let compileResult;
     let compileProgress = 0;
@@ -549,18 +976,282 @@
       return [...studentName].map((letter) => ({ letter, morse: MORSE[letter] })).filter((item) => item.morse);
     }
 
-    function codeTemplate(name) {
+    function wordsForMorse(morse) {
+      return morse.replaceAll(".", "dot ").replaceAll("-", "dash ").trim();
+    }
+
+    function commandForSymbol(symbol) {
+      return symbol === "." ? "dot();" : "dash();";
+    }
+
+    function commandsForLetter(item) {
+      return item.morse.split("").map(commandForSymbol);
+    }
+
+    function expectedTokens() {
+      const tokens = [];
+      expectedLetters().forEach((item, index, list) => {
+        tokens.push(...item.morse.split(""));
+        if (index < list.length - 1) tokens.push("/");
+      });
+      return tokens;
+    }
+
+    function buildSlides() {
+      const first = expectedLetters()[0] || { letter: "J", morse: ".---" };
+      return [
+        {
+          kicker: "Second Tutorial",
+          title: "Teach your LED to speak.",
+          copy: "Morse code turns light into letters. A quick blink is a dot. A long blink is a dash.",
+          art: lampArt()
+        },
+        {
+          kicker: "Tiny code first",
+          title: "You only write the calls.",
+          copy: "Firelight already knows how to blink. Your job is to call dot(); dash(); and delay(600); between letters.",
+          art: helperArt()
+        },
+        {
+          kicker: `${titleName(studentName)} in Morse`,
+          title: `${first.letter} starts with ${wordsForMorse(first.morse)}.`,
+          copy: `For each letter, copy the pattern into real code. ${first.letter} becomes ${commandsForLetter(first).join(" ")}`,
+          art: nameArt()
+        },
+        {
+          kicker: "Your turn",
+          title: `Build ${titleName(studentName)} one line at a time.`,
+          copy: "The next screen checks your signal as you type. When every letter glows, compile and send it to the Nano.",
+          art: readyArt()
+        }
+      ];
+    }
+
+    function lampArt() {
+      return `
+        <div class="lamp-art">
+          <div class="signal-beam"></div>
+          <div class="lamp-light"></div>
+          <div class="lamp-stand"></div>
+        </div>
+      `;
+    }
+
+    function helperArt() {
+      return `
+        <div class="helper-stack">
+          <div class="helper-line">dot();<br><span>short blink</span></div>
+          <div class="helper-line">dash();<br><span>long blink</span></div>
+          <div class="helper-line">delay(600);<br><span>new letter</span></div>
+        </div>
+      `;
+    }
+
+    function nameArt() {
+      return `
+        <div class="name-preview">
+          ${expectedLetters().slice(0, 8).map((item) => `
+            <span class="name-chip"><strong>${item.letter}</strong>${wordsForMorse(item.morse)}</span>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function readyArt() {
+      return `
+        <div class="ready-art">
+          <div class="coach"><span class="coach-face"></span></div>
+          <div class="ready-line"></div>
+          <div class="ready-line"></div>
+          <div class="ready-line"></div>
+        </div>
+      `;
+    }
+
+    function renderSlide() {
+      const slides = buildSlides();
+      const slide = slides[slideIndex];
+      slideKicker.textContent = slide.kicker;
+      slideTitle.textContent = slide.title;
+      slideCopy.textContent = slide.copy;
+      slideArt.innerHTML = slide.art;
+      sparkTrack.innerHTML = slides.map((_, index) => {
+        const state = index < slideIndex ? "done" : index === slideIndex ? "active" : "";
+        return `<span class="spark-dot ${state}"></span>`;
+      }).join("");
+      prevSlideButton.disabled = slideIndex === 0;
+      nextSlideButton.textContent = slideIndex === slides.length - 1 ? "Start coding" : "Next";
+    }
+
+    function showWorkshop() {
+      deck.hidden = true;
+      workshop.hidden = false;
+      renderWorkshop();
+      window.setTimeout(() => codeInput.focus(), 80);
+    }
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    function log(message) {
+      logBox.textContent += `${message}\n`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function lineNumberAt(text, index) {
+      return text.slice(0, index).split(/\r?\n/).length;
+    }
+
+    function parseChallenge() {
+      const source = codeInput.value.replace(/\/\/.*$/gm, "");
+      const tokens = [];
+      const invalid = [];
+      const tokenRegex = /\b(dot|dash)\s*\(\s*\)\s*;|delay\s*\(\s*600\s*\)\s*;/g;
+      let cursor = 0;
+      let match;
+      while ((match = tokenRegex.exec(source))) {
+        const between = source.slice(cursor, match.index);
+        if (between.trim()) {
+          invalid.push({ line: lineNumberAt(source, cursor), text: between.trim() });
+        }
+        if (match[1] === "dot") tokens.push(".");
+        else if (match[1] === "dash") tokens.push("-");
+        else tokens.push("/");
+        cursor = tokenRegex.lastIndex;
+      }
+      const tail = source.slice(cursor);
+      if (tail.trim()) {
+        invalid.push({ line: lineNumberAt(source, cursor), text: tail.trim() });
+      }
+      return { tokens, invalid };
+    }
+
+    function matchingLetters(tokens) {
+      let cursor = 0;
+      let done = 0;
+      const list = expectedLetters();
+      for (let index = 0; index < list.length; index += 1) {
+        const required = list[index].morse.split("");
+        const got = tokens.slice(cursor, cursor + required.length);
+        if (got.join("") !== required.join("")) break;
+        cursor += required.length;
+        if (index < list.length - 1) {
+          if (tokens[cursor] !== "/") break;
+          cursor += 1;
+        }
+        done += 1;
+      }
+      return done;
+    }
+
+    function challengeComplete(parsed = parseChallenge()) {
+      const got = parsed.tokens.join("");
+      const expected = expectedTokens().join("");
+      return parsed.invalid.length === 0 && (got === expected || got === `${expected}/`);
+    }
+
+    function renderLetters(done = 0) {
+      letterBoard.innerHTML = "";
+      expectedLetters().forEach((item, index) => {
+        const tile = document.createElement("div");
+        tile.className = "letter-tile";
+        tile.classList.toggle("done", index < done);
+        tile.classList.toggle("active", index === done);
+        tile.innerHTML = `
+          <span class="letter">${item.letter}</span>
+          <span class="letter-code">${commandsForLetter(item).join(" ")}</span>
+        `;
+        letterBoard.append(tile);
+      });
+    }
+
+    function renderHint(done, parsed) {
+      const letters = expectedLetters();
+      if (parsed.invalid.length) {
+        const first = parsed.invalid[0];
+        nextHint.textContent = `Line ${first.line} is not one of the three calls yet. Use dot(); dash(); or delay(600);`;
+        return;
+      }
+      if (done >= letters.length) {
+        nextHint.textContent = `${titleName(studentName)} is complete. Compile the signal.`;
+        return;
+      }
+      const current = letters[done];
+      const pause = done > 0 ? "Start with delay(600); if you just finished the last letter. " : "";
+      nextHint.textContent = `${pause}${current.letter} = ${commandsForLetter(current).join(" ")}`;
+    }
+
+    function checkChallenge(showMessage = true) {
+      const parsed = parseChallenge();
+      const done = matchingLetters(parsed.tokens);
+      const complete = challengeComplete(parsed);
+      renderLetters(done);
+      renderHint(done, parsed);
+      compileButton.disabled = !complete;
+      if (showMessage) {
+        if (parsed.invalid.length) {
+          setStatus("Use only dot(); dash(); and delay(600); in this challenge.");
+        } else if (complete) {
+          setStatus(`${titleName(studentName)} is ready. Compile the signal.`);
+        } else {
+          setStatus(`Matched ${done} of ${expectedLetters().length} letters. Keep going.`);
+        }
+      }
+      return complete;
+    }
+
+    function renderWorkshop() {
+      nameInput.value = titleName(studentName);
+      targetTitle.textContent = `Build ${titleName(studentName)}`;
+      renderLetters(0);
+      renderHint(0, { tokens: [], invalid: [] });
+      checkChallenge(false);
+    }
+
+    function resetForName(nextName) {
+      studentName = cleanName(nextName);
+      window.localStorage.setItem("firelight-student-name", titleName(studentName));
+      codeInput.value = "";
+      compileResult = null;
+      compileButton.disabled = true;
+      connectButton.disabled = true;
+      uploadButton.disabled = true;
+      logBox.textContent = "";
+      setStatus(`New signal loaded for ${titleName(studentName)}.`);
+      renderSlide();
+      renderWorkshop();
+    }
+
+    function insertSnippet(snippet) {
+      const start = codeInput.selectionStart;
+      const end = codeInput.selectionEnd;
+      const prefix = codeInput.value.slice(0, start);
+      const suffix = codeInput.value.slice(end);
+      const needsBreak = prefix && !prefix.endsWith("\n") ? "\n" : "";
+      const line = `${needsBreak}${snippet}\n`;
+      codeInput.value = `${prefix}${line}${suffix}`;
+      codeInput.focus();
+      const next = start + line.length;
+      codeInput.setSelectionRange(next, next);
+      checkChallenge(false);
+    }
+
+    function fullSketch() {
+      const bodyLines = codeInput.value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("//"))
+        .map((line) => `  ${line}`)
+        .join("\n");
+
       return `void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 }
 
 void loop() {
-  // Build ${titleName(name)} in Morse here.
-  // Use dot(); dash(); and delay(600); between letters.
-  // START YOUR NAME
-
-  // END YOUR NAME
-
+  // ${titleName(studentName)} in Morse
+${bodyLines}
   delay(1400);
 }
 
@@ -580,120 +1271,7 @@ void dash() {
 `;
     }
 
-    function setStatus(message) {
-      statusBox.textContent = message;
-    }
-
-    function log(message) {
-      logBox.textContent += `${message}\n`;
-      logBox.scrollTop = logBox.scrollHeight;
-    }
-
-    function renderLetters(progress = 0) {
-      letterBoard.innerHTML = "";
-      expectedLetters().forEach((item, index) => {
-        const tile = document.createElement("div");
-        tile.className = "letter-tile";
-        tile.classList.toggle("done", index < progress);
-        tile.classList.toggle("active", index === progress);
-        tile.innerHTML = `
-          <span class="letter">${item.letter}</span>
-          <span class="morse">${item.morse.replaceAll(".", "dot ").replaceAll("-", "dash ").trim()}</span>
-          <span class="tile-status" aria-hidden="true"></span>
-        `;
-        letterBoard.append(tile);
-      });
-    }
-
-    function extractChallengeCode() {
-      const match = codeInput.value.match(/\/\/ START YOUR NAME([\s\S]*?)\/\/ END YOUR NAME/);
-      return match ? match[1] : "";
-    }
-
-    function challengeTokens() {
-      const tokens = [];
-      const challenge = extractChallengeCode();
-      const tokenRegex = /\b(dot|dash)\s*\(\s*\)\s*;|delay\s*\(\s*600\s*\)\s*;/g;
-      let match;
-      while ((match = tokenRegex.exec(challenge))) {
-        if (match[1] === "dot") tokens.push(".");
-        else if (match[1] === "dash") tokens.push("-");
-        else tokens.push("/");
-      }
-      return tokens;
-    }
-
-    function expectedTokens() {
-      const tokens = [];
-      expectedLetters().forEach((item, index, list) => {
-        tokens.push(...item.morse.split(""));
-        if (index < list.length - 1) tokens.push("/");
-      });
-      return tokens;
-    }
-
-    function matchingLetters(tokens) {
-      let cursor = 0;
-      let done = 0;
-      const list = expectedLetters();
-      for (let index = 0; index < list.length; index += 1) {
-        const item = list[index];
-        const required = item.morse.split("");
-        const got = tokens.slice(cursor, cursor + required.length);
-        if (got.join("") !== required.join("")) break;
-        cursor += required.length;
-        if (index < list.length - 1) {
-          if (tokens[cursor] !== "/") break;
-          cursor += 1;
-        }
-        done += 1;
-      }
-      return done;
-    }
-
-    function checkChallenge(showMessage = true) {
-      const got = challengeTokens();
-      const expected = expectedTokens();
-      const done = matchingLetters(got);
-      const complete = got.join("") === expected.join("") || got.join("") === `${expected.join("")}/`;
-      renderLetters(done);
-      compileButton.disabled = !complete;
-      if (showMessage) {
-        if (complete) setStatus(`${titleName(studentName)} is ready. Compile the signal.`);
-        else setStatus(`Matched ${done} of ${expectedLetters().length} letters. Keep building the signal.`);
-      }
-      return complete;
-    }
-
-    function insertSnippet(snippet) {
-      const start = codeInput.selectionStart;
-      const end = codeInput.selectionEnd;
-      const prefix = codeInput.value.slice(0, start);
-      const suffix = codeInput.value.slice(end);
-      const line = `  ${snippet}\n`;
-      codeInput.value = `${prefix}${line}${suffix}`;
-      codeInput.focus();
-      const next = start + line.length;
-      codeInput.setSelectionRange(next, next);
-      checkChallenge(false);
-    }
-
-    function resetForName(nextName) {
-      studentName = cleanName(nextName);
-      window.localStorage.setItem("firelight-student-name", titleName(studentName));
-      nameInput.value = titleName(studentName);
-      codeInput.value = codeTemplate(studentName);
-      compileButton.disabled = true;
-      connectButton.disabled = true;
-      uploadButton.disabled = true;
-      compileResult = null;
-      renderLetters(0);
-      setStatus(`Build ${titleName(studentName)} one letter at a time.`);
-      const marker = codeInput.value.indexOf("// START YOUR NAME") + "// START YOUR NAME\n".length;
-      codeInput.setSelectionRange(marker, marker);
-    }
-
-    function setCompileProgress(value, label = "Compiling signal...") {
+    function setCompileProgress(value, label = "Compiling name signal...") {
       compileProgress = Math.max(0, Math.min(100, Math.round(value)));
       compileTitle.textContent = label;
       compileProgressBar.style.width = `${compileProgress}%`;
@@ -715,7 +1293,7 @@ void dash() {
 
     function finishCompileOverlay(success) {
       clearInterval(compileProgressTimer);
-      setCompileProgress(success ? 100 : compileProgress, success ? "Signal compiled!" : "Compile failed");
+      setCompileProgress(success ? 100 : compileProgress, success ? "Name signal compiled!" : "Compile failed");
       window.setTimeout(() => {
         document.body.classList.remove("is-compiling");
       }, success ? 650 : 1100);
@@ -725,6 +1303,21 @@ void dash() {
       const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
       return new TextDecoder().decode(bytes);
     }
+
+    prevSlideButton.addEventListener("click", () => {
+      slideIndex = Math.max(0, slideIndex - 1);
+      renderSlide();
+    });
+
+    nextSlideButton.addEventListener("click", () => {
+      const slides = buildSlides();
+      if (slideIndex < slides.length - 1) {
+        slideIndex += 1;
+        renderSlide();
+      } else {
+        showWorkshop();
+      }
+    });
 
     insertButtons.forEach((button) => {
       button.addEventListener("click", () => insertSnippet(button.dataset.insert));
@@ -742,7 +1335,7 @@ void dash() {
       compileButton.disabled = true;
       uploadButton.disabled = true;
       logBox.textContent = "";
-      setStatus("Compiling your Morse signal...");
+      setStatus("Compiling your Morse name...");
       startCompileOverlay();
 
       try {
@@ -752,7 +1345,7 @@ void dash() {
           body: JSON.stringify({
             fqbn: BOARD.fqbn,
             sketchName: "NameSignal",
-            code: codeInput.value
+            code: fullSketch()
           })
         });
         const data = await res.json();
@@ -795,7 +1388,7 @@ void dash() {
         const hex = compileResult.artifacts.find((artifact) => artifact.name.endsWith(".hex"));
         if (!hex) throw new Error("Compile succeeded but no .hex file was returned.");
         await uploadAvrHex(port, base64ToText(hex.contentBase64), BOARD);
-        setStatus(`Upload finished. Watch the LED blink ${titleName(studentName)}.`);
+        setStatus(`Upload finished. Watch the LED spell ${titleName(studentName)}.`);
       } catch (error) {
         setStatus(`Upload failed: ${error.message}`);
         log(String(error.stack || error));
@@ -981,7 +1574,9 @@ void dash() {
     }
 
     nameInput.value = titleName(studentName);
-    resetForName(studentName);
+    codeInput.value = "";
+    renderSlide();
+    renderWorkshop();
     setupSceneCanvas();
   </script>
 </body>
