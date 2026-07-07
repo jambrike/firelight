@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Kit</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --cream: #fbf2e2;
+      --paper: #efe5d6;
+      --ink: #15110d;
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --panel: rgba(18, 14, 11, 0.82);
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 20% 12%, rgba(255, 122, 24, 0.14), transparent 20rem),
+        radial-gradient(circle at 84% 2%, rgba(255, 198, 64, 0.1), transparent 16rem),
+        linear-gradient(180deg, #05060b, #0b1018 42%, #0a0f12);
+      color: var(--cream);
+      font-family: var(--pixel);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+        radial-gradient(circle at 50% 0, rgba(255, 124, 24, 0.1), transparent 28rem);
+      opacity: 0.65;
+    }
+
+    a, button { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100vw - 2rem));
+      margin: 0 auto;
+      padding: 1rem 0 3rem;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.6rem 0 1.1rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: var(--cream);
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      width: 2rem;
+      height: 2rem;
+      image-rendering: pixelated;
+      background:
+        linear-gradient(45deg, transparent 0 30%, #ff7d13 30% 70%, transparent 70%),
+        linear-gradient(135deg, transparent 0 30%, #ffc640 30% 72%, transparent 72%);
+      filter: drop-shadow(0 0 0.65rem rgba(255, 122, 24, 0.7));
+    }
+
+    .back {
+      color: #211108;
+      background: linear-gradient(#f0b64f, #df8e1e);
+      border: 3px solid #341a04;
+      padding: 0.85rem 1rem;
+      box-shadow: inset -4px -4px 0 #8b4407, inset 4px 4px 0 #ffd87d, 0 4px 0 #271104;
+      text-decoration: none;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 1rem;
+      align-items: center;
+      padding: 1rem 0 1.5rem;
+    }
+
+    .hero-copy {
+      padding: 1.2rem 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 0.8rem;
+      color: #ffcc6b;
+      font-size: 0.68rem;
+    }
+
+    h1 {
+      margin: 0;
+      color: #fff6d7;
+      font-size: clamp(2.4rem, 6vw, 5.2rem);
+      line-height: 0.95;
+      text-shadow: 0 0 1.4rem rgba(255, 122, 24, 0.2);
+    }
+
+    .subtitle {
+      max-width: 31rem;
+      margin: 1rem 0 0;
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.35rem, 2.6vw, 2rem);
+      line-height: 1.05;
+      color: rgba(251, 242, 226, 0.9);
+    }
+
+    .price-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 1.2rem;
+    }
+
+    .price {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      padding: 0.85rem 1rem;
+      background: rgba(20, 14, 10, 0.72);
+      border: 2px solid rgba(255, 198, 64, 0.34);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+      font-size: 0.9rem;
+    }
+
+    .price strong {
+      color: #ffd776;
+      font-size: 1rem;
+    }
+
+    .coming {
+      color: #ff9b4b;
+      font-size: 0.75rem;
+      line-height: 1.6;
+    }
+
+    .hero-media {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .main-image {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      border: 3px solid #2f1910;
+      box-shadow: 0 0 0 3px rgba(255, 198, 64, 0.08), 0 1.4rem 3rem rgba(0, 0, 0, 0.5);
+      background: #20160f;
+    }
+
+    .thumbs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .thumbs img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border: 2px solid rgba(255, 198, 64, 0.18);
+      background: #20160f;
+    }
+
+    .details {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .card {
+      padding: 1rem;
+      background: var(--panel);
+      border: 2px solid rgba(255, 198, 64, 0.18);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+      min-height: 12rem;
+    }
+
+    .card h2 {
+      margin: 0 0 0.6rem;
+      color: #ffcd74;
+      font-size: 0.72rem;
+      line-height: 1.6;
+    }
+
+    .card p, .card li {
+      margin: 0;
+      font-family: var(--readable-pixel);
+      font-size: 1.3rem;
+      line-height: 1.05;
+      color: rgba(251, 242, 226, 0.9);
+    }
+
+    .card ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      display: grid;
+      gap: 0.45rem;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      margin-top: 1rem;
+      align-items: center;
+    }
+
+    .buy {
+      padding: 1rem 1.2rem;
+      color: #241100;
+      background: linear-gradient(#ffd46b, #ee981f);
+      border: 4px solid #351a05;
+      box-shadow: inset -5px -5px 0 #8f4407, inset 5px 5px 0 #ffe49a, 0 5px 0 #241000;
+      text-decoration: none;
+    }
+
+    .note {
+      font-family: var(--readable-pixel);
+      font-size: 1.5rem;
+      color: rgba(251, 242, 226, 0.76);
+    }
+
+    @media (max-width: 900px) {
+      .hero,
+      .details {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="./index.html" aria-label="Firelight home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Firelight</span>
+      </a>
+      <a class="back" href="./index.html">Back to camp</a>
+    </header>
+
+    <section class="hero" aria-label="Firelight kit product page">
+      <div class="hero-copy">
+        <p class="eyebrow">FireLight kit</p>
+        <h1>Build the first spark.</h1>
+        <p class="subtitle">A carefully packed Arduino Nano kit for beginners. The easiest way to go from box to blinking light.</p>
+        <div class="price-row">
+          <div class="price"><strong>90 euros</strong> <span>coming soon</span></div>
+          <div class="coming">Pre-orders and checkout are not live yet.</div>
+        </div>
+        <div class="cta-row">
+          <a class="buy" href="./index.html">Buy a Kit!</a>
+          <span class="note">Coming soon.</span>
+        </div>
+      </div>
+
+      <div class="hero-media">
+        <img class="main-image" src="./kit-box-open-2.png" alt="FireLight kit opened with labeled components" />
+        <div class="thumbs" aria-label="Product images">
+          <img src="./kit-box-open-1.png" alt="FireLight kit open with compartments" />
+          <img src="./kit-box-top.png" alt="FireLight kit angled open view" />
+          <img src="./kit-box-closed.png" alt="FireLight kit closed box" />
+        </div>
+      </div>
+    </section>
+
+    <section class="details" aria-label="What is inside the kit">
+      <article class="card">
+        <h2>What it is</h2>
+        <p>A starter box for Arduino and electronics learning, designed to feel warm, simple, and fun from the first project.</p>
+      </article>
+      <article class="card">
+        <h2>What is inside</h2>
+        <ul>
+          <li>Arduino Nano</li>
+          <li>Breadboard and wiring</li>
+          <li>Sensors, motors, and components</li>
+        </ul>
+      </article>
+      <article class="card">
+        <h2>What comes next</h2>
+        <p>The web lesson flow, compile-and-upload tools, and guided tutorials all connect directly to the kit.</p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

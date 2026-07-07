@@ -708,7 +708,7 @@
           <span>Kits</span>
           <span>Build</span>
           <span>Community</span>
-          <button class="nav-button" type="button">Buy a Kit!</button>
+          <button class="nav-button" type="button" id="buy-kit">Buy a Kit!</button>
         </nav>
       </header>
 
@@ -797,6 +797,7 @@
     const lineEl = document.getElementById("story-line");
     const skipButton = document.getElementById("skip-intro");
     const beginStoryButton = document.getElementById("begin-story");
+    const buyKitButton = document.getElementById("buy-kit");
     const setupForm = document.getElementById("setup-form");
     const setupFeedback = document.getElementById("setup-feedback");
     const setupAction = document.querySelector(".setup-action");
@@ -950,6 +951,9 @@
 
     skipButton.addEventListener("click", finishIntro);
     beginStoryButton.addEventListener("click", startIntro);
+    buyKitButton.addEventListener("click", () => {
+      window.location.href = "./product.html";
+    });
     setupForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formData = new FormData(setupForm);
