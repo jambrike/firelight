@@ -779,6 +779,7 @@
         <span>Firelight</span>
       </a>
       <div class="top-actions">
+        <a class="soft-button account-only" href="./learn.html">Build Path</a>
         <a class="soft-button" href="./product.html">Buy a Kit</a>
         <button class="soft-button account-only" id="sign-out" type="button">Sign out</button>
       </div>
@@ -816,7 +817,7 @@
         <span class="logs"></span>
       </div>
 
-      <a class="lesson-marker marker-first account-only" href="./tutorial.html">
+      <a class="lesson-marker marker-first account-only" href="./learn.html#first-spark">
         <span class="marker-top">
           <span class="marker-title">First Spark</span>
           <span class="status waiting" id="first-status">Ready</span>
@@ -826,7 +827,7 @@
         <span class="trail" aria-label="First Spark progress"><span id="first-bar"></span></span>
       </a>
 
-      <a class="lesson-marker marker-morse account-only" href="./second-tutorial/">
+      <a class="lesson-marker marker-morse account-only" href="./learn.html#morse-name">
         <span class="marker-top">
           <span class="marker-title">Morse Signal</span>
           <span class="status waiting" id="morse-status">Ready</span>
@@ -938,17 +939,17 @@
       setComplete(morseBar, morseStatus, morseDone);
 
       if (!firstDone) {
-        nextAction.href = "./tutorial.html";
-        nextAction.textContent = "Start tutorial";
-        nextCopy.textContent = "Your first Arduino upload is waiting beside the fire.";
+        nextAction.href = "./learn.html#first-spark";
+        nextAction.textContent = "Open path";
+        nextCopy.textContent = "Your first Arduino upload is waiting on the build path.";
       } else if (!morseDone) {
-        nextAction.href = "./second-tutorial/";
-        nextAction.textContent = "Continue";
+        nextAction.href = "./learn.html#morse-name";
+        nextAction.textContent = "Open path";
         nextCopy.textContent = "Next up: make the LED spell your name.";
       } else {
-        nextAction.href = "./product.html";
-        nextAction.textContent = "View kit";
-        nextCopy.textContent = "Nice work. The next Firelight tutorial is coming soon.";
+        nextAction.href = "./learn.html";
+        nextAction.textContent = "Open path";
+        nextCopy.textContent = "Nice work. More Firelight builds will unlock on the path.";
       }
     }
 

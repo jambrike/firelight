@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Build Path</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --cream: #fff2ce;
+      --soft-cream: rgba(255, 242, 206, 0.8);
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --wood: #7b421c;
+      --wood-dark: #2e1305;
+      --teal: #285c59;
+      --moss: #7aa36a;
+      --berry: #c4606e;
+      --ink: #05070d;
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      background: #050714;
+      color: var(--cream);
+      font-family: var(--pixel);
+      letter-spacing: 0;
+    }
+
+    a,
+    button {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .learn-app {
+      min-height: 100vh;
+      padding: 1rem clamp(1rem, 3vw, 2.4rem) 2rem;
+      background:
+        radial-gradient(circle at 50% 100%, rgba(255, 122, 24, 0.16), transparent 28rem),
+        radial-gradient(circle at 8% 18%, rgba(95, 167, 160, 0.1), transparent 20rem),
+        linear-gradient(#030611 0%, #071120 42%, #0b1719 100%);
+    }
+
+    .learn-app::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 10% 10%, #8ea3ba 0 0.12rem, transparent 0.13rem),
+        radial-gradient(circle at 28% 16%, #536b83 0 0.1rem, transparent 0.11rem),
+        radial-gradient(circle at 56% 8%, #d6c998 0 0.14rem, transparent 0.15rem),
+        radial-gradient(circle at 76% 18%, #70869e 0 0.11rem, transparent 0.12rem),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.5), transparent 22%, transparent 78%, rgba(0, 0, 0, 0.5));
+      background-size: 18rem 12rem, 20rem 14rem, 17rem 10rem, 21rem 13rem, auto;
+      opacity: 0.7;
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: #fff7df;
+      text-decoration: none;
+      font-size: clamp(0.78rem, 1.45vw, 1rem);
+      text-shadow: 0 0 1rem rgba(255, 122, 24, 0.42);
+    }
+
+    .brand-mark {
+      width: 2rem;
+      height: 2rem;
+      image-rendering: pixelated;
+      background:
+        linear-gradient(45deg, transparent 0 30%, var(--ember) 30% 70%, transparent 70%),
+        linear-gradient(135deg, transparent 0 30%, var(--gold) 30% 72%, transparent 72%);
+      filter: drop-shadow(0 0 0.65rem rgba(255, 122, 24, 0.7));
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.7rem;
+    }
+
+    .pixel-button,
+    .soft-button {
+      min-height: 3rem;
+      display: inline-grid;
+      place-items: center;
+      padding: 0 1rem;
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid var(--wood-dark);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+      text-decoration: none;
+      font-size: 0.58rem;
+      line-height: 1.45;
+    }
+
+    .soft-button {
+      color: rgba(255, 242, 206, 0.9);
+      background: rgba(8, 18, 22, 0.78);
+      border-color: rgba(95, 167, 160, 0.56);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.3),
+        inset 4px 4px 0 rgba(95, 167, 160, 0.12),
+        0 4px 0 #1f0c02;
+    }
+
+    .pixel-button:active,
+    .soft-button:active,
+    .trail-node:active {
+      transform: translateY(3px);
+    }
+
+    .layout {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(17rem, 0.72fr) minmax(32rem, 1.45fr) minmax(19rem, 0.85fr);
+      gap: 1rem;
+      min-height: calc(100vh - 6rem);
+    }
+
+    .panel {
+      min-height: 0;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255, 198, 64, 0.1), transparent 9rem),
+        linear-gradient(rgba(45, 25, 13, 0.92), rgba(5, 9, 15, 0.9));
+      border: 3px solid var(--wood);
+      box-shadow:
+        0 0 0 3px rgba(28, 12, 4, 0.92),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.3),
+        inset 5px 5px 0 rgba(255, 195, 100, 0.1),
+        0 1rem 2.6rem rgba(0, 0, 0, 0.42);
+    }
+
+    .profile-panel,
+    .detail-panel {
+      display: grid;
+      align-content: start;
+      gap: 1rem;
+      padding: 1rem;
+    }
+
+    .trail-panel {
+      padding: 1rem;
+      overflow: auto;
+      background:
+        radial-gradient(circle at 50% 65%, rgba(255, 122, 24, 0.14), transparent 17rem),
+        linear-gradient(rgba(16, 30, 31, 0.9), rgba(3, 7, 11, 0.94));
+      border-color: rgba(95, 167, 160, 0.7);
+    }
+
+    .eyebrow {
+      margin: 0 0 0.55rem;
+      color: #ffc46a;
+      font-size: 0.58rem;
+      line-height: 1.6;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      color: #fff4d3;
+      font-size: clamp(1.45rem, 3.4vw, 2.8rem);
+      line-height: 1.1;
+      text-shadow:
+        0 3px 0 #2b0f00,
+        0 0 1.3rem rgba(255, 122, 24, 0.38);
+    }
+
+    h2 {
+      color: #ffc46a;
+      font-size: 0.82rem;
+      line-height: 1.55;
+    }
+
+    .readable {
+      color: var(--soft-cream);
+      font-family: var(--readable-pixel);
+      font-size: 1.32rem;
+      line-height: 1.05;
+    }
+
+    .camp-id {
+      display: grid;
+      gap: 0.45rem;
+      padding: 0.8rem;
+      background: rgba(2, 5, 12, 0.55);
+      border: 2px solid rgba(95, 167, 160, 0.44);
+    }
+
+    .camp-id strong {
+      color: #fff4d3;
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+
+    .camp-id span {
+      overflow-wrap: anywhere;
+      color: rgba(255, 242, 206, 0.72);
+      font-family: var(--readable-pixel);
+      font-size: 1.15rem;
+      line-height: 1;
+    }
+
+    .progress-stack {
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .progress-row {
+      display: grid;
+      gap: 0.35rem;
+    }
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.6rem;
+      color: rgba(255, 242, 206, 0.72);
+      font-size: 0.5rem;
+      line-height: 1.5;
+    }
+
+    .bar {
+      height: 0.8rem;
+      overflow: hidden;
+      background: rgba(2, 5, 12, 0.72);
+      border: 2px solid rgba(95, 167, 160, 0.42);
+    }
+
+    .bar span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff7a18, #ffc640);
+      box-shadow: 0 0 1rem rgba(255, 122, 24, 0.45);
+      transition: width 240ms steps(8, end);
+    }
+
+    .crate-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.45rem;
+    }
+
+    .crate {
+      min-height: 4.3rem;
+      padding: 0.55rem;
+      color: #251305;
+      background:
+        linear-gradient(90deg, transparent 0 16%, rgba(46, 19, 5, 0.18) 16% 20%, transparent 20% 80%, rgba(46, 19, 5, 0.18) 80% 84%, transparent 84%),
+        linear-gradient(#c38345, #8c4c22);
+      border: 3px solid #2e1305;
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.22),
+        inset 4px 4px 0 rgba(255, 213, 130, 0.24);
+      font-size: 0.46rem;
+      line-height: 1.5;
+    }
+
+    .locked-gate {
+      display: none;
+      padding: 1rem;
+      background: rgba(2, 5, 12, 0.66);
+      border: 3px solid rgba(196, 96, 110, 0.56);
+      box-shadow: 0 0 1.5rem rgba(196, 96, 110, 0.12);
+    }
+
+    body.locked .locked-gate {
+      display: grid;
+      gap: 0.8rem;
+    }
+
+    body.locked .account-only {
+      display: none;
+    }
+
+    .trail-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 0.9rem;
+      border-bottom: 3px solid rgba(95, 167, 160, 0.38);
+    }
+
+    .trail-map {
+      position: relative;
+      min-height: 51rem;
+      margin-top: 1rem;
+      background:
+        radial-gradient(circle at 50% 58%, rgba(255, 122, 24, 0.13), transparent 12rem),
+        radial-gradient(ellipse at 50% 92%, rgba(122, 163, 106, 0.15), transparent 20rem);
+    }
+
+    .trail-line {
+      position: absolute;
+      left: 50%;
+      top: 4rem;
+      bottom: 3rem;
+      width: 0.65rem;
+      transform: translateX(-50%);
+      background:
+        repeating-linear-gradient(180deg, rgba(255, 198, 64, 0.62) 0 0.85rem, transparent 0.85rem 1.55rem);
+      filter: drop-shadow(0 0 0.7rem rgba(255, 122, 24, 0.34));
+    }
+
+    .trail-node {
+      position: absolute;
+      display: grid;
+      gap: 0.58rem;
+      width: min(18rem, 42%);
+      min-height: 8.7rem;
+      padding: 0.75rem;
+      color: #fff3d2;
+      text-align: left;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(255, 198, 64, 0.12), transparent 7rem),
+        linear-gradient(rgba(11, 20, 20, 0.94), rgba(3, 7, 11, 0.94));
+      border: 3px solid rgba(95, 167, 160, 0.62);
+      box-shadow:
+        0 0 0 3px rgba(2, 5, 8, 0.74),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.32),
+        inset 4px 4px 0 rgba(90, 132, 122, 0.12),
+        0 1rem 2rem rgba(0, 0, 0, 0.34);
+    }
+
+    .trail-node:nth-child(2n) {
+      left: 54%;
+    }
+
+    .trail-node:nth-child(2n + 1) {
+      right: 54%;
+    }
+
+    .trail-node[data-state="done"] {
+      border-color: rgba(122, 163, 106, 0.82);
+      box-shadow:
+        0 0 0 3px rgba(2, 5, 8, 0.74),
+        0 0 1.4rem rgba(122, 163, 106, 0.16),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.32);
+    }
+
+    .trail-node[data-state="current"] {
+      border-color: rgba(255, 198, 64, 0.82);
+      box-shadow:
+        0 0 0 3px rgba(2, 5, 8, 0.74),
+        0 0 1.8rem rgba(255, 122, 24, 0.25),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.32);
+    }
+
+    .trail-node[data-state="locked"] {
+      opacity: 0.64;
+      filter: grayscale(0.35);
+    }
+
+    .trail-node.selected {
+      outline: 3px solid rgba(255, 198, 64, 0.7);
+      outline-offset: 4px;
+    }
+
+    .node-one {
+      top: 1rem;
+    }
+
+    .node-two {
+      top: 9rem;
+    }
+
+    .node-three {
+      top: 17rem;
+    }
+
+    .node-four {
+      top: 25rem;
+    }
+
+    .node-five {
+      top: 33rem;
+    }
+
+    .node-six {
+      top: 41rem;
+    }
+
+    .node-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.6rem;
+      align-items: start;
+    }
+
+    .node-title {
+      color: #ffc46a;
+      font-size: 0.62rem;
+      line-height: 1.55;
+    }
+
+    .status {
+      flex: 0 0 auto;
+      color: #241100;
+      background: linear-gradient(#d6eca9, #7aa36a);
+      border: 2px solid var(--wood-dark);
+      padding: 0.38rem 0.45rem;
+      font-size: 0.42rem;
+      line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    .status.current {
+      background: linear-gradient(#f4b945, #e89122);
+    }
+
+    .status.locked {
+      color: rgba(255, 242, 206, 0.76);
+      background: rgba(2, 5, 12, 0.72);
+      border-color: rgba(95, 167, 160, 0.42);
+    }
+
+    .node-copy,
+    .detail-copy,
+    .detail-list li {
+      color: rgba(255, 242, 206, 0.82);
+      font-family: var(--readable-pixel);
+      font-size: 1.18rem;
+      line-height: 1.05;
+    }
+
+    .detail-hero {
+      min-height: 7rem;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 50% 54%, rgba(255, 122, 24, 0.16), transparent 8rem),
+        rgba(2, 5, 12, 0.58);
+      border: 2px solid rgba(255, 198, 64, 0.2);
+    }
+
+    .lesson-art {
+      width: 7.2rem;
+      height: 5rem;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 0 1rem rgba(255, 122, 24, 0.28));
+    }
+
+    .art-led {
+      background:
+        radial-gradient(circle at 50% 24%, #ffc640 0 0.9rem, transparent 0.95rem),
+        linear-gradient(#7aa36a 0 0) 47% 55% / 0.5rem 2.5rem no-repeat,
+        linear-gradient(#7aa36a 0 0) 58% 58% / 0.5rem 2.2rem no-repeat;
+    }
+
+    .art-morse {
+      background:
+        radial-gradient(circle at 15% 50%, #ffc640 0 0.42rem, transparent 0.44rem),
+        linear-gradient(#c4606e 0 0) 45% 48% / 3rem 0.62rem no-repeat,
+        radial-gradient(circle at 92% 50%, #ffc640 0 0.42rem, transparent 0.44rem);
+    }
+
+    .art-button {
+      background:
+        linear-gradient(#d6eca9, #7aa36a) 25% 42% / 2.8rem 1.4rem no-repeat,
+        linear-gradient(#f4b945, #e89122) 68% 35% / 2rem 2rem no-repeat,
+        linear-gradient(#285c59 0 0) 50% 72% / 6.2rem 0.6rem no-repeat;
+    }
+
+    .art-sensor {
+      background:
+        radial-gradient(circle at 38% 44%, #5fa7a0 0 0.75rem, transparent 0.8rem),
+        radial-gradient(circle at 62% 44%, #5fa7a0 0 0.75rem, transparent 0.8rem),
+        linear-gradient(#d6eca9, #7aa36a) 50% 65% / 5.7rem 1.6rem no-repeat;
+    }
+
+    .art-servo {
+      background:
+        linear-gradient(#c4606e, #8b3446) 50% 58% / 4.4rem 2.7rem no-repeat,
+        linear-gradient(#ffc640 0 0) 72% 32% / 2.2rem 0.65rem no-repeat;
+    }
+
+    .art-robot {
+      background:
+        radial-gradient(circle at 24% 72%, #2e1305 0 0.55rem, transparent 0.58rem),
+        radial-gradient(circle at 76% 72%, #2e1305 0 0.55rem, transparent 0.58rem),
+        linear-gradient(#d6eca9, #7aa36a) 50% 45% / 5.8rem 2.4rem no-repeat,
+        radial-gradient(circle at 42% 42%, #241100 0 0.18rem, transparent 0.2rem),
+        radial-gradient(circle at 58% 42%, #241100 0 0.18rem, transparent 0.2rem);
+    }
+
+    .detail-list {
+      display: grid;
+      gap: 0.42rem;
+      margin: 0;
+      padding-left: 1.05rem;
+    }
+
+    .concept-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+
+    .concept {
+      padding: 0.48rem 0.55rem;
+      color: rgba(255, 242, 206, 0.8);
+      background: rgba(2, 5, 12, 0.58);
+      border: 2px solid rgba(95, 167, 160, 0.38);
+      font-family: var(--readable-pixel);
+      font-size: 1.08rem;
+      line-height: 1;
+    }
+
+    .detail-action[aria-disabled="true"] {
+      pointer-events: none;
+      opacity: 0.55;
+      filter: grayscale(0.35);
+    }
+
+    .achievement-list {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .achievement {
+      display: grid;
+      grid-template-columns: 2rem minmax(0, 1fr);
+      gap: 0.55rem;
+      align-items: center;
+      padding: 0.55rem;
+      background: rgba(2, 5, 12, 0.44);
+      border: 2px solid rgba(255, 198, 64, 0.14);
+      color: rgba(255, 242, 206, 0.76);
+      font-family: var(--readable-pixel);
+      font-size: 1.12rem;
+      line-height: 1;
+    }
+
+    .badge {
+      display: grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 2px solid var(--wood-dark);
+      font-family: var(--pixel);
+      font-size: 0.52rem;
+    }
+
+    @media (max-width: 1120px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .trail-map {
+        min-height: 0;
+        display: grid;
+        gap: 0.8rem;
+      }
+
+      .trail-line {
+        display: none;
+      }
+
+      .trail-node,
+      .trail-node:nth-child(n) {
+        position: relative;
+        inset: auto;
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .topbar,
+      .trail-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .top-actions {
+        justify-content: flex-start;
+      }
+
+      .crate-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body class="locked">
+  <main class="learn-app" aria-label="Firelight build path">
+    <header class="topbar">
+      <a class="brand" href="./dashboard.html" aria-label="Firelight dashboard">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Firelight</span>
+      </a>
+      <div class="top-actions">
+        <a class="soft-button" href="./dashboard.html">Camp</a>
+        <a class="soft-button" href="./product.html">Kit</a>
+      </div>
+    </header>
+
+    <section class="layout">
+      <aside class="panel profile-panel">
+        <div>
+          <p class="eyebrow">Builder</p>
+          <div class="camp-id">
+            <strong id="builder-name">Camp locked</strong>
+            <span id="builder-email">Light a kit to open this path.</span>
+          </div>
+        </div>
+
+        <div class="locked-gate">
+          <p class="readable">This is where the Firelight curriculum lives. Light your kit first and the full trail opens.</p>
+          <a class="pixel-button" href="./index.html">Light a kit</a>
+        </div>
+
+        <div class="account-only">
+          <p class="eyebrow">Trail Progress</p>
+          <div class="progress-stack">
+            <div class="progress-row">
+              <div class="progress-label"><span>Core lessons</span><span id="core-percent">0%</span></div>
+              <div class="bar"><span id="core-bar"></span></div>
+            </div>
+            <div class="progress-row">
+              <div class="progress-label"><span>Kit confidence</span><span id="kit-percent">0%</span></div>
+              <div class="bar"><span id="kit-bar"></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="account-only">
+          <p class="eyebrow">Kit Crates</p>
+          <div class="crate-grid">
+            <span class="crate">01 Microcontroller</span>
+            <span class="crate">02 Breadboard</span>
+            <span class="crate">03 LEDs + Resistors</span>
+            <span class="crate">04 Buttons</span>
+            <span class="crate">05 Sensors</span>
+            <span class="crate">06 Motors</span>
+          </div>
+        </div>
+
+        <div class="account-only">
+          <p class="eyebrow">Badges</p>
+          <div class="achievement-list" id="achievement-list"></div>
+        </div>
+      </aside>
+
+      <section class="panel trail-panel">
+        <div class="trail-head">
+          <div>
+            <p class="eyebrow">Firelight Build Path</p>
+            <h1>Where the real building lives.</h1>
+            <p class="readable">Pick a signpost, see what it teaches, then jump into the tutorial when you are ready.</p>
+          </div>
+          <a class="pixel-button account-only" id="quick-start" href="./tutorial.html">Next build</a>
+        </div>
+
+        <div class="trail-map account-only" id="trail-map" aria-label="Lesson map">
+          <span class="trail-line" aria-hidden="true"></span>
+        </div>
+      </section>
+
+      <aside class="panel detail-panel account-only">
+        <div>
+          <p class="eyebrow">Selected Build</p>
+          <h2 id="detail-title">First Spark</h2>
+          <p class="detail-copy" id="detail-copy">Choose a lesson from the build path.</p>
+        </div>
+        <div class="detail-hero">
+          <span class="lesson-art art-led" id="detail-art" aria-hidden="true"></span>
+        </div>
+        <div>
+          <p class="eyebrow">You Will Build</p>
+          <ul class="detail-list" id="detail-builds"></ul>
+        </div>
+        <div>
+          <p class="eyebrow">Concepts</p>
+          <div class="concept-row" id="detail-concepts"></div>
+        </div>
+        <a class="pixel-button detail-action" id="detail-action" href="./tutorial.html">Open lesson</a>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    window.FIRELIGHT_CONFIG = {
+      kitKey: "123456",
+      supabaseUrl: "",
+      supabaseAnonKey: ""
+    };
+  </script>
+  <script src="/config"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const firelightConfig = window.FIRELIGHT_CONFIG || {};
+    const supabaseClient = firelightConfig.supabaseUrl && firelightConfig.supabaseAnonKey && window.supabase
+      ? window.supabase.createClient(firelightConfig.supabaseUrl, firelightConfig.supabaseAnonKey)
+      : null;
+
+    const lessons = [
+      {
+        id: "first-spark",
+        title: "First Spark",
+        short: "Make the Nano blink and send your first sketch.",
+        href: "./tutorial.html",
+        progressKey: "firelight-first-tutorial-complete",
+        art: "art-led",
+        builds: ["Upload a blink sketch", "Understand setup() and loop()", "See code control real hardware"],
+        concepts: ["Arduino Nano", "Compile", "Upload", "LED output"]
+      },
+      {
+        id: "morse-name",
+        title: "Morse Name Signal",
+        short: "Teach the LED to spell your name in dots and dashes.",
+        href: "./second-tutorial/",
+        progressKey: "firelight-second-tutorial-complete",
+        requires: "firelight-first-tutorial-complete",
+        art: "art-morse",
+        builds: ["Write dot() and dash() calls", "Pause between letters", "Turn your name into a light signal"],
+        concepts: ["Functions", "Timing", "Patterns", "Debugging"]
+      },
+      {
+        id: "button-input",
+        title: "Button Input",
+        short: "Press a button and make the board decide what happens next.",
+        href: "#",
+        requires: "firelight-second-tutorial-complete",
+        comingSoon: true,
+        art: "art-button",
+        builds: ["Wire a button", "Read HIGH and LOW", "Build a tiny reaction game"],
+        concepts: ["Inputs", "Pullups", "Conditionals", "State"]
+      },
+      {
+        id: "distance-scout",
+        title: "Distance Scout",
+        short: "Use a sensor to measure the world around your robot.",
+        href: "#",
+        comingSoon: true,
+        art: "art-sensor",
+        builds: ["Read distance data", "Print sensor values", "Trigger an LED warning"],
+        concepts: ["Sensors", "Serial monitor", "Thresholds", "Calibration"]
+      },
+      {
+        id: "servo-gate",
+        title: "Servo Gate",
+        short: "Turn code into motion with a moving mechanism.",
+        href: "#",
+        comingSoon: true,
+        art: "art-servo",
+        builds: ["Connect a servo", "Sweep positions", "Create a tiny gate"],
+        concepts: ["PWM", "Angles", "Mechanisms", "Power"]
+      },
+      {
+        id: "trail-rover",
+        title: "Trail Rover",
+        short: "Bring the pieces together into a small robot car.",
+        href: "#",
+        comingSoon: true,
+        art: "art-robot",
+        builds: ["Drive motors", "Combine sensors and motion", "Build autonomous behavior"],
+        concepts: ["Robotics", "Motor drivers", "Control loops", "Systems"]
+      }
+    ];
+
+    const body = document.body;
+    const trailMap = document.getElementById("trail-map");
+    const builderName = document.getElementById("builder-name");
+    const builderEmail = document.getElementById("builder-email");
+    const coreBar = document.getElementById("core-bar");
+    const kitBar = document.getElementById("kit-bar");
+    const corePercent = document.getElementById("core-percent");
+    const kitPercent = document.getElementById("kit-percent");
+    const detailTitle = document.getElementById("detail-title");
+    const detailCopy = document.getElementById("detail-copy");
+    const detailArt = document.getElementById("detail-art");
+    const detailBuilds = document.getElementById("detail-builds");
+    const detailConcepts = document.getElementById("detail-concepts");
+    const detailAction = document.getElementById("detail-action");
+    const quickStart = document.getElementById("quick-start");
+    const achievementList = document.getElementById("achievement-list");
+
+    let selectedLessonId = window.location.hash.replace("#", "") || lessons[0].id;
+
+    function hasAccess() {
+      return window.localStorage.getItem("firelight-kit-unlocked") === "true";
+    }
+
+    function titleName(value) {
+      const clean = String(value || "Builder").trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+
+    function lessonDone(lesson) {
+      return lesson.progressKey && window.localStorage.getItem(lesson.progressKey) === "true";
+    }
+
+    function lessonLocked(lesson) {
+      return Boolean(lesson.requires && window.localStorage.getItem(lesson.requires) !== "true");
+    }
+
+    function lessonState(lesson) {
+      if (lessonDone(lesson)) return "done";
+      if (lesson.comingSoon || lessonLocked(lesson)) return "locked";
+      return "current";
+    }
+
+    function nextOpenLesson() {
+      return lessons.find((lesson) => lessonState(lesson) === "current") || lessons[0];
+    }
+
+    function statusText(lesson) {
+      if (lessonDone(lesson)) return "Done";
+      if (lesson.comingSoon) return "Soon";
+      if (lessonLocked(lesson)) return "Locked";
+      return "Ready";
+    }
+
+    function rememberSession(user) {
+      if (!user) return;
+      window.localStorage.setItem("firelight-kit-unlocked", "true");
+      if (user.email) window.localStorage.setItem("firelight-student-email", user.email);
+      if (user.user_metadata?.name) window.localStorage.setItem("firelight-student-name", user.user_metadata.name);
+    }
+
+    function renderProfile() {
+      const unlocked = hasAccess();
+      body.classList.toggle("locked", !unlocked);
+      if (!unlocked) return;
+
+      const name = titleName(window.localStorage.getItem("firelight-student-name"));
+      const email = window.localStorage.getItem("firelight-student-email") || "No email saved";
+      const finishedCore = lessons.filter((lesson) => lesson.progressKey && lessonDone(lesson)).length;
+      const coreTotal = lessons.filter((lesson) => lesson.progressKey).length;
+      const coreValue = Math.round((finishedCore / coreTotal) * 100);
+      const kitValue = Math.min(100, 25 + finishedCore * 25);
+
+      builderName.textContent = name;
+      builderEmail.textContent = email;
+      coreBar.style.width = `${coreValue}%`;
+      corePercent.textContent = `${coreValue}%`;
+      kitBar.style.width = `${kitValue}%`;
+      kitPercent.textContent = `${kitValue}%`;
+    }
+
+    function renderTrail() {
+      trailMap.querySelectorAll(".trail-node").forEach((node) => node.remove());
+      lessons.forEach((lesson, index) => {
+        const state = lessonState(lesson);
+        const button = document.createElement("button");
+        button.className = `trail-node node-${["one", "two", "three", "four", "five", "six"][index] || "six"}`;
+        button.type = "button";
+        button.dataset.lesson = lesson.id;
+        button.dataset.state = state;
+        button.classList.toggle("selected", lesson.id === selectedLessonId);
+        button.innerHTML = `
+          <span class="node-top">
+            <span class="node-title">${lesson.title}</span>
+            <span class="status ${state === "current" ? "current" : state === "locked" ? "locked" : ""}">${statusText(lesson)}</span>
+          </span>
+          <span class="node-copy">${lesson.short}</span>
+        `;
+        button.addEventListener("click", () => selectLesson(lesson.id));
+        trailMap.append(button);
+      });
+    }
+
+    function selectLesson(id) {
+      const lesson = lessons.find((item) => item.id === id) || lessons[0];
+      selectedLessonId = lesson.id;
+      const state = lessonState(lesson);
+      if (window.location.hash.replace("#", "") !== lesson.id) {
+        window.history.replaceState(null, "", `#${lesson.id}`);
+      }
+      detailTitle.textContent = lesson.title;
+      detailCopy.textContent = lesson.short;
+      detailArt.className = `lesson-art ${lesson.art}`;
+      detailBuilds.innerHTML = lesson.builds.map((item) => `<li>${item}</li>`).join("");
+      detailConcepts.innerHTML = lesson.concepts.map((item) => `<span class="concept">${item}</span>`).join("");
+
+      if (state === "current" || state === "done") {
+        detailAction.href = lesson.href;
+        detailAction.textContent = state === "done" ? "Open again" : "Start build";
+        detailAction.setAttribute("aria-disabled", "false");
+      } else if (lesson.comingSoon) {
+        detailAction.href = "#";
+        detailAction.textContent = "Coming soon";
+        detailAction.setAttribute("aria-disabled", "true");
+      } else {
+        detailAction.href = "#";
+        detailAction.textContent = "Finish previous";
+        detailAction.setAttribute("aria-disabled", "true");
+      }
+
+      renderTrail();
+    }
+
+    function renderAchievements() {
+      const items = [
+        { label: "Camp Lit", active: hasAccess() },
+        { label: "First Upload", active: window.localStorage.getItem("firelight-first-tutorial-complete") === "true" },
+        { label: "Name Signal", active: window.localStorage.getItem("firelight-second-tutorial-complete") === "true" }
+      ];
+      achievementList.innerHTML = items.map((item, index) => `
+        <span class="achievement">
+          <span class="badge">${item.active ? "OK" : index + 1}</span>
+          <span>${item.label}</span>
+        </span>
+      `).join("");
+    }
+
+    function renderAll() {
+      renderProfile();
+      if (!hasAccess()) return;
+      const next = nextOpenLesson();
+      quickStart.href = next.href;
+      quickStart.textContent = next.comingSoon ? "View trail" : "Next build";
+      if (!selectedLessonId) selectedLessonId = next.id;
+      renderTrail();
+      selectLesson(selectedLessonId);
+      renderAchievements();
+    }
+
+    async function hydrateSession() {
+      if (!supabaseClient) {
+        renderAll();
+        return;
+      }
+
+      const result = await supabaseClient.auth.getSession();
+      rememberSession(result.data?.session?.user);
+      renderAll();
+    }
+
+    hydrateSession();
+  </script>
+</body>
+</html>
