@@ -10,6 +10,7 @@ npm run deploy
 ```
 
 The Cloudflare Pages project is `firelight`.
+The Supabase project is `firelight` in `eu-west-1`.
 
 ## Kit Login
 
@@ -21,4 +22,4 @@ The current prototype kit key is `123456`.
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 
-Until Supabase values are added, the site falls back to local unlock mode with the prototype kit key.
+The production Cloudflare Pages project has these values configured as secrets. If they are missing in another environment, the site falls back to local unlock mode with the prototype kit key.

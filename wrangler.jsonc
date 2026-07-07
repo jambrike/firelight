@@ -1,8 +1,5 @@
 {
   "name": "firelight",
   "compatibility_date": "2026-07-07",
-  "pages_build_output_dir": "./dist",
-  "vars": {
-    "KIT_KEY": "123456"
-  }
+  "pages_build_output_dir": "./dist"
 }
