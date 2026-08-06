@@ -1,5 +1,35 @@
 {
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "firelight",
-  "compatibility_date": "2026-07-07",
-  "pages_build_output_dir": "./dist"
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api",
+      "/api/*",
+      "/*.html",
+      "/second-tutorial",
+      "/second-tutorial/*"
+    ]
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "BUILD_ID": "local"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  }
 }

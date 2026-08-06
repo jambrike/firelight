@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.cache/tsconfig.worker.tsbuildinfo",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "types": [
+      "./worker-configuration.d.ts",
+      "@cloudflare/vitest-pool-workers/types"
+    ]
+  },
+  "include": ["worker", "worker-configuration.d.ts"]
+}

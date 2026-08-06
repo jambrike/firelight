@@ -1,13 +1,63 @@
 {
-  "name": "firelight-site",
-  "version": "0.1.0",
+  "name": "firelight-platform",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && mkdir -p dist/second-tutorial && cp index.html dashboard.html learn.html product.html tutorial.html _headers favicon.ico favicon.svg kit-box-closed.png kit-box-open-1.png kit-box-open-2.png kit-box-top.png dist/ && cp second-tutorial/index.html dist/second-tutorial/",
-    "deploy": "npm run build && npx wrangler pages deploy ./dist --project-name=firelight --branch=main"
+    "dev": "vite",
+    "dev:worker": "npm run build && wrangler dev",
+    "build": "vite build",
+    "typecheck": "tsc -b",
+    "lint": "eslint . --max-warnings 0",
+    "test": "npm run test:unit && npm run test:worker",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "pretest:worker": "npm run build",
+    "test:worker": "vitest run --config vitest.worker.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
+    "cf-typegen": "wrangler types",
+    "cf-typegen:check": "wrangler types --check",
+    "check": "npm run cf-typegen:check && npm run typecheck && npm run lint && npm run test && npm run build",
+    "check:startup": "wrangler check startup",
+    "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run check && wrangler deploy"
+  },
+  "dependencies": {
+    "@fontsource/press-start-2p": "^5.3.0",
+    "@fontsource/vt323": "^5.3.0",
+    "hono": "^4.13.0",
+    "lucide-react": "^1.29.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "wouter": "^3.10.0"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "@cloudflare/vitest-pool-workers": "^0.20.2",
+    "@eslint/js": "^9.39.5",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.9.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.66.0",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.119.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
   }
 }

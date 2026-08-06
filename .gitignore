@@ -1,6 +1,9 @@
 dist/
 node_modules/
 .wrangler/
+.coverage/
+coverage/
+*.tsbuildinfo
 .dev.vars
 .env
 .env.*
