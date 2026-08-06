@@ -1,5 +1,6 @@
 import { Route, Router, Switch } from "wouter";
 import { AppShell } from "../components/AppShell";
+import { SessionBoundary } from "../features/identity/SessionBoundary";
 import { AccountPage } from "../pages/AccountPage";
 import { ActivatePage } from "../pages/ActivatePage";
 import { AdminPage } from "../pages/AdminPage";
@@ -18,12 +19,28 @@ export function AppRoutes() {
         <Route path="/" component={HomePage} />
         <Route path="/kit" component={KitPage} />
         <Route path="/auth" component={AuthPage} />
-        <Route path="/activate" component={ActivatePage} />
-        <Route path="/camp" component={CampPage} />
+        <Route path="/activate">
+          <SessionBoundary>
+            <ActivatePage />
+          </SessionBoundary>
+        </Route>
+        <Route path="/camp">
+          <SessionBoundary>
+            <CampPage />
+          </SessionBoundary>
+        </Route>
         <Route path="/learn" component={LearnPage} />
         <Route path="/learn/:lesson" component={LessonPage} />
-        <Route path="/account" component={AccountPage} />
-        <Route path="/admin" component={AdminPage} />
+        <Route path="/account">
+          <SessionBoundary>
+            <AccountPage />
+          </SessionBoundary>
+        </Route>
+        <Route path="/admin">
+          <SessionBoundary admin>
+            <AdminPage />
+          </SessionBoundary>
+        </Route>
         <Route component={NotFoundPage} />
       </Switch>
     </AppShell>

@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
+import { IdentityContext, anonymousIdentity } from "../features/identity/identity-context";
+import type { BootstrapData } from "../../shared/identity";
 import { routeManifest } from "./route-manifest";
 import { AppRoutes } from "./routes";
 
@@ -11,7 +13,7 @@ const routeCases = [
   ["/kit", "Everything needed for the first six builds."],
   ["/auth", "Your builds should be waiting when you return."],
   ["/activate", "Match this kit to your camp."],
-  ["/camp", "Your next build waits by the fire."],
+  ["/camp", "Welcome back, Ada."],
   ["/learn", "Where the real building lives."],
   ["/learn/first-spark", "First Spark"],
   ["/account", "One place for your profile, kit, and data."],
@@ -20,10 +22,31 @@ const routeCases = [
 
 function renderPath(path: string) {
   const location = memoryLocation({ path });
+  const authenticatedData: BootstrapData = {
+    profile: {
+      id: "11111111-1111-4111-8111-111111111111",
+      displayName: "Ada",
+      role: "admin",
+      email: "ada@example.com",
+      emailConfirmed: true,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    },
+    activation: null,
+    progress: [],
+    achievements: [],
+    nextLesson: { id: "first-spark", title: "First Spark" },
+  };
+  const identity =
+    path === "/auth"
+      ? anonymousIdentity
+      : { ...anonymousIdentity, status: "authenticated" as const, data: authenticatedData };
   return render(
-    <Router hook={location.hook} searchHook={location.searchHook}>
-      <AppRoutes />
-    </Router>,
+    <IdentityContext.Provider value={identity}>
+      <Router hook={location.hook} searchHook={location.searchHook}>
+        <AppRoutes />
+      </Router>
+    </IdentityContext.Provider>,
   );
 }
 

@@ -1,20 +1,27 @@
-import { ArrowRight, LockKeyhole } from "lucide-react";
+import { ArrowRight, CheckCircle2, LockKeyhole } from "lucide-react";
 import { Link } from "wouter";
 import { PageIntro } from "../components/ui";
 import { lessonCatalog } from "../features/lessons/catalog";
+import { useIdentity } from "../features/identity/identity-context";
 
 export function LearnPage() {
+  const identity = useIdentity();
+
   return (
     <div className="page-section page-stack">
       <PageIntro eyebrow="Firelight build path" title="Where the real building lives.">
         <p>
-          Preview all six projects now. Signed-in builders will unlock them in order as
-          checkpoints are completed.
+          Preview all six projects now. Signed-in builders see their synchronized
+          checkpoints; prerequisite enforcement arrives with the lesson engine.
         </p>
       </PageIntro>
       <ol className="lesson-trail">
-        {lessonCatalog.map((lesson) => (
-          <li key={lesson.id} data-lesson={lesson.id}>
+        {lessonCatalog.map((lesson) => {
+          const saved = identity.data?.progress.find(
+            (progress) => progress.lessonId === lesson.id && progress.lessonVersion === 1,
+          );
+          return (
+          <li key={lesson.id} data-lesson={lesson.id} data-status={saved?.status ?? "preview"}>
             <Link to={`/learn/${lesson.id}`} className="lesson-card">
               <span className="lesson-card__number">
                 {lesson.order.toString().padStart(2, "0")}
@@ -23,7 +30,13 @@ export function LearnPage() {
               <span className="lesson-card__body">
                 <span className="lesson-card__meta">
                   {lesson.estimatedMinutes} min
-                  {lesson.migrationStage === "planned" ? (
+                  {saved?.status === "completed" ? (
+                    <span>
+                      <CheckCircle2 aria-hidden="true" /> Complete
+                    </span>
+                  ) : saved?.status === "in_progress" ? (
+                    <span>{saved.percentage}% saved</span>
+                  ) : lesson.migrationStage === "planned" ? (
                     <span>
                       <LockKeyhole aria-hidden="true" /> Content milestone
                     </span>
@@ -42,7 +55,8 @@ export function LearnPage() {
               <ArrowRight className="lesson-card__arrow" aria-hidden="true" />
             </Link>
           </li>
-        ))}
+          );
+        })}
       </ol>
     </div>
   );

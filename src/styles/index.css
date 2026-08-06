@@ -1117,6 +1117,112 @@ code,
   font-size: 1.1rem;
 }
 
+.auth-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.auth-mode-tabs button {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 2px solid rgba(95, 167, 160, 0.4);
+  background: rgba(3, 6, 17, 0.72);
+  color: var(--cream-muted);
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 0.55rem;
+  line-height: 1.5;
+}
+
+.auth-mode-tabs button.active {
+  border-color: var(--gold-400);
+  background: rgba(123, 66, 28, 0.42);
+  color: var(--gold-300);
+}
+
+.identity-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.identity-form label,
+label.identity-form {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--cream-200);
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  line-height: 1.6;
+}
+
+.identity-form input,
+label.identity-form input {
+  width: 100%;
+  min-height: 3.2rem;
+  padding: 0.7rem 0.8rem;
+  border: 2px solid rgba(95, 167, 160, 0.55);
+  background: rgba(2, 4, 11, 0.84);
+  color: var(--cream-100);
+  font-family: var(--font-readable);
+  font-size: 1.35rem;
+}
+
+.identity-form label small {
+  color: var(--cream-muted);
+  font-family: var(--font-readable);
+  font-size: 1rem;
+}
+
+.identity-form .code-input {
+  color: var(--gold-300);
+  font-family: "Courier New", monospace;
+  font-size: clamp(1rem, 4vw, 1.45rem);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.form-error {
+  padding: 0.8rem;
+  border-left: 3px solid var(--danger-400);
+  background: rgba(66, 13, 18, 0.4);
+  color: #ffc8c8;
+}
+
+.pixel-button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.65);
+  opacity: 0.65;
+}
+
+.pixel-button > svg {
+  display: inline;
+  width: 1rem;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.activation-callout {
+  border-color: var(--teal-400);
+}
+
+.danger-panel {
+  border-color: var(--danger-400);
+}
+
+.danger-button {
+  background: linear-gradient(#d76a6a, #9b3030);
+  box-shadow:
+    inset -4px -4px 0 #621c1c,
+    inset 4px 4px 0 #ff9898,
+    0 4px 0 #1f0c02;
+  color: #fff7df;
+}
+
+.lesson-trail li[data-status="completed"] .lesson-card {
+  border-color: var(--moss-400);
+}
+
 .pin-map {
   display: grid;
   margin: 0;

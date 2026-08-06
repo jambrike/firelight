@@ -20,6 +20,14 @@
     "ENVIRONMENT": "development",
     "BUILD_ID": "local"
   },
+  "secrets": {
+    "required": [
+      "SUPABASE_URL",
+      "SUPABASE_PUBLISHABLE_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "KIT_CODE_PEPPER"
+    ]
+  },
   "observability": {
     "enabled": true,
     "logs": {

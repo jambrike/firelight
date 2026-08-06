@@ -2,6 +2,7 @@ import { Menu, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { getRouteMetadata } from "../app/route-metadata";
+import { useIdentity } from "../features/identity/identity-context";
 import { Brand } from "./Brand";
 
 const navigation = [
@@ -15,6 +16,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [routeAnnouncement, setRouteAnnouncement] = useState("");
   const [location] = useLocation();
+  const identity = useIdentity();
   const mainRef = useRef<HTMLElement>(null);
   const previousLocationRef = useRef(location);
 
@@ -73,12 +75,14 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
             ))}
             <Link
               className="pixel-button pixel-button--small"
-              to="/auth"
+              to={identity.status === "authenticated" ? "/account" : "/auth"}
               onClick={() => {
                 setMenuOpen(false);
               }}
             >
-              Light a kit
+              {identity.status === "authenticated"
+                ? identity.data?.profile.displayName ?? "Account"
+                : "Light a kit"}
             </Link>
           </nav>
         </div>

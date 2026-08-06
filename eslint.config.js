@@ -68,6 +68,9 @@ export default tseslint.config(
   {
     files: ["**/*.test.{ts,tsx}", "test/**/*.ts"],
     rules: {
+      "@typescript-eslint/require-await": "off",
+      "@typescript-eslint/unbound-method": "off",
+      "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",
       "@typescript-eslint/no-unsafe-call": "off",
       "@typescript-eslint/no-unsafe-member-access": "off"

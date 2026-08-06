@@ -9,3 +9,4 @@ coverage/
 .env.*
 !.env.example
 supabase/.temp/
+worker-startup.cpuprofile

@@ -7,6 +7,14 @@ export default defineConfig({
       wrangler: {
         configPath: "./wrangler.jsonc",
       },
+      miniflare: {
+        bindings: {
+          SUPABASE_URL: "https://supabase.firelight.test",
+          SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
+          SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+          KIT_CODE_PEPPER: "firelight-local-kit-pepper",
+        },
+      },
     }),
   ],
   test: {

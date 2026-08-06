@@ -1,0 +1,6 @@
+# Copy to .dev.vars, then replace the two key placeholders with values from:
+# supabase status -o env
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_PUBLISHABLE_KEY=copy-the-local-anon-or-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=copy-the-local-service-role-key
+KIT_CODE_PEPPER=firelight-local-kit-pepper

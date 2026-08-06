@@ -1,15 +1,9 @@
 import type { LessonPinAssignment } from "./contracts";
+import { lessonSlugs } from "../../../shared/curriculum";
+import type { LessonSlug } from "../../../shared/curriculum";
 
-export const lessonSlugs = [
-  "first-spark",
-  "morse-name",
-  "button-reaction",
-  "distance-scout",
-  "servo-gate",
-  "trail-rover",
-] as const;
-
-export type LessonSlug = (typeof lessonSlugs)[number];
+export { lessonSlugs };
+export type { LessonSlug };
 export type LessonMigrationStage = "prototype-ready" | "planned";
 
 export interface LessonCatalogEntry {

@@ -1,28 +1,57 @@
 import { ArrowRight, Award, Map, Radio } from "lucide-react";
 import { Link } from "wouter";
 import { HardwareStatus, PageIntro, Panel, ProgressBar, PixelLink } from "../components/ui";
+import { useIdentity } from "../features/identity/identity-context";
+import { findCurriculumLesson } from "../../shared/curriculum";
 
 export function CampPage() {
+  const identity = useIdentity();
+  const data = identity.data;
+  if (!data) return null;
+
+  const completed = new Set(
+    data.progress
+      .filter((item) => {
+        const lesson = findCurriculumLesson(item.lessonId);
+        return item.status === "completed" && lesson?.version === item.lessonVersion;
+      })
+      .map((item) => item.lessonId),
+  ).size;
+  const progressPercent = Math.round((completed / 6) * 100);
+  const resumePath = data.nextLesson ? `/learn/${data.nextLesson.id}` : "/learn";
+
   return (
     <div className="page-section page-stack">
-      <PageIntro eyebrow="Camp preview" title="Your next build waits by the fire.">
-        <p>
-          This sample state shows the dashboard shell. Real profile and progress data
-          arrive with the identity and lesson-engine milestones.
-        </p>
+      <PageIntro eyebrow="Learner camp" title={`Welcome back, ${data.profile.displayName}.`}>
+        <p>Your profile and lesson checkpoints are synchronized across signed-in devices.</p>
       </PageIntro>
 
-      <section className="dashboard-grid" aria-label="Learner camp preview">
+      {!data.activation ? (
+        <Panel className="activation-callout">
+          <span className="status-chip">Activation needed</span>
+          <h2>Connect the kit before recording the trail.</h2>
+          <p>You can preview every lesson now. One-time activation enables saved progress.</p>
+          <PixelLink to="/activate">Activate kit</PixelLink>
+        </Panel>
+      ) : null}
+
+      <section className="dashboard-grid" aria-label="Learner camp">
         <Panel className="camp-board">
-          <span className="status-chip">Preview data</span>
-          <p className="eyebrow">Good evening, Builder</p>
-          <h2>Ready to make the first spark?</h2>
-          <p>Start with the built-in LED, then return here to resume each saved step.</p>
-          <ProgressBar label="Core trail progress" value={0} />
+          <span className="status-chip">{data.activation ? "Camp synchronized" : "Preview access"}</span>
+          <p className="eyebrow">{completed} of 6 builds complete</p>
+          <h2>
+            {data.nextLesson ? `Next: ${data.nextLesson.title}` : "The core trail is complete!"}
+          </h2>
+          <p>
+            {data.nextLesson
+              ? "Continue from your next saved build whenever the hardware is ready."
+              : "Every core checkpoint is glowing."}
+          </p>
+          <ProgressBar label="Core trail progress" value={progressPercent} />
           <div className="button-row">
-            <PixelLink to="/learn/first-spark">Open First Spark</PixelLink>
+            <PixelLink to={resumePath}>{data.nextLesson ? "Resume trail" : "Review trail"}</PixelLink>
             <PixelLink to="/learn" secondary>
-              Open trail
+              Open map
             </PixelLink>
           </div>
         </Panel>
@@ -30,8 +59,8 @@ export function CampPage() {
           <p className="eyebrow">Hardware state</p>
           <HardwareStatus />
           <p className="muted-copy">
-            Firelight never reports a connection until the browser has actually opened
-            a serial port.
+            A board is never reported as connected until Web Serial opens it in the hardware
+            milestone.
           </p>
         </Panel>
       </section>
@@ -43,16 +72,16 @@ export function CampPage() {
           <p>Walk the six-build trail in order.</p>
           <span>Open path <ArrowRight aria-hidden="true" /></span>
         </Link>
-        <Link className="panel path-card" to="/learn/first-spark">
+        <Link className="panel path-card" to={resumePath}>
           <Radio aria-hidden="true" />
           <h2>Build</h2>
-          <p>Enter the compile, connect, and send workspace.</p>
+          <p>Return to the next lesson foundation.</p>
           <span>Open lesson <ArrowRight aria-hidden="true" /></span>
         </Link>
         <Link className="panel path-card" to="/account">
           <Award aria-hidden="true" />
           <h2>Badges</h2>
-          <p>See achievements and connected kit details.</p>
+          <p>{data.achievements.filter((achievement) => achievement.earned).length} earned.</p>
           <span>Open account <ArrowRight aria-hidden="true" /></span>
         </Link>
       </section>

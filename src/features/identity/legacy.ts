@@ -1,0 +1,104 @@
+import type { LessonSlug } from "../../../shared/curriculum";
+import type { BootstrapData, LessonProgress, ProgressUpdateInput } from "../../../shared/identity";
+
+export const legacyKeys = {
+  displayName: "firelight-student-name",
+  email: "firelight-student-email",
+  kitUnlocked: "firelight-kit-unlocked",
+  firstSparkComplete: "firelight-first-tutorial-complete",
+  morseNameComplete: "firelight-second-tutorial-complete",
+  plaintextPassword: "firelight-local-password",
+} as const;
+
+interface LegacyStorage {
+  getItem(key: string): string | null;
+  removeItem(key: string): void;
+}
+
+interface LegacyMigrationApi {
+  updateProfile(displayName: string): Promise<unknown>;
+  saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput): Promise<LessonProgress>;
+}
+
+interface LegacySnapshot {
+  readonly displayName: string | null;
+  readonly ownerEmail: string | null;
+  readonly firstSparkValue: string | null;
+  readonly morseNameValue: string | null;
+}
+
+export function readLegacySnapshot(storage: LegacyStorage): LegacySnapshot {
+  const rawName = storage.getItem(legacyKeys.displayName);
+  const displayName = rawName?.trim() ?? "";
+  return {
+    displayName:
+      displayName.length >= 1 && Array.from(displayName).length <= 40 ? displayName : null,
+    ownerEmail: storage.getItem(legacyKeys.email)?.trim().toLowerCase() ?? null,
+    firstSparkValue: storage.getItem(legacyKeys.firstSparkComplete),
+    morseNameValue: storage.getItem(legacyKeys.morseNameComplete),
+  };
+}
+
+function currentCompletion(progress: readonly LessonProgress[], lessonId: LessonSlug): boolean {
+  return progress.some(
+    (item) =>
+      item.lessonId === lessonId && item.lessonVersion === 1 && item.status === "completed",
+  );
+}
+
+export async function migrateLegacyData(
+  storage: LegacyStorage,
+  bootstrap: BootstrapData,
+  api: LegacyMigrationApi,
+): Promise<boolean> {
+  if (!bootstrap.activation) return false;
+
+  const snapshot = readLegacySnapshot(storage);
+  const hasTransferableData =
+    snapshot.displayName !== null ||
+    snapshot.firstSparkValue !== null ||
+    snapshot.morseNameValue !== null;
+  if (
+    hasTransferableData &&
+    snapshot.ownerEmail !== bootstrap.profile.email.trim().toLowerCase()
+  ) {
+    throw new Error(
+      "Legacy progress was left on this browser because it belongs to a different or unverifiable account.",
+    );
+  }
+  let changed = false;
+
+  if (
+    snapshot.displayName &&
+    bootstrap.profile.displayName === "Builder" &&
+    snapshot.displayName !== bootstrap.profile.displayName
+  ) {
+    await api.updateProfile(snapshot.displayName);
+    changed = true;
+  }
+
+  const completionFlags = [
+    ["first-spark", snapshot.firstSparkValue],
+    ["morse-name", snapshot.morseNameValue],
+  ] as const;
+
+  for (const [lessonId, value] of completionFlags) {
+    if (value === "true" && !currentCompletion(bootstrap.progress, lessonId)) {
+      await api.saveProgress(lessonId, {
+        lessonVersion: 1,
+        status: "completed",
+        currentStep: "legacy-complete",
+        percentage: 100,
+      });
+      changed = true;
+    }
+  }
+
+  if (snapshot.displayName !== null) storage.removeItem(legacyKeys.displayName);
+  if (snapshot.firstSparkValue !== null) storage.removeItem(legacyKeys.firstSparkComplete);
+  if (snapshot.morseNameValue !== null) storage.removeItem(legacyKeys.morseNameComplete);
+  storage.removeItem(legacyKeys.email);
+  storage.removeItem(legacyKeys.kitUnlocked);
+
+  return changed;
+}
