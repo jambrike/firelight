@@ -365,17 +365,7 @@
     .ready-art {
       display: grid;
       align-content: center;
-      gap: 0.52rem;
-    }
-
-    .ready-line {
-      height: 0.8rem;
-      background: #ffc640;
-      box-shadow:
-        2rem 0 0 #ff7a18,
-        4.2rem 0 0 #ffc640,
-        6.6rem 0 0 #ff7a18;
-      animation: blinkLine 1200ms steps(2, end) infinite;
+      justify-items: center;
     }
 
     .slide-actions {
@@ -1806,17 +1796,6 @@
       }
     }
 
-    @keyframes blinkLine {
-      0%,
-      100% {
-        opacity: 0.35;
-      }
-
-      50% {
-        opacity: 1;
-      }
-    }
-
     @media (max-width: 1180px) {
       body {
         overflow: auto;
@@ -2206,9 +2185,6 @@
       return `
         <div class="ready-art">
           <div class="coach"><span class="coach-face"></span></div>
-          <div class="ready-line"></div>
-          <div class="ready-line"></div>
-          <div class="ready-line"></div>
         </div>
       `;
     }

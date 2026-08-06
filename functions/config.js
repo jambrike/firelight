@@ -1,6 +1,5 @@
 export const onRequestGet = ({ env }) => {
   const config = {
-    kitKey: env.KIT_KEY || "123456",
     supabaseUrl: env.SUPABASE_URL || "",
     supabaseAnonKey: env.SUPABASE_ANON_KEY || ""
   };
@@ -12,4 +11,3 @@ export const onRequestGet = ({ env }) => {
     }
   });
 };
-
