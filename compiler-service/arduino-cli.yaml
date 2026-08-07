@@ -1,0 +1,14 @@
+board_manager:
+  additional_urls: []
+directories:
+  data: /opt/arduino/data
+  downloads: /tmp/arduino-downloads
+  user: /tmp/arduino-user
+logging:
+  level: warn
+metrics:
+  enabled: false
+output:
+  no_color: true
+updater:
+  enable_notification: false

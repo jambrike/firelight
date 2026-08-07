@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.terraform/
+*.tfplan
+terraform.tfstate
+terraform.tfstate.*

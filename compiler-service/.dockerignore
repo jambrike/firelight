@@ -1,0 +1,6 @@
+**
+!app.py
+!arduino-cli.yaml
+!docker/
+!docker/install_arduino_cli.py
+!docker/verify_arduino_index.py
