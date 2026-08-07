@@ -46,6 +46,17 @@ function currentCompletion(progress: readonly LessonProgress[], lessonId: Lesson
   );
 }
 
+function currentRevision(
+  progress: readonly LessonProgress[],
+  lessonId: LessonSlug,
+): number | null {
+  return (
+    progress.find(
+      (item) => item.lessonId === lessonId && item.lessonVersion === 1,
+    )?.revision ?? null
+  );
+}
+
 export async function migrateLegacyData(
   storage: LegacyStorage,
   bootstrap: BootstrapData,
@@ -86,8 +97,9 @@ export async function migrateLegacyData(
     if (value === "true" && !currentCompletion(bootstrap.progress, lessonId)) {
       await api.saveProgress(lessonId, {
         lessonVersion: 1,
+        expectedRevision: currentRevision(bootstrap.progress, lessonId),
         status: "completed",
-        currentStep: "legacy-complete",
+        currentStep: "finish-lesson",
         percentage: 100,
       });
       changed = true;

@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite",
     "dev:worker": "npm run build && wrangler dev",
+    "validate:lessons": "node scripts/validate-lessons.mjs",
+    "prebuild": "npm run validate:lessons",
     "build": "vite build",
     "typecheck": "tsc -b",
     "lint": "eslint . --max-warnings 0",

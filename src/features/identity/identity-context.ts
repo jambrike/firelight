@@ -24,7 +24,7 @@ export interface IdentityContextValue {
   signOut(): Promise<void>;
   requestPasswordReset(email: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
-  refresh(): Promise<void>;
+  refresh(): Promise<BootstrapData>;
   updateProfile(displayName: string): Promise<LearnerProfile>;
   claimKit(code: string): Promise<KitActivation>;
   saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput): Promise<LessonProgress>;

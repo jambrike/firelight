@@ -32,6 +32,18 @@ export interface CompileArtifact {
   readonly hex: string;
 }
 
+export interface CompileRequest {
+  readonly lessonId: string;
+  readonly lessonVersion: number;
+  readonly fqbn: typeof FIRELIGHT_BOARD_FQBN;
+  readonly source: string;
+}
+
+/** Milestone 4 implements this port against the authenticated compiler API. */
+export interface CompilerClient {
+  compile(request: CompileRequest, signal?: AbortSignal): Promise<CompileArtifact>;
+}
+
 export interface UploadProgress {
   readonly phase: "preparing" | "resetting" | "writing" | "verifying";
   readonly bytesWritten: number;
@@ -55,4 +67,9 @@ export interface ArduinoTransport {
     signal?: AbortSignal,
   ): Promise<UploadResult>;
   subscribe(listener: (phase: HardwareWorkflowPhase) => void): () => void;
+}
+
+export interface LessonHardwarePorts {
+  readonly compiler: CompilerClient;
+  readonly transport: ArduinoTransport;
 }

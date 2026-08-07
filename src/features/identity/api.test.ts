@@ -50,6 +50,7 @@ describe("Firelight API client", () => {
     const error = await new FirelightApi(() => "token")
       .saveProgress("first-spark", {
         lessonVersion: 1,
+        expectedRevision: null,
         status: "in_progress",
         currentStep: "intro",
         percentage: 10,

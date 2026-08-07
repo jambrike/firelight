@@ -1,6 +1,6 @@
 # Firelight platform foundation
 
-Milestone 2 keeps the product split across four typed boundaries:
+Milestone 3 keeps the product split across four typed boundaries:
 
 - `src/` owns Supabase browser sessions, guarded routing, accessible account and
   activation flows, and synchronized learner views. It never receives a service key.
@@ -23,9 +23,29 @@ Compilation and Web Serial uploading remain typed boundaries. Later milestones
 must implement those contracts without reintroducing browser-stored passwords,
 raw source logging, or false hardware state.
 
+The lesson catalog is repository-owned, versioned TypeScript. Its runtime assertion
+also runs through `npm run validate:lessons` before every production build. The
+workspace treats lesson instructions as public preview content, but only an online
+session with activated kit access and satisfied prerequisites can edit or save.
+
+Progress writes use a monotonic database `revision`. A new checkpoint sends
+`expectedRevision: null`; later writes send the last observed positive revision.
+The Worker performs a conditional PostgREST update and returns
+`PROGRESS_REVISION_CONFLICT` rather than overwriting a newer device. The browser
+refreshes bootstrap data, merges only forward-moving state, and retries once.
+The same endpoint rejects unknown lesson steps, checkpoint-inconsistent percentages,
+and progress for lessons whose current-version prerequisites are incomplete.
+
+The revision migration accepts both revision-aware writes and the preceding
+Worker's omitted revision during cutover; omitted values advance in the trigger.
+Explicit stale revisions still fail. This compatibility branch keeps progress
+writable while the Worker rolls forward and can be tightened in a later migration
+after every environment is revision-aware.
+
 ## Local commands
 
 - `npm run dev` starts the Vite UI server.
+- `npm run validate:lessons` evaluates and validates the complete catalog.
 - `npm run dev:worker` builds the UI and starts the complete local Worker.
 - `npm run db:start`, `db:reset`, `db:test`, and `db:lint` manage the local
   Supabase stack; they require Docker.

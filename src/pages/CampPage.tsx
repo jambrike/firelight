@@ -2,23 +2,26 @@ import { ArrowRight, Award, Map, Radio } from "lucide-react";
 import { Link } from "wouter";
 import { HardwareStatus, PageIntro, Panel, ProgressBar, PixelLink } from "../components/ui";
 import { useIdentity } from "../features/identity/identity-context";
-import { findCurriculumLesson } from "../../shared/curriculum";
+import {
+  deriveCurriculumProgress,
+  deriveLessonAchievements,
+  deriveNextLesson,
+  getCurrentLessonProgress,
+} from "../features/lessons/derivations";
 
 export function CampPage() {
   const identity = useIdentity();
   const data = identity.data;
   if (!data) return null;
 
-  const completed = new Set(
-    data.progress
-      .filter((item) => {
-        const lesson = findCurriculumLesson(item.lessonId);
-        return item.status === "completed" && lesson?.version === item.lessonVersion;
-      })
-      .map((item) => item.lessonId),
-  ).size;
-  const progressPercent = Math.round((completed / 6) * 100);
-  const resumePath = data.nextLesson ? `/learn/${data.nextLesson.id}` : "/learn";
+  const progress = deriveCurriculumProgress(data.progress);
+  const nextLesson = deriveNextLesson(data.progress);
+  const nextProgress = nextLesson
+    ? getCurrentLessonProgress(nextLesson, data.progress)
+    : undefined;
+  const isResuming = nextProgress?.status === "in_progress";
+  const achievements = deriveLessonAchievements(data.progress);
+  const resumePath = nextLesson?.route ?? "/learn";
 
   return (
     <div className="page-section page-stack">
@@ -38,18 +41,24 @@ export function CampPage() {
       <section className="dashboard-grid" aria-label="Learner camp">
         <Panel className="camp-board">
           <span className="status-chip">{data.activation ? "Camp synchronized" : "Preview access"}</span>
-          <p className="eyebrow">{completed} of 6 builds complete</p>
+          <p className="eyebrow">
+            {progress.completedLessons} of {progress.totalLessons} builds complete
+          </p>
           <h2>
-            {data.nextLesson ? `Next: ${data.nextLesson.title}` : "The core trail is complete!"}
+            {nextLesson ? `Next: ${nextLesson.title}` : "The core trail is complete!"}
           </h2>
           <p>
-            {data.nextLesson
-              ? "Continue from your next saved build whenever the hardware is ready."
+            {nextLesson
+              ? isResuming
+                ? "Continue from your saved checkpoint whenever the hardware is ready."
+                : "Your next available build is ready whenever the hardware is."
               : "Every core checkpoint is glowing."}
           </p>
-          <ProgressBar label="Core trail progress" value={progressPercent} />
+          <ProgressBar label="Core trail progress" value={progress.percentage} />
           <div className="button-row">
-            <PixelLink to={resumePath}>{data.nextLesson ? "Resume trail" : "Review trail"}</PixelLink>
+            <PixelLink to={resumePath}>
+              {nextLesson ? (isResuming ? "Resume trail" : "Start trail") : "Review trail"}
+            </PixelLink>
             <PixelLink to="/learn" secondary>
               Open map
             </PixelLink>
@@ -75,13 +84,13 @@ export function CampPage() {
         <Link className="panel path-card" to={resumePath}>
           <Radio aria-hidden="true" />
           <h2>Build</h2>
-          <p>Return to the next lesson foundation.</p>
+          <p>{nextLesson ? `Return to ${nextLesson.title}.` : "Review the completed trail."}</p>
           <span>Open lesson <ArrowRight aria-hidden="true" /></span>
         </Link>
         <Link className="panel path-card" to="/account">
           <Award aria-hidden="true" />
           <h2>Badges</h2>
-          <p>{data.achievements.filter((achievement) => achievement.earned).length} earned.</p>
+          <p>{achievements.filter((achievement) => achievement.earned).length} earned.</p>
           <span>Open account <ArrowRight aria-hidden="true" /></span>
         </Link>
       </section>

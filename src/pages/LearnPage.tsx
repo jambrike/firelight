@@ -2,6 +2,11 @@ import { ArrowRight, CheckCircle2, LockKeyhole } from "lucide-react";
 import { Link } from "wouter";
 import { PageIntro } from "../components/ui";
 import { lessonCatalog } from "../features/lessons/catalog";
+import {
+  deriveLessonAccessState,
+  derivePrerequisiteState,
+  getCurrentLessonProgress,
+} from "../features/lessons/derivations";
 import { useIdentity } from "../features/identity/identity-context";
 
 export function LearnPage() {
@@ -11,18 +16,27 @@ export function LearnPage() {
     <div className="page-section page-stack">
       <PageIntro eyebrow="Firelight build path" title="Where the real building lives.">
         <p>
-          Preview all six projects now. Signed-in builders see their synchronized
-          checkpoints; prerequisite enforcement arrives with the lesson engine.
+          Preview all six projects now. Signed-in builders see synchronized checkpoints
+          and the prerequisite trail that unlocks each build.
         </p>
       </PageIntro>
       <ol className="lesson-trail">
         {lessonCatalog.map((lesson) => {
-          const saved = identity.data?.progress.find(
-            (progress) => progress.lessonId === lesson.id && progress.lessonVersion === 1,
+          const progress = identity.data?.progress ?? [];
+          const saved = getCurrentLessonProgress(lesson, progress);
+          const access = identity.data
+            ? deriveLessonAccessState(lesson, progress)
+            : "preview";
+          const prerequisites = identity.data
+            ? derivePrerequisiteState(lesson, progress)
+            : null;
+          const missingTitles = prerequisites?.missing.map(
+            (id) => lessonCatalog.find((candidate) => candidate.id === id)?.title ?? id,
           );
+
           return (
-          <li key={lesson.id} data-lesson={lesson.id} data-status={saved?.status ?? "preview"}>
-            <Link to={`/learn/${lesson.id}`} className="lesson-card">
+          <li key={lesson.id} data-lesson={lesson.id} data-status={access}>
+            <Link to={lesson.route} className="lesson-card">
               <span className="lesson-card__number">
                 {lesson.order.toString().padStart(2, "0")}
               </span>
@@ -30,18 +44,20 @@ export function LearnPage() {
               <span className="lesson-card__body">
                 <span className="lesson-card__meta">
                   {lesson.estimatedMinutes} min
-                  {saved?.status === "completed" ? (
+                  {access === "completed" ? (
                     <span>
                       <CheckCircle2 aria-hidden="true" /> Complete
                     </span>
-                  ) : saved?.status === "in_progress" ? (
-                    <span>{saved.percentage}% saved</span>
-                  ) : lesson.migrationStage === "planned" ? (
+                  ) : access === "in-progress" && saved ? (
+                    <span>{Math.round(saved.percentage)}% saved</span>
+                  ) : access === "locked" ? (
                     <span>
-                      <LockKeyhole aria-hidden="true" /> Content milestone
+                      <LockKeyhole aria-hidden="true" /> Requires {missingTitles?.join(" and ")}
                     </span>
+                  ) : access === "available" ? (
+                    <span>Ready to begin</span>
                   ) : (
-                    <span>Prototype source ready</span>
+                    <span>Preview lesson</span>
                   )}
                 </span>
                 <strong>{lesson.title}</strong>

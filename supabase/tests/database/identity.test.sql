@@ -2,13 +2,19 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(36);
+select plan(40);
 
 select has_table('public', 'profiles', 'profiles table exists');
 select has_table('public', 'kit_codes', 'kit code table exists');
 select has_table('public', 'lesson_progress', 'progress table exists');
 select has_table('public', 'compile_jobs', 'compile job table exists');
 select has_table('public', 'admin_audit_log', 'audit table exists');
+select has_column(
+  'public',
+  'lesson_progress',
+  'revision',
+  'progress has an optimistic revision token'
+);
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.profiles'::regclass),
@@ -285,7 +291,7 @@ select is(
 select throws_ok(
   $$
     update public.lesson_progress
-    set status = 'in_progress', percentage = 50
+    set status = 'in_progress', percentage = 50, revision = revision + 1
     where user_id = '11111111-1111-4111-8111-111111111111'
       and lesson_id = 'first-spark'
       and lesson_version = 1
@@ -310,7 +316,7 @@ values (
 select throws_ok(
   $$
     update public.lesson_progress
-    set percentage = 40
+    set percentage = 40, revision = revision + 1
     where user_id = '11111111-1111-4111-8111-111111111111'
       and lesson_id = 'morse-name'
       and lesson_version = 1
@@ -318,6 +324,55 @@ select throws_ok(
   '23514',
   'lesson progress percentage cannot decrease',
   'autosave cannot regress progress percentage'
+);
+
+select is(
+  (
+    select revision
+    from public.lesson_progress
+    where user_id = '11111111-1111-4111-8111-111111111111'
+      and lesson_id = 'morse-name'
+      and lesson_version = 1
+  ),
+  1::bigint,
+  'new progress starts at revision one'
+);
+
+update public.lesson_progress
+set current_step = 'validate-code', percentage = 70, revision = 2
+where user_id = '11111111-1111-4111-8111-111111111111'
+  and lesson_id = 'morse-name'
+  and lesson_version = 1;
+
+update public.lesson_progress
+set current_step = 'compile-sketch', percentage = 80
+where user_id = '11111111-1111-4111-8111-111111111111'
+  and lesson_id = 'morse-name'
+  and lesson_version = 1;
+
+select is(
+  (
+    select revision
+    from public.lesson_progress
+    where user_id = '11111111-1111-4111-8111-111111111111'
+      and lesson_id = 'morse-name'
+      and lesson_version = 1
+  ),
+  3::bigint,
+  'pre-revision writes advance automatically during the phased rollout'
+);
+
+select throws_ok(
+  $$
+    update public.lesson_progress
+    set current_step = 'connect-board', percentage = 90, revision = 2
+    where user_id = '11111111-1111-4111-8111-111111111111'
+      and lesson_id = 'morse-name'
+      and lesson_version = 1
+  $$,
+  '40001',
+  'lesson progress revision must advance by one',
+  'explicit stale progress revisions fail instead of overwriting a newer save'
 );
 
 insert into public.admin_audit_log (actor_id, action, target_type)

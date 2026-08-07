@@ -38,6 +38,7 @@ function createStorage(entries: Record<string, string>) {
 const savedProgress: LessonProgress = {
   lessonId: "first-spark",
   lessonVersion: 1,
+  revision: 1,
   status: "completed",
   currentStep: "legacy-complete",
   percentage: 100,
@@ -84,6 +85,16 @@ describe("legacy progress migration", () => {
 
     expect(api.updateProfile).toHaveBeenCalledWith("Ada");
     expect(api.saveProgress).toHaveBeenCalledTimes(2);
+    expect(api.saveProgress).toHaveBeenNthCalledWith(
+      1,
+      "first-spark",
+      expect.objectContaining({ currentStep: "finish-lesson", percentage: 100 }),
+    );
+    expect(api.saveProgress).toHaveBeenNthCalledWith(
+      2,
+      "morse-name",
+      expect.objectContaining({ currentStep: "finish-lesson", percentage: 100 }),
+    );
     expect(storage.values.has(legacyKeys.displayName)).toBe(false);
     expect(storage.values.has(legacyKeys.firstSparkComplete)).toBe(false);
     expect(storage.values.has(legacyKeys.morseNameComplete)).toBe(false);

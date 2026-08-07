@@ -71,6 +71,11 @@ export type IdentityRepositoryFactory = (
   accessToken: string,
 ) => IdentityRepository;
 
+export type RepositoryFetcher = (
+  input: URL,
+  init: RequestInit,
+) => Promise<Response>;
+
 interface SupabaseErrorBody {
   readonly code: string | null;
   readonly message: string | null;
@@ -152,6 +157,7 @@ function parseProgress(value: unknown): LessonProgress {
   const lessonId = readString(value, "lesson_id");
   const status = readString(value, "status");
   const lessonVersion = value.lesson_version;
+  const revision = value.revision;
   const percentage = value.percentage;
   if (!isLessonSlug(lessonId)) {
     throw new RepositoryError("unavailable", "Supabase returned an unknown lesson.");
@@ -159,13 +165,19 @@ function parseProgress(value: unknown): LessonProgress {
   if (status !== "not_started" && status !== "in_progress" && status !== "completed") {
     throw new RepositoryError("unavailable", "Supabase returned an invalid progress status.");
   }
-  if (!Number.isInteger(lessonVersion) || !Number.isInteger(percentage)) {
+  if (
+    !Number.isInteger(lessonVersion) ||
+    !Number.isInteger(revision) ||
+    Number(revision) < 1 ||
+    !Number.isInteger(percentage)
+  ) {
     throw new RepositoryError("unavailable", "Supabase returned invalid progress numbers.");
   }
 
   return {
     lessonId,
     lessonVersion: Number(lessonVersion),
+    revision: Number(revision),
     status,
     currentStep: readString(value, "current_step"),
     percentage: Number(percentage),
@@ -257,8 +269,9 @@ class SupabaseIdentityRepository implements IdentityRepository {
   readonly #publishableKey: string;
   readonly #serviceRoleKey: string;
   readonly #accessToken: string;
+  readonly #fetcher: RepositoryFetcher;
 
-  constructor(env: Env, accessToken: string) {
+  constructor(env: Env, accessToken: string, fetcher: RepositoryFetcher) {
     const supabaseUrl = readConfiguredValue(env.SUPABASE_URL);
     const publishableKey = readConfiguredValue(env.SUPABASE_PUBLISHABLE_KEY);
     const serviceRoleKey = readConfiguredValue(env.SUPABASE_SERVICE_ROLE_KEY);
@@ -273,6 +286,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
     this.#publishableKey = publishableKey;
     this.#serviceRoleKey = serviceRoleKey;
     this.#accessToken = accessToken;
+    this.#fetcher = fetcher;
   }
 
   async #request(
@@ -290,7 +304,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
 
     let response: Response;
     try {
-      response = await fetch(new URL(path, this.#baseUrl), {
+      response = await this.#fetcher(new URL(path, this.#baseUrl), {
         ...init,
         headers,
       });
@@ -339,7 +353,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
         "service",
       ),
       this.#request(
-        `/rest/v1/lesson_progress?user_id=${idFilter}&or=${currentLessonFilter}&select=lesson_id,lesson_version,status,current_step,percentage,code_snapshot,completed_at,updated_at&limit=${String(curriculumLessons.length)}`,
+        `/rest/v1/lesson_progress?user_id=${idFilter}&or=${currentLessonFilter}&select=lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completed_at,updated_at&limit=${String(curriculumLessons.length)}`,
       ),
     ]);
 
@@ -445,6 +459,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
       current_step: input.currentStep,
       percentage: input.percentage,
       completed_at: null,
+      revision: input.expectedRevision === null ? 1 : input.expectedRevision + 1,
     };
     const progressRecord: Record<string, unknown> = {
       user_id: userId,
@@ -452,57 +467,37 @@ class SupabaseIdentityRepository implements IdentityRepository {
       lesson_version: input.lessonVersion,
       ...progressValues,
     };
-    if (input.codeSnapshot !== undefined) {
-      progressRecord.code_snapshot = input.codeSnapshot;
-      const body = await this.#request(
-        "/rest/v1/lesson_progress?on_conflict=user_id,lesson_id,lesson_version&select=lesson_id,lesson_version,status,current_step,percentage,code_snapshot,completed_at,updated_at",
-        {
-          method: "POST",
-          headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-          body: JSON.stringify(progressRecord),
-        },
-      );
-      const saved = parseSavedProgress(body);
-      if (!saved) {
-        throw new RepositoryError("unavailable", "Supabase did not return saved progress.");
-      }
-      return saved;
-    }
+    if (input.codeSnapshot !== undefined) progressRecord.code_snapshot = input.codeSnapshot;
 
     const select =
-      "lesson_id,lesson_version,status,current_step,percentage,code_snapshot,completed_at,updated_at";
-    const resource = `/rest/v1/lesson_progress?user_id=${encodeURIComponent(`eq.${userId}`)}&lesson_id=${encodeURIComponent(`eq.${lessonId}`)}&lesson_version=${encodeURIComponent(`eq.${String(input.lessonVersion)}`)}&select=${select}`;
-    const patchWithoutSnapshot = async () =>
-      parseSavedProgress(
-        await this.#request(resource, {
-          method: "PATCH",
-          headers: { Prefer: "return=representation" },
-          body: JSON.stringify(progressValues),
+      "lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completed_at,updated_at";
+
+    if (input.expectedRevision === null) {
+      const inserted = parseSavedProgress(
+        await this.#request(`/rest/v1/lesson_progress?select=${select}`, {
+          method: "POST",
+          headers: { Prefer: "return=representation,missing=default" },
+          body: JSON.stringify(progressRecord),
         }),
       );
-
-    const existing = await patchWithoutSnapshot();
-    if (existing) return existing;
-
-    try {
-      const inserted = parseSavedProgress(
-        await this.#request(
-          `/rest/v1/lesson_progress?select=${select}`,
-          {
-            method: "POST",
-            headers: { Prefer: "return=representation,missing=default" },
-            body: JSON.stringify(progressRecord),
-          },
-        ),
-      );
       if (inserted) return inserted;
-    } catch (error) {
-      if (!(error instanceof RepositoryError) || error.kind !== "conflict") throw error;
-      const concurrentlyInserted = await patchWithoutSnapshot();
-      if (concurrentlyInserted) return concurrentlyInserted;
+      throw new RepositoryError("unavailable", "Supabase did not return saved progress.");
     }
 
-    throw new RepositoryError("unavailable", "Supabase did not return saved progress.");
+    const resource = `/rest/v1/lesson_progress?user_id=${encodeURIComponent(`eq.${userId}`)}&lesson_id=${encodeURIComponent(`eq.${lessonId}`)}&lesson_version=${encodeURIComponent(`eq.${String(input.lessonVersion)}`)}&revision=${encodeURIComponent(`eq.${String(input.expectedRevision)}`)}&select=${select}`;
+    const saved = parseSavedProgress(
+      await this.#request(resource, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify(
+          input.codeSnapshot === undefined
+            ? progressValues
+            : { ...progressValues, code_snapshot: input.codeSnapshot },
+        ),
+      }),
+    );
+    if (saved) return saved;
+    throw new RepositoryError("conflict", "Lesson progress revision changed.");
   }
 
   async deleteAccount(userId: string): Promise<void> {
@@ -514,7 +509,10 @@ class SupabaseIdentityRepository implements IdentityRepository {
   }
 }
 
-export const createSupabaseIdentityRepository: IdentityRepositoryFactory = (
-  env,
-  accessToken,
-) => new SupabaseIdentityRepository(env, accessToken);
+export function createSupabaseIdentityRepository(
+  env: Env,
+  accessToken: string,
+  fetcher: RepositoryFetcher = fetch,
+): IdentityRepository {
+  return new SupabaseIdentityRepository(env, accessToken, fetcher);
+}

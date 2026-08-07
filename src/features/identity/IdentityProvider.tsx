@@ -11,9 +11,20 @@ import { FirelightApi } from "./api";
 import { IdentityContext } from "./identity-context";
 import type { IdentityStatus } from "./identity-context";
 import { legacyKeys, migrateLegacyData } from "./legacy";
+import {
+  mergeProgressCache,
+  mergeProgressCollections,
+} from "./progress-cache";
+import { purgeBrowserProgressDraftsForOwner } from "../progress/draft-persistence";
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Firelight could not complete the request.";
+}
+
+interface IdentityMutationScope {
+  readonly accessToken: string;
+  readonly ownerId: string;
+  readonly generation: number;
 }
 
 export function IdentityProvider({ children }: { readonly children: ReactNode }) {
@@ -25,7 +36,61 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
   const [notice, setNotice] = useState<string | null>(null);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const sessionRef = useRef<Session | null>(null);
+  const dataRef = useRef<BootstrapData | null>(null);
+  const sessionGenerationRef = useRef(0);
   const bootstrapGenerationRef = useRef(0);
+
+  const commitData = useCallback(
+    (
+      update:
+        | BootstrapData
+        | null
+        | ((current: BootstrapData | null) => BootstrapData | null),
+    ): BootstrapData | null => {
+      const next = typeof update === "function" ? update(dataRef.current) : update;
+      dataRef.current = next;
+      setData(next);
+      return next;
+    },
+    [],
+  );
+
+  const captureMutationScope = useCallback((): IdentityMutationScope => {
+    const activeSession = sessionRef.current;
+    const current = dataRef.current;
+    if (!activeSession || activeSession.user.id !== current?.profile.id) {
+      throw new Error("Your account changed before Firelight could start this request.");
+    }
+    return {
+      accessToken: activeSession.access_token,
+      ownerId: current.profile.id,
+      generation: sessionGenerationRef.current,
+    };
+  }, []);
+
+  const mutationScopeIsCurrent = useCallback(
+    (scope: IdentityMutationScope): boolean =>
+      sessionRef.current?.access_token === scope.accessToken &&
+      dataRef.current?.profile.id === scope.ownerId &&
+      sessionGenerationRef.current === scope.generation,
+    [],
+  );
+
+  const assertCurrentMutationScope = useCallback(
+    (scope: IdentityMutationScope): void => {
+      if (!mutationScopeIsCurrent(scope)) {
+        throw new Error("Your account changed before Firelight finished this request.");
+      }
+    },
+    [mutationScopeIsCurrent],
+  );
+
+  const mutationOwnerIsCurrent = useCallback(
+    (scope: IdentityMutationScope): boolean =>
+      sessionRef.current?.user.id === scope.ownerId &&
+      dataRef.current?.profile.id === scope.ownerId,
+    [],
+  );
 
   useEffect(() => {
     let active = true;
@@ -58,14 +123,14 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
     };
   }, []);
 
-  const loadBootstrap = useCallback(async (activeSession: Session) => {
+  const loadBootstrap = useCallback(async (activeSession: Session): Promise<BootstrapData | null> => {
     const generation = ++bootstrapGenerationRef.current;
     const isCurrentSession = () =>
       bootstrapGenerationRef.current === generation &&
       sessionRef.current?.access_token === activeSession.access_token;
     const api = new FirelightApi(() => activeSession.access_token);
     const bootstrap = await api.getBootstrap();
-    if (!isCurrentSession()) return;
+    if (!isCurrentSession()) return null;
     window.localStorage.removeItem(legacyKeys.plaintextPassword);
 
     let migrated = false;
@@ -86,7 +151,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
           },
         });
       } catch (migrationError) {
-        if (!isCurrentSession()) return;
+        if (!isCurrentSession()) return null;
         setNotice(
           migrationError instanceof Error
             ? migrationError.message
@@ -96,11 +161,19 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
     }
 
     const current = migrated ? await api.getBootstrap() : bootstrap;
-    if (!isCurrentSession()) return;
-    setData(current);
+    if (!isCurrentSession()) return null;
+    const merged = commitData((cached) =>
+      cached?.profile.id === current.profile.id
+        ? {
+            ...current,
+            progress: mergeProgressCollections(cached.progress, current.progress),
+          }
+        : current,
+    );
     setStatus("authenticated");
     setError(null);
-  }, []);
+    return merged;
+  }, [commitData]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -111,14 +184,18 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       const nextToken = nextSession?.access_token ?? null;
       if (lastAppliedToken === nextToken) return;
       lastAppliedToken = nextToken;
+      sessionGenerationRef.current += 1;
       sessionRef.current = nextSession;
       setSession(nextSession);
       if (!nextSession) {
         bootstrapGenerationRef.current += 1;
-        setData(null);
+        commitData(null);
         setStatus("anonymous");
         setError(null);
         return;
+      }
+      if (dataRef.current?.profile.id !== nextSession.user.id) {
+        commitData(null);
       }
       setStatus("loading");
       const bootstrapGeneration = bootstrapGenerationRef.current + 1;
@@ -155,10 +232,11 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
 
     return () => {
       active = false;
+      sessionGenerationRef.current += 1;
       bootstrapGenerationRef.current += 1;
       subscription.unsubscribe();
     };
-  }, [loadBootstrap, supabase]);
+  }, [commitData, loadBootstrap, supabase]);
 
   const requireClient = useCallback((): SupabaseClient => {
     if (!supabase) throw new Error("Account services are still loading.");
@@ -173,7 +251,9 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
   const refresh = useCallback(async () => {
     const activeSession = sessionRef.current;
     if (!activeSession) throw new Error("Sign in to continue.");
-    await loadBootstrap(activeSession);
+    const bootstrap = await loadBootstrap(activeSession);
+    if (!bootstrap) throw new Error("Your session changed while Firelight refreshed progress.");
+    return bootstrap;
   }, [loadBootstrap]);
 
   const value = useMemo(
@@ -228,40 +308,53 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       },
       refresh,
       async updateProfile(displayName: string) {
+        const scope = captureMutationScope();
         const profile = await api().updateProfile(displayName);
-        setData((current) => (current ? { ...current, profile } : current));
+        assertCurrentMutationScope(scope);
+        commitData((current) => (current ? { ...current, profile } : current));
         return profile;
       },
       async claimKit(code: string) {
+        const scope = captureMutationScope();
         const activation = await api().claimKit(code);
+        assertCurrentMutationScope(scope);
         await refresh();
         return activation;
       },
       async saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput) {
+        const scope = captureMutationScope();
         const progress = await api().saveProgress(lessonId, input);
-        setData((current) => {
+        assertCurrentMutationScope(scope);
+        commitData((current) => {
           if (!current) return current;
-          const remaining = current.progress.filter(
-            (item) =>
-              item.lessonId !== progress.lessonId ||
-              item.lessonVersion !== progress.lessonVersion,
-          );
-          return { ...current, progress: [...remaining, progress] };
+          const nextProgress = mergeProgressCache(current.progress, progress);
+          return nextProgress === current.progress
+            ? current
+            : { ...current, progress: nextProgress };
         });
         return progress;
       },
       async deleteAccount() {
+        const scope = captureMutationScope();
         await api().deleteAccount();
+        purgeBrowserProgressDraftsForOwner(scope.ownerId);
+        if (!mutationOwnerIsCurrent(scope)) {
+          throw new Error("Your account changed after Firelight deleted the requested account.");
+        }
         await requireClient().auth.signOut({ scope: "local" });
+        sessionGenerationRef.current += 1;
         sessionRef.current = null;
         bootstrapGenerationRef.current += 1;
         setSession(null);
-        setData(null);
+        commitData(null);
         setStatus("anonymous");
       },
     }),
     [
       api,
+      assertCurrentMutationScope,
+      captureMutationScope,
+      commitData,
       data,
       error,
       notice,
@@ -271,6 +364,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       session,
       status,
       supabase,
+      mutationOwnerIsCurrent,
     ],
   );
 

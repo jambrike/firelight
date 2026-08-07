@@ -41,6 +41,7 @@ const bootstrap: BootstrapRecords = {
     {
       lessonId: "first-spark",
       lessonVersion: 1,
+      revision: 1,
       status: "completed",
       currentStep: "complete",
       percentage: 100,
@@ -64,6 +65,7 @@ function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRe
     upsertProgress: vi.fn(async (_userId, lessonId, input: ProgressUpdateInput) => ({
       lessonId: lessonId as "first-spark",
       lessonVersion: input.lessonVersion,
+      revision: (input.expectedRevision ?? 0) + 1,
       status: input.status,
       currentStep: input.currentStep,
       percentage: input.percentage,
@@ -262,9 +264,10 @@ describe("Firelight Worker", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lessonVersion: 1,
+          expectedRevision: null,
           status: "in_progress",
-          currentStep: "wire-led",
-          percentage: 40,
+          currentStep: "meet-the-build",
+          percentage: 0,
         }),
       },
     );
@@ -285,6 +288,7 @@ describe("Firelight Worker", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lessonVersion: 2,
+          expectedRevision: null,
           status: "in_progress",
           currentStep: "intro",
           percentage: 20,
@@ -302,8 +306,9 @@ describe("Firelight Worker", () => {
     const repository = makeRepository();
     const input = {
       lessonVersion: 1,
+      expectedRevision: null,
       status: "completed",
-      currentStep: "complete",
+      currentStep: "finish-lesson",
       percentage: 100,
     } as const;
     const response = await requestWithRepository(
@@ -318,6 +323,178 @@ describe("Firelight Worker", () => {
 
     expect(response.status).toBe(200);
     expect(repository.upsertProgress).toHaveBeenCalledWith(user.id, "first-spark", input);
+  });
+
+  it("requires an optimistic revision on every progress mutation", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          status: "in_progress",
+          currentStep: "intro",
+          percentage: 10,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(422);
+    expect(body.error.code).toBe("PROGRESS_REVISION_INVALID");
+    expect(repository.upsertProgress).not.toHaveBeenCalled();
+  });
+
+  it("reports a stable conflict code when another device wins a progress save", async () => {
+    const repository = makeRepository({
+      upsertProgress: vi.fn(async () => {
+        throw new RepositoryError("conflict", "revision changed");
+      }),
+    });
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: 3,
+          status: "in_progress",
+          currentStep: "edit-code",
+          percentage: 20,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("PROGRESS_REVISION_CONFLICT");
+  });
+
+  it("rejects checkpoints that are not part of the requested lesson version", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: null,
+          status: "in_progress",
+          currentStep: "invented-checkpoint",
+          percentage: 0,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(422);
+    expect(body.error.code).toBe("CURRENT_STEP_INVALID");
+    expect(repository.hasActivation).not.toHaveBeenCalled();
+    expect(repository.upsertProgress).not.toHaveBeenCalled();
+  });
+
+  it("rejects percentages that do not match the requested checkpoint", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: null,
+          status: "in_progress",
+          currentStep: "edit-code",
+          percentage: 99,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(422);
+    expect(body.error.code).toBe("PROGRESS_PERCENTAGE_INVALID");
+    expect(repository.upsertProgress).not.toHaveBeenCalled();
+  });
+
+  it("accepts an older saved percentage that remains within its checkpoint range", async () => {
+    const repository = makeRepository();
+    const input = {
+      lessonVersion: 1,
+      expectedRevision: 7,
+      status: "in_progress",
+      currentStep: "edit-code",
+      percentage: 18,
+    } as const;
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertProgress).toHaveBeenCalledWith(user.id, "first-spark", input);
+  });
+
+  it("refuses to save a locked lesson until current-version prerequisites are complete", async () => {
+    const repository = makeRepository({
+      getBootstrap: vi.fn(async () => ({ ...bootstrap, progress: [] })),
+    });
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/morse-name/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: null,
+          status: "in_progress",
+          currentStep: "meet-the-build",
+          percentage: 0,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("LESSON_PREREQUISITE_REQUIRED");
+    expect(repository.getBootstrap).toHaveBeenCalledWith(user.id);
+    expect(repository.upsertProgress).not.toHaveBeenCalled();
+  });
+
+  it("accepts a lesson checkpoint after its current-version prerequisite is complete", async () => {
+    const repository = makeRepository();
+    const input = {
+      lessonVersion: 1,
+      expectedRevision: null,
+      status: "in_progress",
+      currentStep: "meet-the-build",
+      percentage: 0,
+    } as const;
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/morse-name/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertProgress).toHaveBeenCalledWith(user.id, "morse-name", input);
   });
 
   it("keeps compile as an authenticated, activated not-ready boundary", async () => {

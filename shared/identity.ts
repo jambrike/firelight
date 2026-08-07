@@ -38,6 +38,8 @@ export interface KitActivation {
 export interface LessonProgress {
   readonly lessonId: LessonSlug;
   readonly lessonVersion: number;
+  /** Monotonic optimistic-concurrency token for cross-device saves. */
+  readonly revision: number;
   readonly status: LessonProgressStatus;
   readonly currentStep: string;
   readonly percentage: number;
@@ -67,6 +69,8 @@ export interface BootstrapData {
 
 export interface ProgressUpdateInput {
   readonly lessonVersion: number;
+  /** `null` creates the first checkpoint; otherwise the save must match this revision. */
+  readonly expectedRevision: number | null;
   readonly status: LessonProgressStatus;
   readonly currentStep: string;
   readonly percentage: number;

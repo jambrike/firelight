@@ -5,8 +5,11 @@ import type {
   Achievement,
   BootstrapData,
   LearnerProfile,
+  LessonProgress,
   ProgressUpdateInput,
 } from "../shared/identity";
+import { findLesson } from "../src/features/lessons/catalog";
+import type { LessonCatalogEntry } from "../src/features/lessons/catalog";
 import {
   createSupabaseIdentityRepository,
   RepositoryError,
@@ -312,6 +315,7 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
   }
 
   const lessonVersion = value.lessonVersion;
+  const expectedRevision = value.expectedRevision;
   const status = value.status;
   const currentStepValue = value.currentStep;
   const percentage = value.percentage;
@@ -319,6 +323,16 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
 
   if (!Number.isInteger(lessonVersion) || Number(lessonVersion) < 1) {
     throw new ApiRequestError(422, "LESSON_VERSION_INVALID", "Lesson version is invalid.");
+  }
+  if (
+    expectedRevision !== null &&
+    (!Number.isInteger(expectedRevision) || Number(expectedRevision) < 1)
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_REVISION_INVALID",
+      "The saved-progress revision is invalid.",
+    );
   }
   if (status !== "not_started" && status !== "in_progress" && status !== "completed") {
     throw new ApiRequestError(422, "PROGRESS_STATUS_INVALID", "Progress status is invalid.");
@@ -364,11 +378,84 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
 
   return {
     lessonVersion: Number(lessonVersion),
+    expectedRevision:
+      expectedRevision === null ? null : Number(expectedRevision),
     status,
     currentStep,
     percentage: numericPercentage,
     ...(codeSnapshot !== undefined ? { codeSnapshot } : {}),
   };
+}
+
+function expectedCheckpointPercentage(
+  lesson: LessonCatalogEntry,
+  stepIndex: number,
+): number {
+  if (lesson.steps.length === 0) return 0;
+  return Math.min(99, Math.floor((stepIndex / lesson.steps.length) * 100));
+}
+
+function validateProgressCheckpoint(
+  lesson: LessonCatalogEntry,
+  input: ProgressUpdateInput,
+): void {
+  const stepIndex = lesson.steps.findIndex((step) => step.id === input.currentStep);
+  const step = lesson.steps[stepIndex];
+  if (stepIndex < 0 || !step) {
+    throw new ApiRequestError(
+      422,
+      "CURRENT_STEP_INVALID",
+      "That checkpoint is not part of this lesson version.",
+    );
+  }
+
+  if (input.status === "completed") {
+    if (step.type !== "completion") {
+      throw new ApiRequestError(
+        422,
+        "PROGRESS_STATE_INVALID",
+        "Completed progress must use the lesson completion checkpoint.",
+      );
+    }
+    return;
+  }
+
+  const maximumPercentage = expectedCheckpointPercentage(lesson, stepIndex);
+  const minimumPercentage =
+    stepIndex === 0 ? 0 : expectedCheckpointPercentage(lesson, stepIndex - 1);
+  if (
+    input.percentage < minimumPercentage ||
+    input.percentage > maximumPercentage
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_PERCENTAGE_INVALID",
+      "The progress percentage does not match this lesson checkpoint range.",
+    );
+  }
+  if (input.status === "not_started" && stepIndex !== 0) {
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_STATE_INVALID",
+      "Not-started progress must use the first lesson checkpoint.",
+    );
+  }
+}
+
+function hasCompletedCurrentLesson(
+  progress: readonly LessonProgress[],
+  lessonId: string,
+): boolean {
+  const prerequisite = findLesson(lessonId);
+  return (
+    prerequisite !== undefined &&
+    progress.some(
+      (item) =>
+        item.lessonId === prerequisite.id &&
+        item.lessonVersion === prerequisite.version &&
+        item.status === "completed",
+    )
+  );
 }
 
 function isRecentSignIn(lastSignInAt: string | null): boolean {
@@ -505,7 +592,8 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
 
   app.put("/api/lessons/:id/progress", requireAuth, async (context) => {
     const lesson = findCurriculumLesson(context.req.param("id"));
-    if (!lesson) {
+    const definition = findLesson(lesson?.id);
+    if (!lesson || !definition) {
       return apiError(context, 404, "LESSON_NOT_FOUND", "That lesson does not exist.");
     }
     const input = parseProgressInput(await readJsonBody(context, 132 * 1024));
@@ -517,6 +605,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         "Refresh this lesson before saving progress.",
       );
     }
+    validateProgressCheckpoint(definition, input);
 
     const repository = context.get("repository");
     const user = context.get("user");
@@ -528,8 +617,34 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         "Activate a Firelight kit before saving progress.",
       );
     }
-    const progress = await repository.upsertProgress(user.id, lesson.id, input);
-    return context.json({ data: progress });
+    if (definition.prerequisites.length > 0) {
+      const records = await repository.getBootstrap(user.id);
+      const missing = definition.prerequisites.filter(
+        (prerequisite) => !hasCompletedCurrentLesson(records.progress, prerequisite),
+      );
+      if (missing.length > 0) {
+        return apiError(
+          context,
+          403,
+          "LESSON_PREREQUISITE_REQUIRED",
+          "Complete this lesson's prerequisites before saving progress.",
+        );
+      }
+    }
+    try {
+      const progress = await repository.upsertProgress(user.id, lesson.id, input);
+      return context.json({ data: progress });
+    } catch (error) {
+      if (error instanceof RepositoryError && error.kind === "conflict") {
+        return apiError(
+          context,
+          409,
+          "PROGRESS_REVISION_CONFLICT",
+          "This lesson changed on another device. Refresh and try again.",
+        );
+      }
+      throw error;
+    }
   });
 
   app.post("/api/compile", requireAuth, async (context) => {
