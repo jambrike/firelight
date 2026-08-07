@@ -26,10 +26,13 @@ export interface ArduinoDeviceMetadata {
 }
 
 export interface CompileArtifact {
+  readonly compileJobId: string;
   readonly format: "intel-hex";
   readonly fqbn: typeof FIRELIGHT_BOARD_FQBN;
   readonly sourceHash: string;
+  readonly artifactHash: string;
   readonly hex: string;
+  readonly diagnostics: readonly string[];
 }
 
 export interface CompileRequest {
@@ -60,6 +63,7 @@ export interface ArduinoTransport {
   detectCapability(): HardwareCapability;
   connect(signal?: AbortSignal): Promise<ArduinoDeviceMetadata>;
   disconnect(): Promise<void>;
+  cancel(): Promise<void>;
   validateArtifact(artifact: CompileArtifact): Promise<void>;
   upload(
     artifact: CompileArtifact,
