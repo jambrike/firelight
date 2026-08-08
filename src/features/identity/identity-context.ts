@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
+import type { AccountExport } from "../../../shared/account-export";
 import type { LessonSlug } from "../../../shared/curriculum";
 import type {
   BootstrapData,
@@ -25,10 +26,11 @@ export interface IdentityContextValue {
   requestPasswordReset(email: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
   refresh(): Promise<BootstrapData>;
+  getAccountExport(): Promise<AccountExport>;
   updateProfile(displayName: string): Promise<LearnerProfile>;
   claimKit(code: string): Promise<KitActivation>;
   saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput): Promise<LessonProgress>;
-  deleteAccount(): Promise<void>;
+  deleteAccount(confirmation: "DELETE"): Promise<void>;
 }
 
 function unavailable(): Promise<never> {
@@ -49,6 +51,7 @@ export const anonymousIdentity: IdentityContextValue = {
   requestPasswordReset: unavailable,
   updatePassword: unavailable,
   refresh: unavailable,
+  getAccountExport: unavailable,
   updateProfile: unavailable,
   claimKit: unavailable,
   saveProgress: unavailable,

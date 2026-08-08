@@ -24,7 +24,7 @@ function messageFrom(error: unknown): string {
 interface IdentityMutationScope {
   readonly accessToken: string;
   readonly ownerId: string;
-  readonly generation: number;
+  readonly ownerGeneration: number;
 }
 
 export function IdentityProvider({ children }: { readonly children: ReactNode }) {
@@ -37,7 +37,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
   const [recoveryMode, setRecoveryMode] = useState(false);
   const sessionRef = useRef<Session | null>(null);
   const dataRef = useRef<BootstrapData | null>(null);
-  const sessionGenerationRef = useRef(0);
+  const ownerGenerationRef = useRef(0);
   const bootstrapGenerationRef = useRef(0);
 
   const commitData = useCallback(
@@ -64,15 +64,15 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
     return {
       accessToken: activeSession.access_token,
       ownerId: current.profile.id,
-      generation: sessionGenerationRef.current,
+      ownerGeneration: ownerGenerationRef.current,
     };
   }, []);
 
   const mutationScopeIsCurrent = useCallback(
     (scope: IdentityMutationScope): boolean =>
-      sessionRef.current?.access_token === scope.accessToken &&
+      sessionRef.current?.user.id === scope.ownerId &&
       dataRef.current?.profile.id === scope.ownerId &&
-      sessionGenerationRef.current === scope.generation,
+      ownerGenerationRef.current === scope.ownerGeneration,
     [],
   );
 
@@ -83,13 +83,6 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       }
     },
     [mutationScopeIsCurrent],
-  );
-
-  const mutationOwnerIsCurrent = useCallback(
-    (scope: IdentityMutationScope): boolean =>
-      sessionRef.current?.user.id === scope.ownerId &&
-      dataRef.current?.profile.id === scope.ownerId,
-    [],
   );
 
   useEffect(() => {
@@ -184,7 +177,10 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       const nextToken = nextSession?.access_token ?? null;
       if (lastAppliedToken === nextToken) return;
       lastAppliedToken = nextToken;
-      sessionGenerationRef.current += 1;
+      const previousOwnerId = sessionRef.current?.user.id ?? null;
+      const nextOwnerId = nextSession?.user.id ?? null;
+      const ownerChanged = previousOwnerId !== nextOwnerId;
+      if (ownerChanged) ownerGenerationRef.current += 1;
       sessionRef.current = nextSession;
       setSession(nextSession);
       if (!nextSession) {
@@ -194,9 +190,16 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
         setError(null);
         return;
       }
-      if (dataRef.current?.profile.id !== nextSession.user.id) {
+      const hasCurrentOwnerData = dataRef.current?.profile.id === nextSession.user.id;
+      if (ownerChanged && !hasCurrentOwnerData) {
         commitData(null);
       }
+      // Supabase rotates access tokens within the same authenticated owner. The
+      // token used by future requests must update immediately, but mounted UI
+      // may hold deliberately non-persistent state such as one-time kit codes.
+      // Existing owner data therefore stays mounted; only a missing bootstrap
+      // or an actual owner transition enters the loading boundary.
+      if (!ownerChanged && hasCurrentOwnerData) return;
       setStatus("loading");
       const bootstrapGeneration = bootstrapGenerationRef.current + 1;
       try {
@@ -232,7 +235,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
 
     return () => {
       active = false;
-      sessionGenerationRef.current += 1;
+      ownerGenerationRef.current += 1;
       bootstrapGenerationRef.current += 1;
       subscription.unsubscribe();
     };
@@ -243,10 +246,10 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
     return supabase;
   }, [supabase]);
 
-  const api = useCallback(() => {
-    const activeSession = sessionRef.current;
-    return new FirelightApi(() => activeSession?.access_token ?? null);
-  }, []);
+  const mutationApi = useCallback(
+    (scope: IdentityMutationScope) => new FirelightApi(() => scope.accessToken),
+    [],
+  );
 
   const refresh = useCallback(async () => {
     const activeSession = sessionRef.current;
@@ -307,23 +310,32 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
         setNotice("Your password has been updated.");
       },
       refresh,
+      async getAccountExport() {
+        const scope = captureMutationScope();
+        const accountExport = await mutationApi(scope).getAccountExport();
+        assertCurrentMutationScope(scope);
+        if (accountExport.data.profile.id !== scope.ownerId) {
+          throw new Error("Firelight rejected account data for another owner.");
+        }
+        return accountExport;
+      },
       async updateProfile(displayName: string) {
         const scope = captureMutationScope();
-        const profile = await api().updateProfile(displayName);
+        const profile = await mutationApi(scope).updateProfile(displayName);
         assertCurrentMutationScope(scope);
         commitData((current) => (current ? { ...current, profile } : current));
         return profile;
       },
       async claimKit(code: string) {
         const scope = captureMutationScope();
-        const activation = await api().claimKit(code);
+        const activation = await mutationApi(scope).claimKit(code);
         assertCurrentMutationScope(scope);
         await refresh();
         return activation;
       },
       async saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput) {
         const scope = captureMutationScope();
-        const progress = await api().saveProgress(lessonId, input);
+        const progress = await mutationApi(scope).saveProgress(lessonId, input);
         assertCurrentMutationScope(scope);
         commitData((current) => {
           if (!current) return current;
@@ -334,15 +346,15 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
         });
         return progress;
       },
-      async deleteAccount() {
+      async deleteAccount(confirmation: "DELETE") {
         const scope = captureMutationScope();
-        await api().deleteAccount();
+        await mutationApi(scope).deleteAccount(confirmation);
         purgeBrowserProgressDraftsForOwner(scope.ownerId);
-        if (!mutationOwnerIsCurrent(scope)) {
+        if (!mutationScopeIsCurrent(scope)) {
           throw new Error("Your account changed after Firelight deleted the requested account.");
         }
         await requireClient().auth.signOut({ scope: "local" });
-        sessionGenerationRef.current += 1;
+        ownerGenerationRef.current += 1;
         sessionRef.current = null;
         bootstrapGenerationRef.current += 1;
         setSession(null);
@@ -351,7 +363,6 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       },
     }),
     [
-      api,
       assertCurrentMutationScope,
       captureMutationScope,
       commitData,
@@ -364,7 +375,8 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
       session,
       status,
       supabase,
-      mutationOwnerIsCurrent,
+      mutationApi,
+      mutationScopeIsCurrent,
     ],
   );
 

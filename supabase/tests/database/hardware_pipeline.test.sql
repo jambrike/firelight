@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(39);
+select plan(40);
 
 select has_table(
   'public',
@@ -748,6 +748,24 @@ select throws_ok(
   '42501',
   'an authenticated learner cannot delete evidenced terminal progress'
 );
+
+reset role;
+update public.profiles
+set role = 'admin'
+where id = '32222222-2222-4222-8222-222222222222';
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"32222222-2222-4222-8222-222222222222","role":"authenticated"}',
+  true
+);
+set local role authenticated;
+select is(
+  (select count(*) from public.hardware_upload_evidence),
+  0::bigint,
+  'an authenticated admin cannot read another learner upload hashes directly'
+);
+reset role;
 
 select * from finish();
 rollback;

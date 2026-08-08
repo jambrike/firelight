@@ -1,5 +1,5 @@
 import { Database, LogOut, PackageCheck, UserRound } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { PageIntro, Panel, StatusRegion } from "../components/ui";
 import { useIdentity } from "../features/identity/identity-context";
@@ -8,18 +8,48 @@ function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Firelight could not complete the request.";
 }
 
+function formatTimestamp(timestamp: string): string {
+  return new Intl.DateTimeFormat("en-IE", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+}
+
+function downloadJson(filename: string, value: unknown): void {
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }),
+  );
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+type AccountAction = "profile" | "export" | "signout" | "delete";
+
 export function AccountPage() {
   const identity = useIdentity();
   const data = identity.data;
   const [displayName, setDisplayName] = useState(data?.profile.displayName ?? "");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
+  const [workingAction, setWorkingAction] = useState<AccountAction | null>(null);
+  const exportGenerationRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      exportGenerationRef.current += 1;
+    },
+    [],
+  );
 
   if (!data) return null;
 
   const updateProfile = async () => {
-    setWorking(true);
+    setWorkingAction("profile");
     setFeedback(null);
     try {
       await identity.updateProfile(displayName);
@@ -27,7 +57,7 @@ export function AccountPage() {
     } catch (error) {
       setFeedback(messageFrom(error));
     } finally {
-      setWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -36,44 +66,50 @@ export function AccountPage() {
     void updateProfile();
   };
 
-  const exportData = () => {
-    const exportPayload = {
-      exportedAt: new Date().toISOString(),
-      profile: data.profile,
-      activation: data.activation,
-      progress: data.progress,
-      achievements: data.achievements,
-    };
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" }),
-    );
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "firelight-account-data.json";
-    anchor.click();
-    URL.revokeObjectURL(url);
-    setFeedback("Account data export prepared.");
+  const exportData = async () => {
+    const expectedOwnerId = data.profile.id;
+    const exportGeneration = ++exportGenerationRef.current;
+    const exportIsCurrent = () => exportGenerationRef.current === exportGeneration;
+    setWorkingAction("export");
+    setFeedback("Preparing your complete account export…");
+    try {
+      const accountExport = await identity.getAccountExport();
+      if (!exportIsCurrent()) return;
+      if (accountExport.data.profile.id !== expectedOwnerId) {
+        throw new Error("Your account changed before Firelight could prepare the export.");
+      }
+      downloadJson(
+        `firelight-account-${accountExport.exportedAt.slice(0, 10)}.json`,
+        accountExport,
+      );
+      setFeedback("Complete account data downloaded as JSON.");
+    } catch (error) {
+      if (exportIsCurrent()) setFeedback(messageFrom(error));
+    } finally {
+      if (exportIsCurrent()) setWorkingAction(null);
+    }
   };
 
   const signOut = async () => {
-    setWorking(true);
+    setWorkingAction("signout");
+    setFeedback(null);
     try {
       await identity.signOut();
     } catch (error) {
       setFeedback(messageFrom(error));
-      setWorking(false);
+      setWorkingAction(null);
     }
   };
 
   const deleteAccount = async () => {
     if (deleteConfirmation !== "DELETE") return;
-    setWorking(true);
+    setWorkingAction("delete");
     setFeedback(null);
     try {
-      await identity.deleteAccount();
+      await identity.deleteAccount("DELETE");
     } catch (error) {
       setFeedback(messageFrom(error));
-      setWorking(false);
+      setWorkingAction(null);
     }
   };
 
@@ -93,13 +129,32 @@ export function AccountPage() {
         <Panel>
           <PackageCheck aria-hidden="true" />
           <h2>Connected kit</h2>
-          <p>
-            {data.activation
-              ? data.activation.kind === "grandfathered"
-                ? "Legacy pilot access"
-                : `Batch ${data.activation.batch}`
-              : "No kit activated"}
-          </p>
+          {data.activation ? (
+            <dl>
+              <div>
+                <dt>Access</dt>
+                <dd>
+                  {data.activation.kind === "grandfathered"
+                    ? "Grandfathered pilot access"
+                    : "Claimed kit code"}
+                </dd>
+              </div>
+              <div>
+                <dt>Batch</dt>
+                <dd>{data.activation.batch}</dd>
+              </div>
+              <div>
+                <dt>Activation ID</dt>
+                <dd><code>{data.activation.id}</code></dd>
+              </div>
+              <div>
+                <dt>Activated</dt>
+                <dd>{formatTimestamp(data.activation.claimedAt)}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p>No kit activated</p>
+          )}
         </Panel>
         <Panel>
           <Database aria-hidden="true" />
@@ -125,23 +180,34 @@ export function AccountPage() {
               }}
             />
           </label>
-          <button className="pixel-button" type="submit" disabled={working}>
-            Save profile
+          <button className="pixel-button" type="submit" disabled={workingAction !== null}>
+            {workingAction === "profile" ? "Saving…" : "Save profile"}
           </button>
         </form>
       </Panel>
 
       <Panel>
         <h2>Your account data</h2>
-        <p>Download the profile, activation, achievement, and progress data shown here.</p>
+        <p>
+          Download a versioned server snapshot of your profile and auth email, safe activation,
+          every saved lesson version, compile history, and browser-upload evidence. Kit codes,
+          secret hashes, and raw compiled artifacts are never included.
+        </p>
         <div className="button-row">
-          <button className="pixel-button pixel-button--secondary" type="button" onClick={exportData}>
-            Export JSON
+          <button
+            className="pixel-button pixel-button--secondary"
+            type="button"
+            disabled={workingAction !== null}
+            onClick={() => {
+              void exportData();
+            }}
+          >
+            {workingAction === "export" ? "Preparing…" : "Export complete JSON"}
           </button>
           <button
             className="pixel-button pixel-button--secondary"
             type="button"
-            disabled={working}
+            disabled={workingAction !== null}
             onClick={() => {
               void signOut();
             }}
@@ -152,13 +218,22 @@ export function AccountPage() {
       </Panel>
 
       <Panel className="danger-panel">
-        <h2>Delete account</h2>
+        <h2>Permanently delete account</h2>
         <p>
-          This permanently removes the Supabase identity, profile, lesson progress, and compile
-          records. A claimed code remains consumed and is de-identified so it cannot be reused.
+          This is an irreversible hard deletion. It permanently removes:
+        </p>
+        <ul>
+          <li>Your sign-in identity and builder profile.</li>
+          <li>All lesson progress, completion records, and saved code snapshots.</li>
+          <li>All compile diagnostics and browser-upload evidence linked to your account.</li>
+          <li>Your kit activation; a claimed kit code is revoked and cannot be reused.</li>
+        </ul>
+        <p>
+          For security, sign out and sign back in immediately before deleting. A refreshed token
+          does not count as a fresh sign-in, and the server will reject an older session.
         </p>
         <label className="identity-form">
-          Type DELETE to confirm
+          Type DELETE exactly to confirm
           <input
             value={deleteConfirmation}
             onChange={(event) => {
@@ -170,12 +245,12 @@ export function AccountPage() {
         <button
           className="pixel-button danger-button"
           type="button"
-          disabled={working || deleteConfirmation !== "DELETE"}
+          disabled={workingAction !== null || deleteConfirmation !== "DELETE"}
           onClick={() => {
             void deleteAccount();
           }}
         >
-          Delete my account
+          {workingAction === "delete" ? "Deleting permanently…" : "Permanently delete my account"}
         </button>
       </Panel>
 

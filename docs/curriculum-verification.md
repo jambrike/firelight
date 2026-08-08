@@ -19,11 +19,18 @@ FQBN. The machine running it must first install the exact CLI, AVR core, and
 Servo library versions pinned by `compiler-service/Dockerfile` and its install
 scripts. This command does not upload, deploy, or contact Firelight services.
 
-Arduino CLI, Docker, and physical serial hardware were not available in the
-Milestone 5 implementation environment. Therefore static validation can be
-reported locally, but Arduino CLI compilation and every physical result below
-remain explicit staging release gates. Do not translate a passing source-policy
-test into a claim that a board was compiled, wired, or operated successfully.
+Repository-source compilation was completed on 2026-08-08 with the official,
+checksum-verified Arduino CLI 1.5.1, Arduino AVR core 1.8.6, and checksum-pinned
+Servo 1.3.0 library used by the compiler image. All six starter sketches compiled
+successfully for the exact `arduino:avr:nano:cpu=atmega328old` FQBN. First Spark
+emitted only the AVR core's upstream unused-parameter warnings; no Firelight
+sketch failed or introduced another diagnostic.
+
+This closes the repository starter-source compile gate only. The immutable
+compiler image still needs to be built and scanned, and the deployed compiler,
+browser upload, wiring, electrical behavior, and every physical result below
+remain explicit staging acceptance gates. Do not translate the source compile
+result into a claim that a board was uploaded, wired, or operated successfully.
 
 ## Unresolved controlled actuator-power BOM gate
 

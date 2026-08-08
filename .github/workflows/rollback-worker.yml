@@ -1,0 +1,124 @@
+name: Roll back Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      version_id:
+        description: Previously verified Cloudflare Worker version ID
+        required: true
+        type: string
+      expected_build_id:
+        description: Commit SHA persisted on the selected Worker version
+        required: true
+        type: string
+      confirmation:
+        description: Type ROLLBACK to confirm
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: inputs.confirmation == 'ROLLBACK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Require a valid release commit already present on main
+        env:
+          EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_BUILD_ID" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The rollback build must be one lowercase commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${EXPECTED_BUILD_ID}^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BUILD_ID" origin/main
+      - name: Find the successful accepted release run
+        id: accepted-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FIRELIGHT_RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_RELEASE_BUILD_ID: ${{ inputs.expected_build_id }}
+        run: node scripts/verify-release-run.mjs >> "$GITHUB_OUTPUT"
+      - name: Download the accepted release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: firelight-release-evidence-${{ inputs.environment }}-${{ inputs.expected_build_id }}
+          path: ${{ runner.temp }}/firelight-release-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.accepted-release.outputs.release_run_id }}
+      - name: Bind the requested version to accepted release evidence
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_RELEASE_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          FIRELIGHT_RELEASE_BUILD_ID: ${{ inputs.expected_build_id }}
+          FIRELIGHT_RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/firelight-release-artifact/firelight-release-evidence.json
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+        run: node scripts/verify-release-artifact.mjs
+      - name: Verify the requested version in the exact Worker inventory
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+          ROLLBACK_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          ROLLBACK_EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+        run: node scripts/verify-worker-version.mjs
+      - name: Check out the accepted release content for its canary
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.expected_build_id }}
+          path: rollback-target
+          persist-credentials: false
+      - name: Roll back to the verified Worker version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+          ROLLBACK_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+        run: >-
+          npx wrangler rollback "$ROLLBACK_VERSION_ID"
+          --env "$ROLLBACK_ENVIRONMENT"
+          --name "$ROLLBACK_WORKER_NAME"
+          --message "Approved incident rollback from GitHub Actions"
+          --yes
+      - name: Verify rolled-back identity and compiler dependencies
+        env:
+          FIRELIGHT_BASE_URL: ${{ inputs.environment == 'production' && 'https://firelight.ie' || 'https://staging.firelight.ie' }}
+          FIRELIGHT_EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+          FIRELIGHT_EXPECTED_SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_CANARY_PASSWORD: ${{ secrets.FIRELIGHT_CANARY_PASSWORD }}
+          FIRELIGHT_CANARY_REPOSITORY_ROOT: ${{ github.workspace }}/rollback-target
+        run: node scripts/postdeploy-canary.mjs

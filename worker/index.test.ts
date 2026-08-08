@@ -5,8 +5,11 @@ import { FIRELIGHT_BOARD_FQBN } from "../shared/hardware";
 import { findLesson } from "../src/features/lessons/catalog";
 import { sha256Hex } from "./compiler-gateway";
 import { createFirelightApp } from "./index";
+import { hashKitCode } from "./kit-codes";
 import { RepositoryError } from "./identity-repository";
 import type {
+  AccountExportRecords,
+  AdminPageInput,
   AuthenticatedUser,
   BootstrapRecords,
   IdentityRepository,
@@ -20,6 +23,7 @@ const user: AuthenticatedUser = {
   email: "builder@example.com",
   emailConfirmed: true,
   lastSignInAt: new Date().toISOString(),
+  sessionId: "55555555-5555-4555-8555-555555555555",
   isAnonymous: false,
 };
 
@@ -57,10 +61,51 @@ const bootstrap: BootstrapRecords = {
   ],
 };
 
+const accountExportRecords: AccountExportRecords = {
+  profile,
+  activation: bootstrap.activation,
+  progress: [
+    ...bootstrap.progress,
+    {
+      ...bootstrap.progress[0]!,
+      lessonVersion: 2,
+      revision: 3,
+      codeSnapshot: "void setup() { pinMode(LED_BUILTIN, OUTPUT); }",
+    },
+  ],
+  compileJobs: [{
+    id: "33333333-3333-4333-8333-333333333333",
+    lessonId: "first-spark",
+    lessonVersion: 2,
+    boardTarget: FIRELIGHT_BOARD_FQBN,
+    sourceHash: "a".repeat(64),
+    state: "succeeded",
+    durationMs: 500,
+    safeErrorCode: null,
+    artifactHash: "b".repeat(64),
+    diagnosticSummary: "Compilation completed.",
+    createdAt: now,
+    startedAt: now,
+    finishedAt: now,
+  }],
+  uploadEvidence: [{
+    id: "44444444-4444-4444-8444-444444444444",
+    compileJobId: "33333333-3333-4333-8333-333333333333",
+    lessonId: "first-spark",
+    lessonVersion: 2,
+    sourceHash: "a".repeat(64),
+    artifactHash: "b".repeat(64),
+    bytesWritten: 256,
+    recordedAt: now,
+    attestation: "browser-web-serial-v1",
+  }],
+};
+
 function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRepository {
   return {
     authenticate: vi.fn(async () => user),
     getBootstrap: vi.fn(async () => bootstrap),
+    getAccountExport: vi.fn(async () => accountExportRecords),
     updateProfile: vi.fn(async (_userId, displayName) => ({
       ...profile,
       displayName,
@@ -95,7 +140,49 @@ function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRe
       completedAt: input.status === "completed" ? now : null,
       updatedAt: now,
     })),
+    hasRecentSession: vi.fn(async () => true),
     deleteAccount: vi.fn(async () => undefined),
+    isAdmin: vi.fn(async () => true),
+    createAdminKitBatch: vi.fn(async (_actorId, batch, _codeIds, codeHashes) => ({
+      batch,
+      count: codeHashes.length,
+      createdAt: now,
+    })),
+    listAdminKits: vi.fn(async (_actorId, _query, _state, page: AdminPageInput) => ({
+      items: [],
+      ...page,
+      nextOffset: null,
+    })),
+    revokeAdminKit: vi.fn(async (_actorId, kitId) => ({
+      id: kitId,
+      state: "revoked" as const,
+      accessRevoked: true,
+    })),
+    listAdminLearners: vi.fn(async (_actorId, _query, page: AdminPageInput) => ({
+      items: [],
+      ...page,
+      nextOffset: null,
+    })),
+    listAdminProgress: vi.fn(async (_actorId, _learnerId, page: AdminPageInput) => ({
+      items: [],
+      ...page,
+      nextOffset: null,
+    })),
+    listAdminCompileDiagnostics: vi.fn(async (
+      _actorId,
+      _state,
+      _errorCode,
+      page: AdminPageInput,
+    ) => ({
+      items: [],
+      ...page,
+      nextOffset: null,
+    })),
+    listAdminAudit: vi.fn(async (_actorId, _action, page: AdminPageInput) => ({
+      items: [],
+      ...page,
+      nextOffset: null,
+    })),
     ...overrides,
   };
 }
@@ -104,11 +191,13 @@ const testEnv = {
   ENVIRONMENT: "development",
   BUILD_ID: "local",
   SUPABASE_URL: "http://127.0.0.1:54321",
+  SUPABASE_PROJECT_REF: "local",
   SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
   KIT_CODE_PEPPER: "firelight-local-kit-pepper",
-  COMPILER_SERVICE_URL: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws/",
-  COMPILER_SERVICE_ORIGIN: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
+  COMPILER_SERVICE_URL: "http://127.0.0.1:9000/",
+  COMPILER_SERVICE_ORIGIN: "http://127.0.0.1:9000",
+  COMPILER_SERVICE_HOST: "127.0.0.1",
   COMPILER_SERVICE_TOKEN:
     "test-service-token-that-is-at-least-thirty-two-characters",
   ASSETS: exports.default,
@@ -175,6 +264,63 @@ const legacyRedirects = [
 ] as const;
 
 describe("Firelight Worker", () => {
+  it("reports liveness without probing secrets and readiness only when configured", async () => {
+    const app = createFirelightApp();
+    const health = await app.request("https://firelight.test/api/health", {}, testEnv);
+    const ready = await app.request("https://firelight.test/api/readiness", {}, testEnv);
+    const unavailable = await app.request("https://firelight.test/api/readiness", {}, {
+      ...testEnv,
+      COMPILER_SERVICE_TOKEN: "",
+    });
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({
+      data: { status: "ok", environment: "development", buildId: "local" },
+    });
+    expect(ready.status).toBe(200);
+    expect((await ready.json<{ data: { status: string } }>()).data.status).toBe("ready");
+    expect(unavailable.status).toBe(503);
+    expect((await unavailable.json<{ error: { code: string } }>()).error.code).toBe(
+      "SERVICE_NOT_READY",
+    );
+  });
+
+  it("pins hosted readiness to the exact build, Supabase project, and compiler host", async () => {
+    const app = createFirelightApp();
+    const hosted = {
+      ...testEnv,
+      ENVIRONMENT: "staging",
+      BUILD_ID: "a".repeat(40),
+      SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co",
+      SUPABASE_PROJECT_REF: "abcdefghijklmnopqrst",
+      COMPILER_SERVICE_URL:
+        "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws/",
+      COMPILER_SERVICE_ORIGIN:
+        "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
+      COMPILER_SERVICE_HOST:
+        "abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
+    } as unknown as Env;
+
+    const ready = await app.request("https://firelight.test/api/readiness", {}, hosted);
+    const wrongProject = await app.request("https://firelight.test/api/readiness", {}, {
+      ...hosted,
+      SUPABASE_PROJECT_REF: "zyxwvutsrqponmlkjihg",
+    });
+    const wrongCompiler = await app.request("https://firelight.test/api/readiness", {}, {
+      ...hosted,
+      COMPILER_SERVICE_HOST: "zyxwvutsrqponmlkjihg.lambda-url.eu-west-1.on.aws",
+    });
+    const placeholderBuild = await app.request("https://firelight.test/api/readiness", {}, {
+      ...hosted,
+      BUILD_ID: "staging",
+    });
+
+    expect(ready.status).toBe(200);
+    expect(wrongProject.status).toBe(503);
+    expect(wrongCompiler.status).toBe(503);
+    expect(placeholderBuild.status).toBe(503);
+  });
+
   it("returns public runtime configuration in the shared response envelope", async () => {
     const response = await exports.default.fetch("https://firelight.test/api/config");
     const body = await response.json<{
@@ -195,7 +341,7 @@ describe("Firelight Worker", () => {
     expect(body.data.apiVersion).toBe("v1");
     expect(body.data.environment).toBe("development");
     expect(body.data.supabase).toEqual({
-      url: "https://supabase.firelight.test",
+      url: "http://127.0.0.1:54321",
       publishableKey: "test-publishable-key",
     });
     expect(body.data.hardware).toEqual({
@@ -271,6 +417,23 @@ describe("Firelight Worker", () => {
     expect(response.status).toBe(200);
     expect(repository.updateProfile).toHaveBeenCalledWith(user.id, "Grace");
   });
+
+  it.each(["Ada\u0000", "Ada\nMallory", "Ada\u007f"])(
+    "rejects control characters in profile display names",
+    async (displayName) => {
+      const repository = makeRepository();
+      const response = await requestWithRepository(repository, "/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName }),
+      });
+      const body = await response.json<{ error: { code: string } }>();
+
+      expect(response.status).toBe(422);
+      expect(body.error.code).toBe("DISPLAY_NAME_INVALID");
+      expect(repository.updateProfile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects cross-site mutation requests before authentication", async () => {
     const repository = makeRepository();
@@ -827,20 +990,116 @@ describe("Firelight Worker", () => {
     );
   });
 
+  it("exports the authenticated owner's complete versioned server snapshot", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(repository, "/api/account/export");
+    const body = await response.json<{ data: Record<string, unknown> }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data).toMatchObject({
+      schema: "firelight.account-export",
+      version: 2,
+      exportedAt: expect.any(String),
+      data: {
+        profile: { id: user.id, email: user.email },
+        activation: { id: bootstrap.activation!.id, batch: "pilot-one" },
+        progress: [
+          { lessonId: "first-spark", lessonVersion: 1 },
+          { lessonId: "first-spark", lessonVersion: 2 },
+        ],
+        compileJobs: [{ id: "33333333-3333-4333-8333-333333333333" }],
+        uploadEvidence: [{ id: "44444444-4444-4444-8444-444444444444" }],
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/codeHash|code_hash|serviceRole|hex/i);
+    expect(repository.getAccountExport).toHaveBeenCalledWith(user.id);
+  });
+
+  it("fails a bounded export explicitly and guards non-GET methods", async () => {
+    const repository = makeRepository({
+      getAccountExport: vi.fn(async () => {
+        throw new RepositoryError("export_too_large", "bounded");
+      }),
+    });
+    const oversized = await requestWithRepository(repository, "/api/account/export");
+    expect(oversized.status).toBe(409);
+    expect((await oversized.json<{ error: { code: string } }>()).error.code).toBe(
+      "ACCOUNT_EXPORT_TOO_LARGE",
+    );
+
+    const wrongMethod = await requestWithRepository(repository, "/api/account/export", {
+      method: "POST",
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("Allow")).toBe("GET, HEAD");
+  });
+
+  it("fails the whole export when valid projected records exceed the JSON response bound", async () => {
+    const template = accountExportRecords.compileJobs[0]!;
+    const compileJobs = Array.from({ length: 520 }, (_, index) => ({
+      ...template,
+      id: `33333333-3333-4333-8333-${String(index).padStart(12, "0")}`,
+      diagnosticSummary: "x".repeat(8_192),
+    }));
+    const repository = makeRepository({
+      getAccountExport: vi.fn(async () => ({
+        ...accountExportRecords,
+        compileJobs,
+      })),
+    });
+
+    const response = await requestWithRepository(repository, "/api/account/export");
+    expect(response.status).toBe(409);
+    expect((await response.json<{ error: { code: string } }>()).error.code).toBe(
+      "ACCOUNT_EXPORT_TOO_LARGE",
+    );
+  });
+
   it("requires a recent online sign-in before account deletion", async () => {
     const repository = makeRepository({
-      authenticate: vi.fn(async () => ({
-        ...user,
-        lastSignInAt: "2026-01-01T00:00:00.000Z",
-      })),
+      hasRecentSession: vi.fn(async () => false),
     });
     const response = await requestWithRepository(repository, "/api/account", {
       method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "DELETE" }),
     });
     const body = await response.json<{ error: { code: string } }>();
 
     expect(response.status).toBe(403);
     expect(body.error.code).toBe("RECENT_SIGN_IN_REQUIRED");
+    expect(repository.hasRecentSession).toHaveBeenCalledWith(user.id, user.sessionId);
+    expect(repository.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("rejects account deletion without an exact explicit confirmation", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(repository, "/api/account", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "delete" }),
+    });
+
+    expect(response.status).toBe(422);
+    expect((await response.json<{ error: { code: string } }>()).error.code).toBe(
+      "ACCOUNT_DELETE_CONFIRMATION_REQUIRED",
+    );
+    expect(repository.hasRecentSession).not.toHaveBeenCalled();
+    expect(repository.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("rejects deletion from a token without an authenticated session id", async () => {
+    const repository = makeRepository({
+      authenticate: vi.fn(async () => ({ ...user, sessionId: null })),
+    });
+    const response = await requestWithRepository(repository, "/api/account", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(repository.hasRecentSession).not.toHaveBeenCalled();
     expect(repository.deleteAccount).not.toHaveBeenCalled();
   });
 
@@ -848,10 +1107,259 @@ describe("Firelight Worker", () => {
     const repository = makeRepository();
     const response = await requestWithRepository(repository, "/api/account", {
       method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "DELETE" }),
     });
 
     expect(response.status).toBe(200);
     expect(repository.deleteAccount).toHaveBeenCalledWith(user.id);
+  });
+
+  it("denies support APIs to normal learners before privileged repository calls", async () => {
+    const listAdminKits = vi.fn(async (
+      _actorId: string,
+      _query: string,
+      _state: "issued" | "claimed" | "revoked" | null,
+      page: AdminPageInput,
+    ) => ({ items: [], ...page, nextOffset: null }));
+    const repository = makeRepository({
+      isAdmin: vi.fn(async () => false),
+      listAdminKits,
+    });
+    const response = await requestWithRepository(repository, "/api/admin/kits");
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("ADMIN_REQUIRED");
+    expect(listAdminKits).not.toHaveBeenCalled();
+  });
+
+  it("pairs one-time kit codes with revocation IDs while sending only HMACs to storage", async () => {
+    let receivedIds: readonly string[] = [];
+    let receivedHashes: readonly string[] = [];
+    const createAdminKitBatch = vi.fn(async (
+      _actorId: string,
+      batch: string,
+      codeIds: readonly string[],
+      codeHashes: readonly string[],
+    ) => {
+      receivedIds = [...codeIds];
+      receivedHashes = [...codeHashes];
+      return { batch, count: codeHashes.length, createdAt: now };
+    });
+    const repository = makeRepository({ createAdminKitBatch });
+    const response = await requestWithRepository(
+      repository,
+      "/api/admin/kits/batches",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch: "autumn-pilot", count: 3 }),
+      },
+    );
+    const body = await response.json<{
+      data: { batch: string; codes: { id: string; code: string }[]; generatedAt: string };
+    }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data.batch).toBe("autumn-pilot");
+    expect(body.data.generatedAt).toBe(now);
+    expect(body.data.codes).toHaveLength(3);
+    expect(new Set(body.data.codes.map((entry) => entry.id)).size).toBe(3);
+    expect(new Set(body.data.codes.map((entry) => entry.code)).size).toBe(3);
+    expect(body.data.codes.every((entry) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(entry.id) &&
+      /^[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){3}$/.test(entry.code)
+    )).toBe(true);
+
+    const canonicalCodes = body.data.codes.map((entry) => entry.code.replaceAll("-", ""));
+    const expectedHashes = await Promise.all(
+      canonicalCodes.map((code) => hashKitCode(code, testEnv.KIT_CODE_PEPPER)),
+    );
+    expect(receivedHashes).toEqual(expectedHashes);
+    expect(receivedHashes.every((hash) => /^[0-9a-f]{64}$/.test(hash))).toBe(true);
+    expect(receivedHashes.some((hash) => canonicalCodes.includes(hash))).toBe(false);
+    expect(receivedIds).toEqual(body.data.codes.map((entry) => entry.id));
+    expect(createAdminKitBatch).toHaveBeenCalledWith(
+      user.id,
+      "autumn-pilot",
+      receivedIds,
+      expectedHashes,
+    );
+  });
+
+  it("passes bounded kit filters and pagination through the safe admin projection", async () => {
+    const listAdminKits = vi.fn(async (
+      _actorId: string,
+      _query: string,
+      _state: "issued" | "claimed" | "revoked" | null,
+      page: AdminPageInput,
+    ) => ({
+      items: [{
+        id: "44444444-4444-4444-8444-444444444444",
+        batch: "pilot-a",
+        state: "claimed" as const,
+        claimedBy: user.id,
+        claimedAt: now,
+        revokedAt: null,
+        createdAt: now,
+      }],
+      ...page,
+      nextOffset: 30,
+    }));
+    const repository = makeRepository({ listAdminKits });
+    const response = await requestWithRepository(
+      repository,
+      "/api/admin/kits?q=Ada&state=claimed&limit=10&offset=20",
+    );
+    const body = await response.json<{ data: { items: unknown[]; nextOffset: number } }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data.items).toHaveLength(1);
+    expect(body.data.nextOffset).toBe(30);
+    expect(listAdminKits).toHaveBeenCalledWith(
+      user.id,
+      "Ada",
+      "claimed",
+      { limit: 10, offset: 20 },
+    );
+  });
+
+  it("atomically revokes a kit through the audited admin boundary", async () => {
+    const kitId = "44444444-4444-4444-8444-444444444444";
+    const revokeAdminKit = vi.fn(async (
+      _actorId: string,
+      id: string,
+    ) => ({ id, state: "revoked" as const, accessRevoked: true }));
+    const repository = makeRepository({ revokeAdminKit });
+    const response = await requestWithRepository(
+      repository,
+      `/api/admin/kits/${kitId}/revoke`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "security" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: { id: kitId, state: "revoked", accessRevoked: true },
+    });
+    expect(revokeAdminKit).toHaveBeenCalledWith(user.id, kitId, "security");
+  });
+
+  it("returns exact learner support context without exposing code snapshots", async () => {
+    const learnerId = "66666666-6666-4666-8666-666666666666";
+    const learner = {
+      id: learnerId,
+      email: "grace@example.com",
+      displayName: "Grace",
+      role: "learner" as const,
+      accessSource: "code" as const,
+      activationBatch: "pilot-a",
+      completedLessons: 1,
+      progressRecords: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const listAdminLearners = vi.fn(async (
+      _actorId: string,
+      _query: string,
+      page: AdminPageInput,
+    ) => ({ items: [learner], ...page, nextOffset: null }));
+    const listAdminProgress = vi.fn(async (
+      _actorId: string,
+      _learnerId: string,
+      page: AdminPageInput,
+    ) => ({
+      items: [{
+        lessonId: "first-spark" as const,
+        lessonVersion: 1,
+        status: "completed" as const,
+        currentStep: "complete",
+        percentage: 100,
+        completedAt: now,
+        updatedAt: now,
+      }],
+      ...page,
+      nextOffset: null,
+    }));
+    const repository = makeRepository({ listAdminLearners, listAdminProgress });
+    const response = await requestWithRepository(
+      repository,
+      `/api/admin/learners/${learnerId}/progress?limit=10&offset=0`,
+    );
+    const body = await response.json<{
+      data: { learner: { id: string }; progress: { items: Record<string, unknown>[] } };
+    }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data.learner.id).toBe(learnerId);
+    expect(body.data.progress.items[0]).not.toHaveProperty("codeSnapshot");
+    expect(listAdminLearners).toHaveBeenCalledWith(
+      user.id,
+      learnerId,
+      { limit: 1, offset: 0 },
+    );
+    expect(listAdminProgress).toHaveBeenCalledWith(
+      user.id,
+      learnerId,
+      { limit: 10, offset: 0 },
+    );
+  });
+
+  it.each([
+    {
+      path: "/api/admin/kits?limit=51",
+      init: undefined,
+      code: "PAGINATION_INVALID",
+    },
+    {
+      path: "/api/admin/kits?q=one&q=two",
+      init: undefined,
+      code: "QUERY_INVALID",
+    },
+    {
+      path: "/api/admin/compile-diagnostics?errorCode=compiler_failed",
+      init: undefined,
+      code: "COMPILE_ERROR_CODE_INVALID",
+    },
+    {
+      path: "/api/admin/kits/batches",
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch: "pilot", count: 101 }),
+      },
+      code: "KIT_BATCH_COUNT_INVALID",
+    },
+  ])("rejects malformed admin input with $code", async ({ path, init, code }) => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(repository, path, init);
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(422);
+    expect(body.error.code).toBe(code);
+  });
+
+  it("redacts UUID route parameters from structured request logs", async () => {
+    const learnerId = "66666666-6666-4666-8666-666666666666";
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const response = await requestWithRepository(
+        makeRepository(),
+        `/api/admin/learners/${learnerId}/progress`,
+      );
+      expect(response.status).toBe(404);
+      const structured = log.mock.calls
+        .map(([entry]) => typeof entry === "string" ? entry : "")
+        .find((entry) => entry.includes('"event":"request.complete"'));
+      expect(structured).toContain('"path":"/api/admin/learners/:id/progress"');
+      expect(structured).not.toContain(learnerId);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it.each(["/api", "/api/unknown"])(

@@ -1,9 +1,12 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressUpdateInput } from "../../../shared/identity";
+import { AccountPage } from "../../pages/AccountPage";
 import { WebStorageProgressDraftPersistence } from "../progress/draft-persistence";
 import { IdentityProvider } from "./IdentityProvider";
+import { SessionBoundary } from "./SessionBoundary";
 import { useIdentity } from "./identity-context";
 
 const ownerId = "11111111-1111-4111-8111-111111111111";
@@ -43,7 +46,7 @@ function DeleteProbe() {
         type="button"
         disabled={identity.status !== "authenticated"}
         onClick={() => {
-          void identity.deleteAccount();
+          void identity.deleteAccount("DELETE");
         }}
       >
         Delete test account
@@ -78,6 +81,26 @@ function ProgressProbe() {
       >
         Save test progress
       </button>
+    </div>
+  );
+}
+
+function OneTimeCodeProbe() {
+  const identity = useIdentity();
+  const [plaintextCode, setPlaintextCode] = useState("");
+  return (
+    <div>
+      <span data-testid="refresh-status">{identity.status}</span>
+      <span data-testid="refresh-token">{identity.session?.access_token ?? "none"}</span>
+      <label>
+        One-time plaintext code
+        <input
+          value={plaintextCode}
+          onChange={(event) => {
+            setPlaintextCode(event.currentTarget.value);
+          }}
+        />
+      </label>
     </div>
   );
 }
@@ -210,6 +233,131 @@ describe("IdentityProvider account deletion", () => {
 });
 
 describe("IdentityProvider mutation ownership", () => {
+  it("keeps same-owner one-time UI state mounted across an access-token refresh", async () => {
+    render(
+      <IdentityProvider>
+        <SessionBoundary>
+          <OneTimeCodeProbe />
+        </SessionBoundary>
+      </IdentityProvider>,
+    );
+    const user = userEvent.setup();
+    const plaintextInput = await screen.findByRole("textbox", {
+      name: "One-time plaintext code",
+    });
+    await user.type(plaintextInput, "ABCD-EFGH-JKMP-NRST");
+
+    act(() => {
+      supabaseMocks.authListener?.("TOKEN_REFRESHED", {
+        access_token: "rotated-session-token",
+        user: { id: ownerId },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("refresh-status")).toHaveTextContent("authenticated");
+      expect(screen.getByTestId("refresh-token")).toHaveTextContent(
+        "rotated-session-token",
+      );
+      expect(plaintextInput).toHaveValue("ABCD-EFGH-JKMP-NRST");
+    });
+  });
+
+  it("accepts a successful exact-token mutation after a same-owner token refresh", async () => {
+    const progressResponse = deferred<Response>();
+    let progressAuthorization: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = inputPath(input);
+        if (path === "/api/config") {
+          return Response.json({
+            data: {
+              apiVersion: "v1",
+              environment: "test",
+              buildId: "test-build",
+              supabase: {
+                url: "https://example.supabase.co",
+                publishableKey: "publishable-key",
+              },
+              hardware: {
+                fqbn: "arduino:avr:nano:cpu=atmega328old",
+                uploadBaud: 57_600,
+              },
+            },
+          });
+        }
+        if (path === "/api/bootstrap") {
+          return Response.json({
+            data: {
+              profile: {
+                id: ownerId,
+                displayName: "Ada",
+                role: "learner",
+                email: "ada@example.com",
+                emailConfirmed: true,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+              },
+              activation: null,
+              progress: [],
+              achievements: [],
+              nextLesson: null,
+            },
+          });
+        }
+        if (path === "/api/lessons/first-spark/progress" && init?.method === "PUT") {
+          progressAuthorization = new Headers(init.headers).get("authorization");
+          return progressResponse.promise;
+        }
+        return Response.json({ error: "Unexpected request" }, { status: 500 });
+      }),
+    );
+    render(
+      <IdentityProvider>
+        <ProgressProbe />
+      </IdentityProvider>,
+    );
+    const user = userEvent.setup();
+    const saveButton = await screen.findByRole("button", {
+      name: "Save test progress",
+    });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+
+    await user.click(saveButton);
+    expect(progressAuthorization).toBe("Bearer session-token");
+    act(() => {
+      supabaseMocks.authListener?.("TOKEN_REFRESHED", {
+        access_token: "rotated-session-token",
+        user: { id: ownerId },
+      });
+    });
+    progressResponse.resolve(
+      Response.json({
+        data: {
+          lessonId: "first-spark",
+          lessonVersion: 1,
+          revision: 1,
+          status: "in_progress",
+          currentStep: "edit-code",
+          percentage: 20,
+          codeSnapshot: "account-a secret code",
+          completedAt: null,
+          updatedAt: timestamp,
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-owner")).toHaveTextContent(ownerId);
+      expect(screen.getByTestId("progress-code")).toHaveTextContent(
+        "account-a secret code",
+      );
+    });
+  });
+
   it("ignores an account A progress response after account B becomes active", async () => {
     const accountBId = otherOwnerId;
     const progressResponse = deferred<Response>();
@@ -334,5 +482,157 @@ describe("IdentityProvider mutation ownership", () => {
       expect(screen.getByTestId("active-owner")).toHaveTextContent(accountBId);
       expect(screen.getByTestId("progress-code")).toHaveTextContent("none");
     });
+  });
+
+  it("discards an account A export resolved after account B is active and the page unmounts", async () => {
+    const accountExportResponse = deferred<Response>();
+    const accountBBootstrap = deferred<Response>();
+    let exportAuthorization: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = inputPath(input);
+        if (path === "/api/config") {
+          return Response.json({
+            data: {
+              apiVersion: "v1",
+              environment: "test",
+              buildId: "test-build",
+              supabase: {
+                url: "https://example.supabase.co",
+                publishableKey: "publishable-key",
+              },
+              hardware: {
+                fqbn: "arduino:avr:nano:cpu=atmega328old",
+                uploadBaud: 57_600,
+              },
+            },
+          });
+        }
+        if (path === "/api/bootstrap") {
+          const authorization = new Headers(init?.headers).get("authorization");
+          if (authorization === "Bearer account-b-token") {
+            return accountBBootstrap.promise;
+          }
+          return Response.json({
+            data: {
+              profile: {
+                id: ownerId,
+                displayName: "Account A",
+                role: "learner",
+                email: "a@example.com",
+                emailConfirmed: true,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+              },
+              activation: null,
+              progress: [],
+              achievements: [],
+              nextLesson: null,
+            },
+          });
+        }
+        if (path === "/api/account/export") {
+          exportAuthorization = new Headers(init?.headers).get("authorization");
+          return accountExportResponse.promise;
+        }
+        return Response.json({ error: "Unexpected request" }, { status: 500 });
+      }),
+    );
+
+    const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+    const createObjectUrl = vi.fn(() => "blob:must-not-exist");
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectUrl,
+    });
+    const anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+
+    try {
+      render(
+        <IdentityProvider>
+          <SessionBoundary>
+            <AccountPage />
+          </SessionBoundary>
+        </IdentityProvider>,
+      );
+      const user = userEvent.setup();
+      const exportButton = await screen.findByRole("button", {
+        name: "Export complete JSON",
+      });
+      await user.click(exportButton);
+      expect(exportAuthorization).toBe("Bearer session-token");
+
+      act(() => {
+        supabaseMocks.authListener?.("SIGNED_IN", {
+          access_token: "account-b-token",
+          user: { id: otherOwnerId },
+        });
+      });
+      accountBBootstrap.resolve(
+        Response.json({
+          data: {
+            profile: {
+              id: otherOwnerId,
+              displayName: "Account B",
+              role: "learner",
+              email: "b@example.com",
+              emailConfirmed: true,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+            activation: null,
+            progress: [],
+            achievements: [],
+            nextLesson: null,
+          },
+        }),
+      );
+      await screen.findByText("b@example.com");
+
+      accountExportResponse.resolve(
+        Response.json({
+          data: {
+            schema: "firelight.account-export",
+            version: 2,
+            exportedAt: timestamp,
+            data: {
+              profile: {
+                id: ownerId,
+                displayName: "Account A",
+                role: "learner",
+                email: "a-private@example.com",
+                emailConfirmed: true,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+              },
+              activation: null,
+              progress: [],
+              compileJobs: [],
+              uploadEvidence: [],
+            },
+          },
+        }),
+      );
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 0);
+        });
+      });
+
+      expect(screen.getByText("b@example.com")).toBeInTheDocument();
+      expect(createObjectUrl).not.toHaveBeenCalled();
+      expect(anchorClick).not.toHaveBeenCalled();
+      expect(screen.queryByText("a-private@example.com")).not.toBeInTheDocument();
+    } finally {
+      anchorClick.mockRestore();
+      if (createObjectUrlDescriptor) {
+        Object.defineProperty(URL, "createObjectURL", createObjectUrlDescriptor);
+      } else {
+        Reflect.deleteProperty(URL, "createObjectURL");
+      }
+    }
   });
 });

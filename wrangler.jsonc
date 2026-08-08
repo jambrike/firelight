@@ -17,17 +17,19 @@
     ]
   },
   "vars": {
-    "ENVIRONMENT": "production",
+    "ENVIRONMENT": "development",
     "BUILD_ID": "local"
   },
   "secrets": {
     "required": [
       "SUPABASE_URL",
+      "SUPABASE_PROJECT_REF",
       "SUPABASE_PUBLISHABLE_KEY",
       "SUPABASE_SERVICE_ROLE_KEY",
       "KIT_CODE_PEPPER",
       "COMPILER_SERVICE_URL",
       "COMPILER_SERVICE_ORIGIN",
+      "COMPILER_SERVICE_HOST",
       "COMPILER_SERVICE_TOKEN"
     ]
   },
@@ -36,11 +38,67 @@
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "invocation_logs": true
+      "invocation_logs": false
     },
     "traces": {
-      "enabled": true,
-      "head_sampling_rate": 0.05
+      "enabled": false,
+      "head_sampling_rate": 0
+    }
+  },
+  "env": {
+    "staging": {
+      "name": "firelight-staging",
+      "workers_dev": false,
+      "routes": [
+        {
+          "pattern": "staging.firelight.ie",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "BUILD_ID": "staging"
+      },
+      "secrets": {
+        "required": [
+          "SUPABASE_URL",
+          "SUPABASE_PROJECT_REF",
+          "SUPABASE_PUBLISHABLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY",
+          "KIT_CODE_PEPPER",
+          "COMPILER_SERVICE_URL",
+          "COMPILER_SERVICE_ORIGIN",
+          "COMPILER_SERVICE_HOST",
+          "COMPILER_SERVICE_TOKEN"
+        ]
+      }
+    },
+    "production": {
+      "name": "firelight-production",
+      "workers_dev": false,
+      "routes": [
+        {
+          "pattern": "firelight.ie",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "BUILD_ID": "production"
+      },
+      "secrets": {
+        "required": [
+          "SUPABASE_URL",
+          "SUPABASE_PROJECT_REF",
+          "SUPABASE_PUBLISHABLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY",
+          "KIT_CODE_PEPPER",
+          "COMPILER_SERVICE_URL",
+          "COMPILER_SERVICE_ORIGIN",
+          "COMPILER_SERVICE_HOST",
+          "COMPILER_SERVICE_TOKEN"
+        ]
+      }
     }
   }
 }

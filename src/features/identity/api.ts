@@ -1,5 +1,20 @@
 import { isLessonSlug, type LessonSlug } from "../../../shared/curriculum";
 import type {
+  AdminAuditEntry,
+  AdminCompileDiagnostic,
+  AdminCompileState,
+  AdminKitBatchInput,
+  AdminKitCodeState,
+  AdminKitRecord,
+  AdminKitRevocationInput,
+  AdminKitRevocationResult,
+  AdminLearnerProgress,
+  AdminLearnerSummary,
+  AdminPage,
+  GeneratedKitBatch,
+} from "../../../shared/admin";
+import type { AccountExport } from "../../../shared/account-export";
+import type {
   ApiErrorBody,
   BootstrapData,
   KitActivation,
@@ -31,6 +46,33 @@ export class FirelightApiError extends Error {
   }
 }
 
+export interface AdminKitListParams {
+  readonly q?: string;
+  readonly state?: AdminKitCodeState;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+export interface AdminLearnerSearchParams {
+  readonly q?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+export interface AdminPageParams {
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+export interface AdminCompileDiagnosticParams extends AdminPageParams {
+  readonly state?: AdminCompileState;
+  readonly errorCode?: string;
+}
+
+export interface AdminAuditParams extends AdminPageParams {
+  readonly action?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -50,6 +92,16 @@ function parseErrorBody(value: unknown): ApiErrorBody["error"] | null {
     message: error.message,
     requestId: error.requestId,
   };
+}
+
+function queryPath(path: string, values: Readonly<Record<string, string | number | undefined>>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined || value === "") continue;
+    query.set(key, String(value));
+  }
+  const serialized = query.toString();
+  return serialized.length > 0 ? `${path}?${serialized}` : path;
 }
 
 const UUID_V4_PATTERN =
@@ -171,6 +223,10 @@ export class FirelightApi {
     return this.#request<BootstrapData>("/api/bootstrap");
   }
 
+  getAccountExport(): Promise<AccountExport> {
+    return this.#request<AccountExport>("/api/account/export");
+  }
+
   updateProfile(displayName: string): Promise<LearnerProfile> {
     return this.#request<LearnerProfile>("/api/profile", {
       method: "PATCH",
@@ -227,9 +283,88 @@ export class FirelightApi {
     return evidence;
   }
 
-  deleteAccount(): Promise<{ readonly deleted: true }> {
+  deleteAccount(confirmation: "DELETE"): Promise<{ readonly deleted: true }> {
     return this.#request<{ readonly deleted: true }>("/api/account", {
       method: "DELETE",
+      body: JSON.stringify({ confirmation }),
     });
+  }
+
+  createAdminKitBatch(input: AdminKitBatchInput): Promise<GeneratedKitBatch> {
+    return this.#request<GeneratedKitBatch>("/api/admin/kits/batches", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  listAdminKits(params: AdminKitListParams = {}): Promise<AdminPage<AdminKitRecord>> {
+    return this.#request<AdminPage<AdminKitRecord>>(
+      queryPath("/api/admin/kits", {
+        q: params.q?.trim(),
+        state: params.state,
+        limit: params.limit,
+        offset: params.offset,
+      }),
+    );
+  }
+
+  revokeAdminKit(
+    kitId: string,
+    input: AdminKitRevocationInput,
+  ): Promise<AdminKitRevocationResult> {
+    return this.#request<AdminKitRevocationResult>(
+      `/api/admin/kits/${encodeURIComponent(kitId)}/revoke`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  searchAdminLearners(
+    params: AdminLearnerSearchParams = {},
+  ): Promise<AdminPage<AdminLearnerSummary>> {
+    return this.#request<AdminPage<AdminLearnerSummary>>(
+      queryPath("/api/admin/learners", {
+        q: params.q?.trim(),
+        limit: params.limit,
+        offset: params.offset,
+      }),
+    );
+  }
+
+  getAdminLearnerProgress(
+    learnerId: string,
+    params: AdminPageParams = {},
+  ): Promise<AdminLearnerProgress> {
+    return this.#request<AdminLearnerProgress>(
+      queryPath(`/api/admin/learners/${encodeURIComponent(learnerId)}/progress`, {
+        limit: params.limit,
+        offset: params.offset,
+      }),
+    );
+  }
+
+  listAdminCompileDiagnostics(
+    params: AdminCompileDiagnosticParams = {},
+  ): Promise<AdminPage<AdminCompileDiagnostic>> {
+    return this.#request<AdminPage<AdminCompileDiagnostic>>(
+      queryPath("/api/admin/compile-diagnostics", {
+        state: params.state,
+        errorCode: params.errorCode?.trim(),
+        limit: params.limit,
+        offset: params.offset,
+      }),
+    );
+  }
+
+  listAdminAudit(params: AdminAuditParams = {}): Promise<AdminPage<AdminAuditEntry>> {
+    return this.#request<AdminPage<AdminAuditEntry>>(
+      queryPath("/api/admin/audit", {
+        action: params.action?.trim(),
+        limit: params.limit,
+        offset: params.offset,
+      }),
+    );
   }
 }

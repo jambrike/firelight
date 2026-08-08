@@ -1,15 +1,17 @@
 # Firelight platform foundation
 
-Milestone 5 keeps the product split across five typed boundaries:
+Milestone 6 keeps the product split across six typed boundaries:
 
 - `src/` owns Supabase browser sessions, guarded routing, accessible account and
   activation flows, and synchronized learner views. It never receives a service key.
 - `worker/` owns `/api/*`, online bearer verification, request validation,
-  activation HMACs, Supabase data calls, account deletion, request IDs, security
-  headers, and legacy redirects. Credentials exist only as runtime bindings.
+  activation HMACs, role-checked support operations, Supabase data calls, exact
+  recent-session account deletion, request IDs, security headers, health/readiness,
+  redacted logs, and legacy redirects. Credentials exist only as runtime bindings.
 - `supabase/` owns relational invariants, atomic kit claims, RLS, grants, signup
   and deletion triggers, local configuration, and database tests.
-- `shared/` owns stable curriculum IDs and browser/Worker response contracts.
+- `shared/` owns stable curriculum IDs and browser/Worker response contracts,
+  including bounded support projections that never expose code HMACs or source.
 - `compiler-service/` owns the authenticated Lambda gateway plus pinned Arduino
   CLI image and private no-task-role Fargate service. Its `eu-west-1` Terraform
   provides a no-NAT VPC, internal ALB, endpoint-only egress, and exact IAM/SG rules.
@@ -22,6 +24,32 @@ remains authoritative. The Worker uses the service role only for service-only
 claim/hardware RPCs and Auth Admin deletion. Kit plaintext is normalized and
 HMACed before it reaches PostgreSQL; stored hashes are not redeemable through a
 browser RPC.
+
+`GET /api/account/export` is a dedicated learner-JWT path with a versioned shared
+schema. It reads strict owner-marked projections through PostgREST/RLS, verifies
+every returned owner ID, and includes every stored progress version, compile-job
+record, and browser-upload attestation within explicit bounds. Activation uses a
+separate owner-only RLS policy with column grants limited to ID, batch, kind, and
+claim time. The export excludes kit plaintext/HMACs, service credentials, raw
+source, and HEX artifacts. If any category exceeds its maximum or the response
+would exceed 4 MiB, the Worker fails the whole request instead of truncating it.
+
+Admin requests pass two authorization gates: the Worker reads the caller's own
+profile role through their JWT, then a service-only database RPC rechecks the
+actor's current admin role before returning a bounded projection or changing kit
+state. Batch plaintext exists only in the one generation response, paired with
+the database UUID needed to revoke that exact code; PostgreSQL receives only the
+UUID and peppered HMAC. Revocation and compile creation share a per-user
+transaction lock, so access cannot be revoked concurrently with a newly admitted
+compile job.
+
+Hosted configuration fails closed unless the Supabase URL matches the separately
+bound project reference, the compiler URL matches its separately bound origin and
+`eu-west-1` Function URL hostname, and `BUILD_ID` is a full lowercase commit SHA.
+Cloudflare automatic invocation logs and traces are disabled; the Worker emits a
+small redacted completion event. Release workflows use a dedicated activated
+canary account to prove config, authentication, bootstrap, and compilation after
+deployments and rollbacks.
 
 Compilation and Web Serial uploading use typed boundaries end to end. The Worker
 authenticates, validates, rate-gates, hashes, and records compile jobs before

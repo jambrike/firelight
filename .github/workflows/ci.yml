@@ -2,8 +2,7 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,33 +12,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  application:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run validate:lessons
       - run: npm run cf-typegen:check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npx wrangler deploy --dry-run
+      - run: npm audit --audit-level=high
+      - run: npx wrangler deploy --env staging --dry-run
+      - run: npx wrangler deploy --env production --dry-run
 
-  compiler-service:
+  database:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          python-version: "3.13"
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:start
+      - run: npm run db:reset
+      - run: npm run db:lint
+      - run: npm run db:test
+      - name: Stop local Supabase
+        if: always()
+        run: npm run db:stop
+
+  compiler-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -m compileall -q compiler-service
       - run: python -m unittest discover -s compiler-service/tests -p 'test_*.py'
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: 1.15.8
       - working-directory: compiler-service/terraform
@@ -48,4 +69,6 @@ jobs:
         run: terraform init -backend=false -input=false
       - working-directory: compiler-service/terraform
         run: terraform validate
+      - working-directory: compiler-service/terraform
+        run: terraform test
       - run: docker build --tag firelight-compiler:ci compiler-service

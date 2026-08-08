@@ -1,6 +1,23 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { curriculumLessons, findCurriculumLesson } from "../shared/curriculum";
+import {
+  ADMIN_KIT_BATCH_MAX_CODES,
+  ADMIN_PAGE_DEFAULT_LIMIT,
+  ADMIN_PAGE_MAX_LIMIT,
+  ADMIN_PAGE_MAX_OFFSET,
+} from "../shared/admin";
+import type {
+  AdminCompileState,
+  AdminKitCodeState,
+  AdminKitRevocationInput,
+} from "../shared/admin";
+import {
+  ACCOUNT_EXPORT_MAX_RESPONSE_BYTES,
+  ACCOUNT_EXPORT_SCHEMA,
+  ACCOUNT_EXPORT_SCHEMA_VERSION,
+  type AccountExport,
+} from "../shared/account-export";
 import type {
   Achievement,
   BootstrapData,
@@ -27,6 +44,13 @@ import {
   sha256Hex,
 } from "./compiler-gateway";
 import type { CompilerFetcher } from "./compiler-gateway";
+import {
+  CROCKFORD_KIT_CODE_PATTERN,
+  formatKitCode,
+  generateKitCodes,
+  hashKitCode,
+  hashKitCodes,
+} from "./kit-codes";
 import {
   createSupabaseIdentityRepository,
   RepositoryError,
@@ -94,6 +118,13 @@ const securityHeaders = {
 
 function isApiPath(path: string): boolean {
   return path === "/api" || path.startsWith("/api/");
+}
+
+function redactedLogPath(path: string): string {
+  return path.replace(
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
+    ":id",
+  );
 }
 
 function applyResponseHeaders(context: Context<FirelightWorker>): void {
@@ -179,6 +210,24 @@ function buildBootstrap(
   };
 }
 
+function buildAccountExport(
+  user: AuthenticatedUser,
+  records: Awaited<ReturnType<IdentityRepository["getAccountExport"]>>,
+): AccountExport {
+  return {
+    schema: ACCOUNT_EXPORT_SCHEMA,
+    version: ACCOUNT_EXPORT_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    data: {
+      profile: toLearnerProfile(user, records.profile),
+      activation: records.activation,
+      progress: records.progress,
+      compileJobs: records.compileJobs,
+      uploadEvidence: records.uploadEvidence,
+    },
+  };
+}
+
 function mapRepositoryError(error: RepositoryError): ApiRequestError {
   switch (error.kind) {
     case "unauthorized":
@@ -192,6 +241,12 @@ function mapRepositoryError(error: RepositoryError): ApiRequestError {
         400,
         "KIT_CODE_UNAVAILABLE",
         "That kit code is invalid or unavailable.",
+      );
+    case "export_too_large":
+      return new ApiRequestError(
+        409,
+        "ACCOUNT_EXPORT_TOO_LARGE",
+        "Your complete export is too large for self-service. Contact Firelight support.",
       );
     case "invalid":
       return new ApiRequestError(422, "DATA_REJECTED", "The saved data was rejected.");
@@ -274,12 +329,24 @@ function hasUnsupportedControlCharacter(value: string): boolean {
   return false;
 }
 
+function hasAnyControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function parseDisplayName(value: unknown): string {
   if (!isRecord(value) || typeof value.displayName !== "string") {
     throw new ApiRequestError(422, "DISPLAY_NAME_REQUIRED", "Enter a builder name.");
   }
   const displayName = value.displayName.trim();
-  if (Array.from(displayName).length < 1 || Array.from(displayName).length > 40) {
+  if (
+    Array.from(displayName).length < 1 ||
+    Array.from(displayName).length > 40 ||
+    hasAnyControlCharacter(displayName)
+  ) {
     throw new ApiRequestError(
       422,
       "DISPLAY_NAME_INVALID",
@@ -289,7 +356,6 @@ function parseDisplayName(value: unknown): string {
   return displayName;
 }
 
-const CROCKFORD_CODE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{16}$/;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -299,7 +365,7 @@ function normalizeKitCode(value: unknown): string {
     throw new ApiRequestError(422, "KIT_CODE_REQUIRED", "Enter the code from your kit.");
   }
   const normalized = value.code.toUpperCase().replace(/[ -]/g, "");
-  if (!CROCKFORD_CODE.test(normalized)) {
+  if (!CROCKFORD_KIT_CODE_PATTERN.test(normalized)) {
     throw new ApiRequestError(
       422,
       "KIT_CODE_FORMAT_INVALID",
@@ -309,26 +375,220 @@ function normalizeKitCode(value: unknown): string {
   return normalized;
 }
 
-async function hashKitCode(code: string, pepper: string): Promise<string> {
-  if (pepper.length < 16) {
+function configuredKitCodePepper(env: Env): string {
+  if (!hasRuntimeString(env.KIT_CODE_PEPPER) || env.KIT_CODE_PEPPER.length < 16) {
     throw new ApiRequestError(
       503,
       "KIT_SERVICE_UNAVAILABLE",
       "Kit activation is temporarily unavailable.",
     );
   }
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(pepper),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(code));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  return env.KIT_CODE_PEPPER;
+}
+
+function parseAccountDeletionInput(value: unknown): void {
+  if (!isRecord(value) || value.confirmation !== "DELETE") {
+    throw new ApiRequestError(
+      422,
+      "ACCOUNT_DELETE_CONFIRMATION_REQUIRED",
+      "Type DELETE to confirm permanent account deletion.",
+    );
+  }
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const supplied = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return supplied.length === expected.length &&
+    supplied.every((key, index) => key === expected[index]);
+}
+
+function adminSearchParams(
+  context: Context<FirelightWorker>,
+  allowedKeys: readonly string[],
+): URLSearchParams {
+  const params = new URL(context.req.url).searchParams;
+  const allowed = new Set(allowedKeys);
+  for (const key of new Set(params.keys())) {
+    if (!allowed.has(key) || params.getAll(key).length !== 1) {
+      throw new ApiRequestError(
+        422,
+        "QUERY_INVALID",
+        "The support-console query is invalid.",
+      );
+    }
+  }
+  return params;
+}
+
+function parseAdminPage(params: URLSearchParams): { readonly limit: number; readonly offset: number } {
+  const limitValue = params.get("limit");
+  const offsetValue = params.get("offset");
+  if (
+    (limitValue !== null && !/^[1-9][0-9]*$/.test(limitValue)) ||
+    (offsetValue !== null && !/^(0|[1-9][0-9]*)$/.test(offsetValue))
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PAGINATION_INVALID",
+      "Support-console pagination is invalid.",
+    );
+  }
+  const limit = limitValue === null ? ADMIN_PAGE_DEFAULT_LIMIT : Number(limitValue);
+  const offset = offsetValue === null ? 0 : Number(offsetValue);
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > ADMIN_PAGE_MAX_LIMIT ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > ADMIN_PAGE_MAX_OFFSET
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PAGINATION_INVALID",
+      `Pages contain 1 to ${String(ADMIN_PAGE_MAX_LIMIT)} records.`,
+    );
+  }
+  return { limit, offset };
+}
+
+function parseAdminQueryText(
+  params: URLSearchParams,
+  key: string,
+  maximumLength = 120,
+): string {
+  const value = (params.get(key) ?? "").trim();
+  if (Array.from(value).length > maximumLength || hasUnsupportedControlCharacter(value)) {
+    throw new ApiRequestError(
+      422,
+      "QUERY_INVALID",
+      "The support-console query is invalid.",
+    );
+  }
+  return value;
+}
+
+function parseAdminKitListQuery(context: Context<FirelightWorker>): {
+  readonly query: string;
+  readonly state: AdminKitCodeState | null;
+  readonly page: { readonly limit: number; readonly offset: number };
+} {
+  const params = adminSearchParams(context, ["q", "state", "limit", "offset"]);
+  const stateValue = params.get("state");
+  if (
+    stateValue !== null &&
+    stateValue !== "issued" &&
+    stateValue !== "claimed" &&
+    stateValue !== "revoked"
+  ) {
+    throw new ApiRequestError(422, "KIT_STATE_INVALID", "The kit state filter is invalid.");
+  }
+  return {
+    query: parseAdminQueryText(params, "q"),
+    state: stateValue,
+    page: parseAdminPage(params),
+  };
+}
+
+function parseAdminKitBatch(value: unknown): { readonly batch: string; readonly count: number } {
+  if (!isRecord(value) || !hasExactKeys(value, ["batch", "count"])) {
+    throw new ApiRequestError(
+      422,
+      "KIT_BATCH_INVALID",
+      "Provide a batch name and code count.",
+    );
+  }
+  const batch = typeof value.batch === "string" ? value.batch.trim() : "";
+  if (
+    Array.from(batch).length < 1 ||
+    Array.from(batch).length > 80 ||
+    hasUnsupportedControlCharacter(batch)
+  ) {
+    throw new ApiRequestError(
+      422,
+      "KIT_BATCH_INVALID",
+      "Batch names must contain 1 to 80 characters.",
+    );
+  }
+  if (
+    !Number.isSafeInteger(value.count) ||
+    Number(value.count) < 1 ||
+    Number(value.count) > ADMIN_KIT_BATCH_MAX_CODES
+  ) {
+    throw new ApiRequestError(
+      422,
+      "KIT_BATCH_COUNT_INVALID",
+      `Generate 1 to ${String(ADMIN_KIT_BATCH_MAX_CODES)} codes at a time.`,
+    );
+  }
+  return { batch, count: Number(value.count) };
+}
+
+function parseAdminRevocation(value: unknown): AdminKitRevocationInput["reason"] {
+  if (!isRecord(value) || !hasExactKeys(value, ["reason"])) {
+    throw new ApiRequestError(
+      422,
+      "REVOCATION_REASON_INVALID",
+      "Choose a valid kit-revocation reason.",
+    );
+  }
+  const reason = value.reason;
+  if (
+    reason !== "lost" &&
+    reason !== "damaged" &&
+    reason !== "support" &&
+    reason !== "security" &&
+    reason !== "other"
+  ) {
+    throw new ApiRequestError(
+      422,
+      "REVOCATION_REASON_INVALID",
+      "Choose a valid kit-revocation reason.",
+    );
+  }
+  return reason;
+}
+
+function parseAdminUuid(value: string, code: string, message: string): string {
+  if (!UUID_PATTERN.test(value)) {
+    throw new ApiRequestError(422, code, message);
+  }
+  return value;
+}
+
+function parseAdminCompileQuery(context: Context<FirelightWorker>): {
+  readonly state: AdminCompileState | null;
+  readonly errorCode: string | null;
+  readonly page: { readonly limit: number; readonly offset: number };
+} {
+  const params = adminSearchParams(context, ["state", "errorCode", "limit", "offset"]);
+  const state = params.get("state");
+  if (
+    state !== null &&
+    state !== "queued" &&
+    state !== "running" &&
+    state !== "succeeded" &&
+    state !== "failed"
+  ) {
+    throw new ApiRequestError(
+      422,
+      "COMPILE_STATE_INVALID",
+      "The compile-state filter is invalid.",
+    );
+  }
+  const errorCodeValue = params.get("errorCode");
+  const errorCode = errorCodeValue === null || errorCodeValue === ""
+    ? null
+    : errorCodeValue.trim();
+  if (errorCode !== null && !/^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)) {
+    throw new ApiRequestError(
+      422,
+      "COMPILE_ERROR_CODE_INVALID",
+      "The compile error-code filter is invalid.",
+    );
+  }
+  return { state, errorCode, page: parseAdminPage(params) };
 }
 
 function parseCompileInput(value: unknown): CompileSketchInput {
@@ -613,10 +873,101 @@ function hasCompletedCurrentLesson(
   );
 }
 
-function isRecentSignIn(lastSignInAt: string | null): boolean {
-  if (!lastSignInAt) return false;
-  const timestamp = Date.parse(lastSignInAt);
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= 15 * 60 * 1000;
+function runtimeIdentityConfigurationReady(env: Env): boolean {
+  if (
+    !hasRuntimeString(env.SUPABASE_URL) ||
+    !hasRuntimeString(env.SUPABASE_PROJECT_REF) ||
+    !hasRuntimeString(env.SUPABASE_PUBLISHABLE_KEY) ||
+    !hasRuntimeString(env.SUPABASE_SERVICE_ROLE_KEY)
+  ) {
+    return false;
+  }
+  try {
+    const environment: string = env.ENVIRONMENT;
+    const url = new URL(env.SUPABASE_URL);
+    if (environment === "development") {
+      return env.SUPABASE_PROJECT_REF === "local" &&
+        url.protocol === "http:" &&
+        (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
+        url.port.length > 0 &&
+        url.username.length === 0 &&
+        url.password.length === 0 &&
+        url.pathname === "/" &&
+        url.search.length === 0 &&
+        url.hash.length === 0;
+    }
+    return (environment === "staging" || environment === "production") &&
+      /^[a-z0-9]{20}$/.test(env.SUPABASE_PROJECT_REF) &&
+      url.protocol === "https:" &&
+      url.hostname === `${env.SUPABASE_PROJECT_REF}.supabase.co` &&
+      url.port.length === 0 &&
+      url.username.length === 0 &&
+      url.password.length === 0 &&
+      url.pathname === "/" &&
+      url.search.length === 0 &&
+      url.hash.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeCompilerConfigurationReady(env: Env): boolean {
+  if (
+    !hasRuntimeString(env.COMPILER_SERVICE_URL) ||
+    !hasRuntimeString(env.COMPILER_SERVICE_ORIGIN) ||
+    !hasRuntimeString(env.COMPILER_SERVICE_HOST) ||
+    !hasRuntimeString(env.COMPILER_SERVICE_TOKEN) ||
+    env.COMPILER_SERVICE_TOKEN.length < 32 ||
+    env.COMPILER_SERVICE_TOKEN.length > 512
+  ) {
+    return false;
+  }
+  try {
+    const environment: string = env.ENVIRONMENT;
+    const url = new URL(env.COMPILER_SERVICE_URL);
+    const origin = new URL(env.COMPILER_SERVICE_ORIGIN);
+    const exactOrigin = origin.origin === env.COMPILER_SERVICE_ORIGIN.replace(/\/$/, "") &&
+      origin.pathname === "/" &&
+      origin.search.length === 0 &&
+      origin.hash.length === 0 &&
+      origin.username.length === 0 &&
+      origin.password.length === 0;
+    if (!exactOrigin || url.origin !== origin.origin || url.hostname !== env.COMPILER_SERVICE_HOST) {
+      return false;
+    }
+    if (environment === "development") {
+      return url.protocol === "http:" &&
+        (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
+        url.port.length > 0 &&
+        url.username.length === 0 &&
+        url.password.length === 0 &&
+        url.pathname === "/" &&
+        url.search.length === 0 &&
+        url.hash.length === 0;
+    }
+    return (environment === "staging" || environment === "production") &&
+      url.protocol === "https:" &&
+      /^[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws$/.test(url.hostname) &&
+      url.port.length === 0 &&
+      url.username.length === 0 &&
+      url.password.length === 0 &&
+      url.pathname === "/" &&
+      url.search.length === 0 &&
+      url.hash.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeConfigurationReady(env: Env): boolean {
+  const buildIsValid = env.ENVIRONMENT === "development"
+    ? hasRuntimeString(env.BUILD_ID)
+    : /^[0-9a-f]{40}$/.test(env.BUILD_ID);
+  return buildIsValid &&
+    runtimeIdentityConfigurationReady(env) &&
+    runtimeCompilerConfigurationReady(env) &&
+    hasRuntimeString(env.KIT_CODE_PEPPER) &&
+    env.KIT_CODE_PEPPER.length >= 16;
 }
 
 export function createFirelightApp(dependencies: AppDependencies = {}) {
@@ -639,7 +990,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         event: "request.complete",
         requestId,
         method: context.req.method,
-        path: context.req.path,
+        path: redactedLogPath(context.req.path),
         status: context.res.status,
         durationMs: Date.now() - startedAt,
       }),
@@ -693,13 +1044,52 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     await next();
   };
 
+  const requireAdmin: MiddlewareHandler<FirelightWorker> = async (context, next) => {
+    const user = context.get("user");
+    if (!(await context.get("repository").isAdmin(user.id))) {
+      context.res = apiError(
+        context,
+        403,
+        "ADMIN_REQUIRED",
+        "Administrator access is required.",
+      );
+      return;
+    }
+    await next();
+  };
+
   app.use("*", requestContext);
   app.use("/api/*", sameOriginMutations);
 
+  app.get("/api/health", (context) => context.json({
+    data: {
+      status: "ok" as const,
+      environment: context.env.ENVIRONMENT,
+      buildId: context.env.BUILD_ID,
+    },
+  }));
+
+  app.get("/api/readiness", (context) => {
+    if (!runtimeConfigurationReady(context.env)) {
+      return apiError(
+        context,
+        503,
+        "SERVICE_NOT_READY",
+        "Firelight is not ready to accept application traffic.",
+      );
+    }
+    return context.json({
+      data: {
+        status: "ready" as const,
+        environment: context.env.ENVIRONMENT,
+        buildId: context.env.BUILD_ID,
+      },
+    });
+  });
+
   app.get("/api/config", (context) => {
     if (
-      !hasRuntimeString(context.env.SUPABASE_URL) ||
-      !hasRuntimeString(context.env.SUPABASE_PUBLISHABLE_KEY)
+      !runtimeIdentityConfigurationReady(context.env)
     ) {
       return apiError(
         context,
@@ -731,6 +1121,23 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     return context.json({ data: buildBootstrap(user, records) });
   });
 
+  app.get("/api/account/export", requireAuth, async (context) => {
+    const user = context.get("user");
+    const records = await context.get("repository").getAccountExport(user.id);
+    const accountExport = buildAccountExport(user, records);
+    const envelope = { data: accountExport };
+    if (
+      new TextEncoder().encode(JSON.stringify(envelope)).byteLength >
+        ACCOUNT_EXPORT_MAX_RESPONSE_BYTES
+    ) {
+      throw new RepositoryError(
+        "export_too_large",
+        "The complete account export exceeds the supported response size.",
+      );
+    }
+    return context.json(envelope);
+  });
+
   app.patch("/api/profile", requireAuth, async (context) => {
     const displayName = parseDisplayName(await readJsonBody(context, 2048));
     const user = context.get("user");
@@ -740,7 +1147,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
 
   app.post("/api/kits/claim", requireAuth, async (context) => {
     const code = normalizeKitCode(await readJsonBody(context, 2048));
-    const codeHash = await hashKitCode(code, context.env.KIT_CODE_PEPPER);
+    const codeHash = await hashKitCode(code, configuredKitCodePepper(context.env));
     const user = context.get("user");
     const activation = await context.get("repository").claimKit(user.id, codeHash);
     return context.json({ data: activation });
@@ -923,6 +1330,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         {
           url: context.env.COMPILER_SERVICE_URL,
           expectedOrigin: context.env.COMPILER_SERVICE_ORIGIN,
+          expectedHost: context.env.COMPILER_SERVICE_HOST,
           token: context.env.COMPILER_SERVICE_TOKEN,
           environment: context.env.ENVIRONMENT,
         },
@@ -1056,28 +1464,205 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     }
   });
 
-  app.delete("/api/account", requireAuth, async (context) => {
+  app.post(
+    "/api/admin/kits/batches",
+    requireAuth,
+    requireAdmin,
+    async (context) => {
+      adminSearchParams(context, []);
+      const input = parseAdminKitBatch(await readJsonBody(context, 2048));
+      const generatedCodes = generateKitCodes(input.count).map((code) => ({
+        id: crypto.randomUUID(),
+        canonicalCode: code,
+      }));
+      const codeHashes = await hashKitCodes(
+        generatedCodes.map((entry) => entry.canonicalCode),
+        configuredKitCodePepper(context.env),
+      );
+      const user = context.get("user");
+      const created = await context.get("repository").createAdminKitBatch(
+        user.id,
+        input.batch,
+        generatedCodes.map((entry) => entry.id),
+        codeHashes,
+      );
+      console.log(JSON.stringify({
+        event: "admin.write_complete",
+        action: "kit.batch_create",
+        requestId: context.get("requestId"),
+        count: created.count,
+      }));
+      return context.json({
+        data: {
+          batch: created.batch,
+          codes: generatedCodes.map((entry) => ({
+            id: entry.id,
+            code: formatKitCode(entry.canonicalCode),
+          })),
+          generatedAt: created.createdAt,
+        },
+      });
+    },
+  );
+
+  app.get("/api/admin/kits", requireAuth, requireAdmin, async (context) => {
+    const input = parseAdminKitListQuery(context);
     const user = context.get("user");
-    if (!isRecentSignIn(user.lastSignInAt)) {
+    const page = await context.get("repository").listAdminKits(
+      user.id,
+      input.query,
+      input.state,
+      input.page,
+    );
+    return context.json({ data: page });
+  });
+
+  app.post(
+    "/api/admin/kits/:id/revoke",
+    requireAuth,
+    requireAdmin,
+    async (context) => {
+      adminSearchParams(context, []);
+      const kitId = parseAdminUuid(
+        context.req.param("id"),
+        "KIT_ID_INVALID",
+        "The kit reference is invalid.",
+      );
+      const reason = parseAdminRevocation(await readJsonBody(context, 2048));
+      const user = context.get("user");
+      const result = await context.get("repository").revokeAdminKit(
+        user.id,
+        kitId,
+        reason,
+      );
+      if (!result) {
+        return apiError(context, 404, "KIT_NOT_FOUND", "That kit record does not exist.");
+      }
+      console.log(JSON.stringify({
+        event: "admin.write_complete",
+        action: "kit.revoke",
+        requestId: context.get("requestId"),
+        result: result.state,
+        accessRevoked: result.accessRevoked,
+      }));
+      return context.json({ data: result });
+    },
+  );
+
+  app.get("/api/admin/learners", requireAuth, requireAdmin, async (context) => {
+    const params = adminSearchParams(context, ["q", "limit", "offset"]);
+    const pageInput = parseAdminPage(params);
+    const user = context.get("user");
+    const page = await context.get("repository").listAdminLearners(
+      user.id,
+      parseAdminQueryText(params, "q"),
+      pageInput,
+    );
+    return context.json({ data: page });
+  });
+
+  app.get(
+    "/api/admin/learners/:id/progress",
+    requireAuth,
+    requireAdmin,
+    async (context) => {
+      const learnerId = parseAdminUuid(
+        context.req.param("id"),
+        "LEARNER_ID_INVALID",
+        "The learner reference is invalid.",
+      );
+      const params = adminSearchParams(context, ["limit", "offset"]);
+      const pageInput = parseAdminPage(params);
+      const repository = context.get("repository");
+      const user = context.get("user");
+      const [learnerPage, progress] = await Promise.all([
+        repository.listAdminLearners(user.id, learnerId, { limit: 1, offset: 0 }),
+        repository.listAdminProgress(user.id, learnerId, pageInput),
+      ]);
+      const learner = learnerPage.items[0];
+      if (learner?.id !== learnerId) {
+        return apiError(
+          context,
+          404,
+          "LEARNER_NOT_FOUND",
+          "That learner record does not exist.",
+        );
+      }
+      return context.json({ data: { learner, progress } });
+    },
+  );
+
+  app.get(
+    "/api/admin/compile-diagnostics",
+    requireAuth,
+    requireAdmin,
+    async (context) => {
+      const input = parseAdminCompileQuery(context);
+      const user = context.get("user");
+      const page = await context.get("repository").listAdminCompileDiagnostics(
+        user.id,
+        input.state,
+        input.errorCode,
+        input.page,
+      );
+      return context.json({ data: page });
+    },
+  );
+
+  app.get("/api/admin/audit", requireAuth, requireAdmin, async (context) => {
+    const params = adminSearchParams(context, ["action", "limit", "offset"]);
+    const actionValue = parseAdminQueryText(params, "action", 80).toLowerCase();
+    const action = actionValue.length > 0 ? actionValue : null;
+    if (action !== null && !/^[a-z][a-z0-9_.-]{1,79}$/.test(action)) {
+      throw new ApiRequestError(
+        422,
+        "AUDIT_ACTION_INVALID",
+        "The audit-action filter is invalid.",
+      );
+    }
+    const user = context.get("user");
+    const page = await context.get("repository").listAdminAudit(
+      user.id,
+      action,
+      parseAdminPage(params),
+    );
+    return context.json({ data: page });
+  });
+
+  app.delete("/api/account", requireAuth, async (context) => {
+    parseAccountDeletionInput(await readJsonBody(context, 1024));
+    const user = context.get("user");
+    const repository = context.get("repository");
+    if (!user.sessionId || !(await repository.hasRecentSession(user.id, user.sessionId))) {
       return apiError(
         context,
         403,
         "RECENT_SIGN_IN_REQUIRED",
-        "Sign out and sign in again before deleting this account.",
+        "Sign in again with your password before deleting this account.",
       );
     }
-    await context.get("repository").deleteAccount(user.id);
+    await repository.deleteAccount(user.id);
     return context.json({ data: { deleted: true } });
   });
 
   const methodRules = [
+    ["/api/health", "GET, HEAD"],
+    ["/api/readiness", "GET, HEAD"],
     ["/api/config", "GET, HEAD"],
     ["/api/bootstrap", "GET, HEAD"],
+    ["/api/account/export", "GET, HEAD"],
     ["/api/profile", "PATCH"],
     ["/api/kits/claim", "POST"],
     ["/api/lessons/:id/progress", "PUT"],
     ["/api/compile", "POST"],
     ["/api/hardware/upload-evidence", "POST"],
+    ["/api/admin/kits/batches", "POST"],
+    ["/api/admin/kits", "GET, HEAD"],
+    ["/api/admin/kits/:id/revoke", "POST"],
+    ["/api/admin/learners", "GET, HEAD"],
+    ["/api/admin/learners/:id/progress", "GET, HEAD"],
+    ["/api/admin/compile-diagnostics", "GET, HEAD"],
+    ["/api/admin/audit", "GET, HEAD"],
     ["/api/account", "DELETE"],
   ] as const;
 
@@ -1129,7 +1714,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         JSON.stringify({
           event: "repository.error",
           requestId: context.get("requestId"),
-          path: context.req.path,
+          path: redactedLogPath(context.req.path),
           kind: error.kind,
           upstreamCode: error.upstreamCode,
         }),
@@ -1145,7 +1730,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
           event: "request.error",
           requestId: context.get("requestId"),
           method: context.req.method,
-          path: context.req.path,
+          path: redactedLogPath(context.req.path),
           errorType: error.name,
         }),
       );

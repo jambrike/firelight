@@ -11,6 +11,7 @@ import {
 const config = {
   url: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws/",
   expectedOrigin: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
+  expectedHost: "abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
   token: "test-service-token-that-is-at-least-thirty-two-characters",
   environment: "production",
 } as const;
@@ -212,6 +213,7 @@ describe("compiler gateway", () => {
         {
           url: "http://compiler.test",
           expectedOrigin: "http://compiler.test",
+          expectedHost: "compiler.test",
           token: "short",
           environment: "production",
         },
@@ -255,6 +257,7 @@ describe("compiler gateway", () => {
       ...config,
       url: "http://127.0.0.1:9000/",
       expectedOrigin: "http://127.0.0.1:9000",
+      expectedHost: "127.0.0.1",
       environment: "development",
     };
 
@@ -283,6 +286,21 @@ describe("compiler gateway", () => {
       {
         ...config,
         url: "https://zyxwvutsrqponmlkjihg.lambda-url.eu-west-1.on.aws/",
+      },
+      source,
+      sourceHash,
+      fetcher,
+    )).rejects.toMatchObject({ kind: "configuration" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("binds the gateway URL to an independently configured exact host", async () => {
+    const sourceHash = await sha256Hex(source);
+    const fetcher = vi.fn(async () => Response.json({ ok: true }));
+    await expect(requestCompilation(
+      {
+        ...config,
+        expectedHost: "zyxwvutsrqponmlkjihg.lambda-url.eu-west-1.on.aws",
       },
       source,
       sourceHash,

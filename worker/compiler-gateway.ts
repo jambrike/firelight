@@ -29,6 +29,7 @@ export type CompilerFetcher = (request: Request) => Promise<Response>;
 export interface CompilerGatewayConfig {
   readonly url: string;
   readonly expectedOrigin: string;
+  readonly expectedHost: string;
   readonly token: string;
   readonly environment: string;
 }
@@ -63,7 +64,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function configuredUrl(value: string, expectedOrigin: string, environment: string): URL {
+function configuredUrl(
+  value: string,
+  expectedOrigin: string,
+  expectedHost: string,
+  environment: string,
+): URL {
   let parsed: URL;
   let expected: URL;
   try {
@@ -80,11 +86,15 @@ function configuredUrl(value: string, expectedOrigin: string, environment: strin
   const isDevelopmentLoopback =
     environment === "development" &&
     isLoopback &&
+    parsed.hostname === expectedHost &&
     parsed.protocol === "http:" &&
     parsed.port.length > 0;
   const isRegionalFunctionUrl =
+    (environment === "staging" || environment === "production") &&
     parsed.protocol === "https:" &&
     LAMBDA_FUNCTION_URL_HOST.test(parsed.hostname) &&
+    LAMBDA_FUNCTION_URL_HOST.test(expectedHost) &&
+    parsed.hostname === expectedHost &&
     parsed.port.length === 0;
   const expectedIsOriginOnly =
     expected.origin === expectedOrigin.replace(/\/$/, "") &&
@@ -336,7 +346,12 @@ export async function requestCompilation(
   expectedSourceHash: string,
   fetcher: CompilerFetcher = (request) => fetch(request),
 ): Promise<CompilerGatewayResult> {
-  const url = configuredUrl(config.url, config.expectedOrigin, config.environment);
+  const url = configuredUrl(
+    config.url,
+    config.expectedOrigin,
+    config.expectedHost,
+    config.environment,
+  );
   const token = configuredToken(config.token);
   if (!SHA256.test(expectedSourceHash)) {
     throw new CompilerGatewayError(

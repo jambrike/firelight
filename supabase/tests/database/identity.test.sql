@@ -446,7 +446,13 @@ select set_config(
   true
 );
 set local role authenticated;
-select is((select count(*) from public.admin_audit_log), 0::bigint, 'learner cannot read audit log');
+select throws_ok(
+  $$
+    select count(*) from public.admin_audit_log
+  $$,
+  '42501',
+  'learner has no direct audit-table access'
+);
 
 reset role;
 update public.profiles
@@ -454,7 +460,13 @@ set role = 'admin'
 where id = '22222222-2222-4222-8222-222222222222';
 
 set local role authenticated;
-select is((select count(*) from public.admin_audit_log), 2::bigint, 'admin can read audit log');
+select throws_ok(
+  $$
+    select count(*) from public.admin_audit_log
+  $$,
+  '42501',
+  'admin must use the bounded service-only audit RPC'
+);
 
 reset role;
 delete from auth.users

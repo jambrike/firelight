@@ -10,11 +10,13 @@ const repositoryEnv = {
   ENVIRONMENT: "development",
   BUILD_ID: "local",
   SUPABASE_URL: "http://127.0.0.1:54321",
+  SUPABASE_PROJECT_REF: "local",
   SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
   KIT_CODE_PEPPER: "firelight-local-kit-pepper",
   COMPILER_SERVICE_URL: "http://127.0.0.1:9000/",
   COMPILER_SERVICE_ORIGIN: "http://127.0.0.1:9000",
+  COMPILER_SERVICE_HOST: "127.0.0.1",
   COMPILER_SERVICE_TOKEN:
     "test-service-token-that-is-at-least-thirty-two-characters",
   ASSETS: exports.default,
@@ -395,6 +397,181 @@ describe("Supabase hardware lifecycle repository", () => {
   });
 });
 
+describe("Supabase account export repository", () => {
+  const activationId = "22222222-2222-4222-8222-222222222222";
+  const compileJobId = "33333333-3333-4333-8333-333333333333";
+  const evidenceId = "44444444-4444-4444-8444-444444444444";
+
+  function profileRow() {
+    return {
+      id: userId,
+      display_name: "Ada",
+      role: "learner",
+      access_source: "code",
+      access_granted_at: now,
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
+  function exportProgressRow(version: number, owner = userId) {
+    return {
+      user_id: owner,
+      lesson_id: "first-spark",
+      lesson_version: version,
+      revision: version,
+      status: "in_progress",
+      current_step: "edit-code",
+      percentage: 20,
+      code_snapshot: `// lesson version ${String(version)}`,
+      completion_evidence_id: null,
+      completed_at: null,
+      updated_at: now,
+    };
+  }
+
+  function exportFetcher(
+    requests: { url: URL; init: RequestInit }[],
+    progressRows: readonly unknown[] = [exportProgressRow(1), exportProgressRow(2)],
+    activationRows: readonly unknown[] = [{
+      id: activationId,
+      batch: "pilot-a",
+      kind: "code",
+      claimed_at: now,
+      code_hash: "must-not-cross-the-projection",
+    }],
+  ): RepositoryFetcher {
+    return vi.fn(async (url: URL, init: RequestInit) => {
+      requests.push({ url, init });
+      if (url.pathname === "/rest/v1/profiles") return Response.json([profileRow()]);
+      if (url.pathname === "/rest/v1/kit_codes") {
+        return Response.json(activationRows);
+      }
+      if (url.pathname === "/rest/v1/lesson_progress") {
+        return Response.json(progressRows);
+      }
+      if (url.pathname === "/rest/v1/compile_jobs") {
+        return Response.json([{
+          user_id: userId,
+          id: compileJobId,
+          lesson_id: "first-spark",
+          lesson_version: 2,
+          board_target: "arduino:avr:nano:cpu=atmega328old",
+          source_hash: "a".repeat(64),
+          state: "succeeded",
+          duration_ms: 500,
+          safe_error_code: null,
+          artifact_hash: "b".repeat(64),
+          diagnostic_summary: "Compilation completed.",
+          created_at: now,
+          started_at: now,
+          finished_at: now,
+          source: "must-not-cross-the-projection",
+        }]);
+      }
+      if (url.pathname === "/rest/v1/hardware_upload_evidence") {
+        return Response.json([{
+          user_id: userId,
+          id: evidenceId,
+          compile_job_id: compileJobId,
+          lesson_id: "first-spark",
+          lesson_version: 2,
+          source_hash: "a".repeat(64),
+          artifact_hash: "b".repeat(64),
+          bytes_written: 256,
+          attestation_kind: "browser-web-serial-v1",
+          recorded_at: now,
+          hex: "must-not-cross-the-projection",
+        }]);
+      }
+      throw new Error(`Unexpected export request ${url.pathname}`);
+    });
+  }
+
+  it("reads every owner dataset through the learner JWT with strict projections", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests),
+    );
+
+    const result = await repository.getAccountExport(userId);
+
+    expect(result.progress.map((row) => row.lessonVersion)).toEqual([1, 2]);
+    expect(result.activation).toMatchObject({ id: activationId, batch: "pilot-a" });
+    expect(result.compileJobs).toHaveLength(1);
+    expect(result.uploadEvidence).toHaveLength(1);
+    expect(result.activation).not.toHaveProperty("code_hash");
+    expect(result.compileJobs[0]).not.toHaveProperty("source");
+    expect(result.uploadEvidence[0]).not.toHaveProperty("hex");
+
+    expect(requests.map((request) => request.url.pathname).sort()).toEqual([
+      "/rest/v1/compile_jobs",
+      "/rest/v1/hardware_upload_evidence",
+      "/rest/v1/kit_codes",
+      "/rest/v1/lesson_progress",
+      "/rest/v1/profiles",
+    ]);
+    for (const request of requests) {
+      const headers = new Headers(request.init.headers);
+      expect(headers.get("authorization")).toBe("Bearer learner-token");
+      expect(headers.get("apikey")).toBe("test-publishable-key");
+    }
+    const kitRequest = requests.find((request) =>
+      request.url.pathname === "/rest/v1/kit_codes"
+    );
+    expect(kitRequest?.url.searchParams.get("select")).toBe("id,batch,kind,claimed_at");
+    expect(kitRequest?.url.href).not.toContain("code_hash");
+    for (const table of ["lesson_progress", "compile_jobs", "hardware_upload_evidence"]) {
+      const request = requests.find((item) => item.url.pathname.endsWith(`/${table}`));
+      expect(request?.url.searchParams.get("user_id")).toBe(`eq.${userId}`);
+    }
+  });
+
+  it("fails rather than truncating a complete export above its record bound", async () => {
+    const rows = Array.from({ length: 257 }, (_, index) =>
+      exportProgressRow((index % 1_000_000) + 1)
+    );
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher([], rows),
+    );
+
+    await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+      kind: "export_too_large",
+    });
+  });
+
+  it("rejects any projected row whose owner does not match the authenticated request", async () => {
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher([], [
+        exportProgressRow(1, "99999999-9999-4999-8999-999999999999"),
+      ]),
+    );
+
+    await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+      kind: "unavailable",
+    });
+  });
+
+  it("fails instead of silently omitting a code activation that the owner cannot read", async () => {
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher([], [], []),
+    );
+
+    await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+      kind: "unavailable",
+      message: "The learner activation is missing.",
+    });
+  });
+});
+
 describe("Supabase origin pinning", () => {
   it.each([
     "http://project.supabase.co",
@@ -428,6 +605,7 @@ describe("Supabase origin pinning", () => {
       ...repositoryEnv,
       ENVIRONMENT: "production",
       SUPABASE_URL: expectedOrigin,
+      SUPABASE_PROJECT_REF: "abcdefghijklmnopqrst",
     } as unknown as Env;
 
     expect(() => createSupabaseIdentityRepository(
@@ -437,6 +615,272 @@ describe("Supabase origin pinning", () => {
     expect(() => createSupabaseIdentityRepository(
       { ...productionEnv, SUPABASE_URL: "https://zyxwvutsrqponmlkjihg.supabase.co" },
       tokenFor(`${expectedOrigin}/auth/v1`),
-    )).toThrow("Session rejected.");
+    )).toThrow("Supabase is not configured.");
+  });
+});
+
+describe("Supabase recent-session verification", () => {
+  it("asks a service-only RPC about the exact authenticated session", async () => {
+    const sessionId = "55555555-5555-4555-8555-555555555555";
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const fetcher: RepositoryFetcher = vi.fn(async (url, init) => {
+      requests.push({ url, init });
+      return Response.json(true);
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      fetcher,
+    );
+
+    await expect(repository.hasRecentSession(userId, sessionId)).resolves.toBe(true);
+    expect(requests[0]?.url.pathname).toBe(
+      "/rest/v1/rpc/firelight_has_recent_session",
+    );
+    expect(parseRequestBody(requests[0]?.init.body)).toEqual({
+      p_user_id: userId,
+      p_session_id: sessionId,
+      p_max_age_seconds: 900,
+    });
+    const headers = new Headers(requests[0]?.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
+  });
+
+  it("fails closed when session freshness is not a boolean", async () => {
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      vi.fn(async () => Response.json({ recent: true })),
+    );
+
+    await expect(
+      repository.hasRecentSession(
+        userId,
+        "55555555-5555-4555-8555-555555555555",
+      ),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+  });
+});
+
+describe("Supabase admin operations repository", () => {
+  it("checks the authenticated account's own role before privileged RPCs", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const fetcher: RepositoryFetcher = vi.fn(async (url, init) => {
+      requests.push({ url, init });
+      return Response.json([{ role: "admin" }]);
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "admin-token",
+      fetcher,
+    );
+
+    await expect(repository.isAdmin(userId)).resolves.toBe(true);
+    expect(requests[0]?.url.pathname).toBe("/rest/v1/profiles");
+    expect(requests[0]?.url.searchParams.get("id")).toBe(`eq.${userId}`);
+    expect(new Headers(requests[0]?.init.headers).get("authorization")).toBe(
+      "Bearer admin-token",
+    );
+  });
+
+  it("uses service-only audited RPCs for batch creation and revocation", async () => {
+    const kitId = "44444444-4444-4444-8444-444444444444";
+    const codeIds = [
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+    ];
+    const hashes = ["a".repeat(64), "b".repeat(64)];
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const fetcher: RepositoryFetcher = vi.fn(async (url, init) => {
+      requests.push({ url, init });
+      if (url.pathname.endsWith("firelight_admin_create_kit_batch")) {
+        return Response.json({
+          result: "created",
+          batch: "pilot-a",
+          count: 2,
+          createdAt: now,
+        });
+      }
+      return Response.json({
+        result: "revoked",
+        id: kitId,
+        accessRevoked: true,
+        failedActiveCompileJobs: 1,
+        revokedAt: now,
+      });
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "admin-token",
+      fetcher,
+    );
+
+    await expect(
+      repository.createAdminKitBatch(userId, "pilot-a", codeIds, hashes),
+    ).resolves.toEqual({ batch: "pilot-a", count: 2, createdAt: now });
+    await expect(
+      repository.revokeAdminKit(userId, kitId, "security"),
+    ).resolves.toEqual({ id: kitId, state: "revoked", accessRevoked: true });
+
+    expect(requests.map((request) => request.url.pathname)).toEqual([
+      "/rest/v1/rpc/firelight_admin_create_kit_batch",
+      "/rest/v1/rpc/firelight_admin_revoke_kit",
+    ]);
+    expect(parseRequestBody(requests[0]?.init.body)).toEqual({
+      p_actor_id: userId,
+      p_batch: "pilot-a",
+      p_code_ids: codeIds,
+      p_code_hashes: hashes,
+    });
+    expect(parseRequestBody(requests[1]?.init.body)).toEqual({
+      p_actor_id: userId,
+      p_kit_id: kitId,
+      p_reason: "security",
+    });
+    for (const request of requests) {
+      expect(new Headers(request.init.headers).get("authorization")).toBe(
+        "Bearer test-service-role-key",
+      );
+    }
+  });
+
+  it("parses bounded support projections and drops non-contract fields", async () => {
+    const learnerId = "66666666-6666-4666-8666-666666666666";
+    const kitId = "44444444-4444-4444-8444-444444444444";
+    const jobId = "55555555-5555-4555-8555-555555555555";
+    const fetcher: RepositoryFetcher = vi.fn(async (url) => {
+      if (url.pathname.endsWith("firelight_admin_list_kits")) {
+        return Response.json({
+          items: [{
+            id: kitId,
+            batch: "pilot-a",
+            state: "claimed",
+            claimedBy: learnerId,
+            claimedAt: now,
+            revokedAt: null,
+            createdAt: now,
+            codeHash: "a".repeat(64),
+          }],
+          hasMore: true,
+        });
+      }
+      if (url.pathname.endsWith("firelight_admin_list_learners")) {
+        return Response.json({
+          items: [{
+            id: learnerId,
+            email: "grace@example.com",
+            displayName: "Grace",
+            role: "learner",
+            accessSource: "code",
+            activationBatch: "pilot-a",
+            completedLessons: 1,
+            progressRecords: 2,
+            createdAt: now,
+            updatedAt: now,
+          }],
+          hasMore: false,
+        });
+      }
+      if (url.pathname.endsWith("firelight_admin_list_progress")) {
+        return Response.json({
+          items: [{
+            lessonId: "first-spark",
+            lessonVersion: 1,
+            status: "completed",
+            currentStep: "complete",
+            percentage: 100,
+            completedAt: now,
+            updatedAt: now,
+            codeSnapshot: "must not leave the database projection",
+          }],
+          hasMore: false,
+        });
+      }
+      if (url.pathname.endsWith("firelight_admin_list_compile_jobs")) {
+        return Response.json({
+          items: [{
+            id: jobId,
+            userId: learnerId,
+            lessonId: "first-spark",
+            lessonVersion: 1,
+            state: "failed",
+            durationMs: 250,
+            safeErrorCode: "COMPILER_FAILED",
+            diagnosticSummary: "Expected a semicolon.",
+            createdAt: now,
+            finishedAt: now,
+            sourceHash: "a".repeat(64),
+          }],
+          hasMore: false,
+        });
+      }
+      return Response.json({
+        items: [{
+          id: 1,
+          actorId: userId,
+          action: "kit.revoke",
+          targetType: "kit",
+          targetId: kitId,
+          metadata: { reason: "security" },
+          createdAt: now,
+        }],
+        hasMore: false,
+      });
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "admin-token",
+      fetcher,
+    );
+    const page = { limit: 10, offset: 20 };
+
+    const kits = await repository.listAdminKits(userId, "pilot", "claimed", page);
+    const learners = await repository.listAdminLearners(userId, "Grace", page);
+    const progress = await repository.listAdminProgress(userId, learnerId, page);
+    const diagnostics = await repository.listAdminCompileDiagnostics(
+      userId,
+      "failed",
+      "COMPILER_FAILED",
+      page,
+    );
+    const audit = await repository.listAdminAudit(userId, "kit.revoke", page);
+
+    expect(kits.nextOffset).toBe(30);
+    expect(kits.items[0]).not.toHaveProperty("codeHash");
+    expect(learners.items[0]).toMatchObject({ id: learnerId, displayName: "Grace" });
+    expect(progress.items[0]).not.toHaveProperty("codeSnapshot");
+    expect(diagnostics.items[0]).not.toHaveProperty("sourceHash");
+    expect(audit.items[0]).toMatchObject({ action: "kit.revoke" });
+  });
+
+  it("fails closed on oversized or malformed support projections", async () => {
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "admin-token",
+      vi.fn(async () => Response.json({
+        items: [{
+          id: "55555555-5555-4555-8555-555555555555",
+          userId,
+          lessonId: "first-spark",
+          lessonVersion: 1,
+          state: "failed",
+          durationMs: 60_001,
+          safeErrorCode: "COMPILER_FAILED",
+          diagnosticSummary: "bounded",
+          createdAt: now,
+          finishedAt: now,
+        }],
+        hasMore: false,
+      })),
+    );
+
+    await expect(
+      repository.listAdminCompileDiagnostics(
+        userId,
+        "failed",
+        null,
+        { limit: 10, offset: 0 },
+      ),
+    ).rejects.toMatchObject({ kind: "unavailable" });
   });
 });
