@@ -4,7 +4,7 @@ Firelight is a pixel-campfire robotics learning platform for a controlled Arduin
 Nano starter kit. The current foundation is a React 19 + TypeScript + Vite single
 page application backed by a Hono Cloudflare Worker and Workers Static Assets.
 
-## Milestone 4 status
+## Milestone 5 status
 
 Implemented:
 
@@ -27,13 +27,17 @@ Implemented:
   validation, quizzes, parts, pins, safety guidance, troubleshooting, authenticated
   compilation, Web Serial connection, verified upload, serial observation, and
   evidence-backed completion.
-- Six versioned structured lesson shells targeting
-  `arduino:avr:nano:cpu=atmega328old` at 57,600 baud, with fixed pin maps and
-  every narrative, wiring, code, knowledge, hardware, observation, and
-  completion step type represented.
+- Six complete, versioned pilot lessons targeting
+  `arduino:avr:nano:cpu=atmega328old` at 57,600 baud: First Spark, personalized
+  Morse Name, Button Reaction on D2, Distance Scout on D9/D10, Servo Gate on D6,
+  and the TB6612FNG/HC-SR04 Trail Rover on D3–D10/D12. Each includes controlled
+  parts, wiring and power guidance, editable source, knowledge checks, hardware
+  and observation gates, troubleshooting, and an evidence-backed checkpoint.
 - Runtime and build-time catalog validation for shared route/schema drift,
   duplicate IDs, prerequisite cycles, bad step references, unsupported pins,
-  and missing accessible labels.
+  missing accessible labels, compiler-policy drift, and semantically invalid
+  starter sketches. Lesson validators ignore comments and literals and reject
+  task-specific near misses.
 - Current-version prerequisite locking, accurate map/dashboard derivations,
   exact step/code resume, and public read-only lesson previews.
 - Debounced autosave with offline recovery, bounded transient retries,
@@ -60,11 +64,15 @@ Implemented:
 - Strict TypeScript, type-aware ESLint, browser unit tests, Workers-runtime tests,
   a production build, and a pull-request CI gate.
 
-Intentionally deferred to later milestones: final curriculum content and diagrams,
-physical validation of all six builds across the acceptance matrix, admin mutations
-and kit-batch tooling, and deployment automation. Browser upload evidence is an
-honest authenticated browser assertion, not cryptographic telemetry signed by the
-board; see `docs/hardware-pipeline.md` before pilot rollout.
+Intentionally deferred to later milestones: physical validation of all six builds
+across the documented browser/OS/kit acceptance matrix, procurement/electrical
+signoff of the exact servo supply, rover motor pack, TT motors, and TB6612FNG
+carrier, admin mutations and kit-batch tooling, and deployment automation. The
+servo and rover must not be powered until that controlled BOM is signed. Browser
+upload evidence is an honest authenticated browser assertion, not cryptographic
+telemetry signed by the board;
+see `docs/hardware-pipeline.md` and `docs/curriculum-verification.md` before pilot
+rollout.
 
 ## Commands
 
@@ -73,6 +81,7 @@ npm install
 npm run dev            # Vite UI development
 npm run dev:worker     # Full local Worker after a UI build
 npm run validate:lessons # Execute catalog/schema validation
+npm run verify:arduino  # Compile all lesson sketches when pinned arduino-cli is installed
 npm run db:start       # Start the local Supabase stack (Docker required)
 npm run db:reset       # Apply migrations and the local-only seed
 npm run db:test        # Run pgTAP RLS/migration tests
@@ -106,6 +115,8 @@ Worker secrets; never commit them or add them to `vars`.
 - `prototype-archive/` — exact checkpoint reference from commit `98ff7fc`.
 - `docs/architecture.md` — milestone boundaries and local workflow.
 - `docs/hardware-pipeline.md` — compile/upload trust model, operations, and gates.
+- `docs/curriculum-verification.md` — deterministic checks, unresolved actuator-power
+  BOM gate, and physical acceptance matrix.
 
 See `docs/identity.md`, `docs/lessons.md`, `docs/hardware-pipeline.md`, and
 `docs/compiler-service.md` before applying these migrations to staging. No deploy,

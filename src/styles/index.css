@@ -1268,46 +1268,71 @@ code,
   gap: 0.7rem;
 }
 
-.wiring-diagram {
-  position: relative;
+.wiring-map {
   display: grid;
-  min-height: 13rem;
+  gap: 0.7rem;
   padding: var(--space-3);
-  grid-template-columns: 1fr 1fr;
-  place-items: center;
-  overflow: hidden;
   border: 3px solid rgba(95, 167, 160, 0.5);
   background:
-    linear-gradient(90deg, transparent 49.5%, rgba(255, 198, 64, 0.35) 50% 51%, transparent 51.5%),
     repeating-linear-gradient(0deg, rgba(3, 6, 17, 0.94) 0 22px, rgba(95, 167, 160, 0.08) 23px 24px);
+}
+
+.wiring-map__description {
+  margin: 0;
   color: var(--cream-100);
+}
+
+.wiring-map table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: rgba(2, 5, 10, 0.86);
+}
+
+.wiring-map caption {
+  padding: 0 0 0.55rem;
+  color: var(--gold-300);
   font-family: var(--font-pixel);
-  font-size: 0.62rem;
+  font-size: 0.55rem;
+  line-height: 1.6;
+  text-align: left;
 }
 
-.wiring-diagram span,
-.wiring-diagram b {
-  display: grid;
-  width: 6rem;
-  height: 8rem;
-  place-items: center;
-  border: 3px solid var(--teal-400);
-  background: var(--night-800);
-  box-shadow: inset 0 0 0 5px rgba(0, 0, 0, 0.35);
+.wiring-map th,
+.wiring-map td {
+  padding: 0.65rem;
+  border: 1px solid rgba(95, 167, 160, 0.35);
+  color: var(--cream-muted);
+  font-family: var(--font-readable);
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+  text-align: left;
+  vertical-align: top;
 }
 
-.wiring-diagram b {
-  width: 6.5rem;
-  height: 5rem;
-  border-color: var(--gold-400);
+.wiring-map thead th {
+  color: var(--cream-100);
+  font-size: 0.95rem;
 }
 
-.wiring-diagram i {
-  position: absolute;
-  width: 24%;
-  height: 3px;
-  background: var(--ember-500);
-  box-shadow: 0 12px 0 var(--teal-400), 0 -12px 0 var(--gold-400);
+.wiring-map tbody th {
+  width: 50%;
+  color: var(--cream-100);
+  font-weight: 400;
+}
+
+.wiring-map th small,
+.wiring-map > small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--cream-muted);
+  font-size: 0.95rem;
+  font-weight: 400;
+}
+
+.wiring-map code {
+  color: var(--gold-300);
+  font-size: 0.85rem;
 }
 
 .code-workbench > label {
@@ -1951,6 +1976,7 @@ label.identity-form input {
   .panel,
   .feature-placeholder,
   .lesson-card,
+  .wiring-map,
   .pixel-button,
   .camp-scene {
     border: 3px solid CanvasText;

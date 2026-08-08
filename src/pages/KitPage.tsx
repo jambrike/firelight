@@ -12,7 +12,7 @@ const kitContents = [
   "HC-SR04 ultrasonic distance sensor",
   "SG90 micro servo",
   "TB6612FNG motor driver, two TT motors, wheels, and caster",
-  "Separate motor battery pack and regulated 5V servo supply guidance",
+  "Firelight-supplied regulated 5V, 1 A-or-greater servo supply and switched motor pack (exact models and connectors pending signed electrical BOM)",
 ] as const;
 
 export function KitPage() {

@@ -10,6 +10,7 @@
     "dev": "vite",
     "dev:worker": "npm run build && wrangler dev",
     "validate:lessons": "node scripts/validate-lessons.mjs",
+    "verify:arduino": "node scripts/compile-lessons.mjs",
     "prebuild": "npm run validate:lessons",
     "build": "vite build",
     "typecheck": "tsc -b",

@@ -31,6 +31,8 @@ export const lessonCatalogValidationCodes = [
   "DUPLICATE_QUIZ_CHOICE",
   "INVALID_QUIZ_CHOICE_REFERENCE",
   "INVALID_SERIAL_BAUD",
+  "MISSING_REQUIRED_STEP_TYPE",
+  "INVALID_COMPLETION_CHECKPOINT",
   "UNSUPPORTED_PIN",
   "ACCESSIBLE_LABEL_REQUIRED",
 ] as const;
@@ -243,6 +245,65 @@ function validateStepGraph(
       );
     }
   });
+
+  const requiredStepTypes = [
+    "narrative",
+    "wiring",
+    "code-edit",
+    "code-validation",
+    "quiz",
+    "compile",
+    "connect",
+    "upload",
+    "manual-observation",
+    "completion",
+  ] as const satisfies readonly LessonStepType[];
+  for (const requiredType of requiredStepTypes) {
+    if (!lesson.steps.some((step) => step.type === requiredType)) {
+      issue(
+        issues,
+        "MISSING_REQUIRED_STEP_TYPE",
+        `lessons[${lesson.id}].steps`,
+        `Lesson "${lesson.id}" needs a ${requiredType} step.`,
+      );
+    }
+  }
+
+  const completionIndexes = lesson.steps
+    .map((step, index) => (step.type === "completion" ? index : -1))
+    .filter((index) => index >= 0);
+  if (
+    completionIndexes.length !== 1 ||
+    completionIndexes[0] !== lesson.steps.length - 1
+  ) {
+    issue(
+      issues,
+      "INVALID_COMPLETION_CHECKPOINT",
+      `lessons[${lesson.id}].steps`,
+      `Lesson "${lesson.id}" needs exactly one final completion step.`,
+    );
+  }
+
+  const completion = lesson.steps.find((step) => step.type === "completion");
+  if (completion?.type === "completion") {
+    const requiredIds = new Set(completion.requiredStepIds);
+    const checkpointSteps = lesson.steps.filter((step) =>
+      step.type === "quiz" ||
+      step.type === "upload" ||
+      step.type === "serial-check" ||
+      step.type === "manual-observation"
+    );
+    for (const checkpoint of checkpointSteps) {
+      if (!requiredIds.has(checkpoint.id)) {
+        issue(
+          issues,
+          "INVALID_COMPLETION_CHECKPOINT",
+          `lessons[${lesson.id}].steps[${String(completionIndexes[0] ?? 0)}].requiredStepIds`,
+          `Completion must require the ${checkpoint.type} step "${checkpoint.id}".`,
+        );
+      }
+    }
+  }
 }
 
 function validatePrerequisiteCycles(

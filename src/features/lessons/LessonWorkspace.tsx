@@ -28,6 +28,7 @@ import {
   getCurrentLessonProgress,
 } from "./derivations";
 import { LessonStepContent } from "./LessonStepContent";
+import { createMorseNameStarterCode } from "./morse";
 
 function findSavedStepIndex(
   lesson: LessonCatalogEntry,
@@ -55,6 +56,9 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
     prerequisiteState.satisfied;
   const draftOwnerId = identity.data?.profile.id ?? null;
   const completionScope = `${draftOwnerId ?? "anonymous"}:${lesson.id}:${String(lesson.version)}`;
+  const personalizedStarterCode = lesson.id === "morse-name"
+    ? createMorseNameStarterCode(identity.data?.profile.displayName ?? "")
+    : lesson.starterCode;
   const [queuedCompletionScope, setQueuedCompletionScope] = useState<string | null>(null);
   const initialStepIndex = findSavedStepIndex(lesson, savedProgress);
   const [displayStepIndex, setDisplayStepIndex] = useState(initialStepIndex);
@@ -62,7 +66,11 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
   const [checkpointPercentage, setCheckpointPercentage] = useState(
     savedProgress?.percentage ?? percentageAt(initialStepIndex, lesson.steps.length),
   );
-  const [code, setCode] = useState(savedProgress?.codeSnapshot ?? lesson.starterCode);
+  const [code, setCode] = useState(
+    savedProgress?.codeSnapshot ?? personalizedStarterCode,
+  );
+  const hasEditedCodeRef = useRef(false);
+  const lastPersonalizedStarterRef = useRef(personalizedStarterCode);
   const [validation, setValidation] = useState<CodeValidationResult | null>(null);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [quizChecked, setQuizChecked] = useState(false);
@@ -132,6 +140,37 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
     autosave.status.restoredDraft?.status === "completed";
   const canModify = canRecord && !isCompleted;
 
+  useEffect(() => {
+    if (lastPersonalizedStarterRef.current === personalizedStarterCode) return;
+    lastPersonalizedStarterRef.current = personalizedStarterCode;
+    if (
+      lesson.id !== "morse-name" ||
+      savedProgress !== null ||
+      autosave.status.restoredDraft !== null ||
+      hasEditedCodeRef.current
+    ) {
+      return;
+    }
+    setCode(personalizedStarterCode);
+    if (canModify && queuedInitialRef.current) {
+      queueAutosave({
+        status: "in_progress",
+        currentStep: lesson.steps[checkpointStepIndex]?.id ?? lesson.steps[0]?.id ?? "meet-the-build",
+        percentage: checkpointPercentage,
+        codeSnapshot: personalizedStarterCode,
+      });
+    }
+  }, [
+    autosave.status.restoredDraft,
+    canModify,
+    checkpointPercentage,
+    checkpointStepIndex,
+    lesson,
+    personalizedStarterCode,
+    queueAutosave,
+    savedProgress,
+  ]);
+
   /* eslint-disable react-hooks/set-state-in-effect -- A durable external-store snapshot must hydrate the editable workspace before input. */
   useEffect(() => {
     const restored = autosave.status.restoredDraft;
@@ -149,7 +188,8 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
     setCheckpointStepIndex(restoredIndex);
     setCheckpointPercentage(restored.percentage);
     if (Object.prototype.hasOwnProperty.call(restored, "codeSnapshot")) {
-      setCode(restored.codeSnapshot ?? lesson.starterCode);
+      setCode(restored.codeSnapshot ?? personalizedStarterCode);
+      hasEditedCodeRef.current = restored.codeSnapshot !== null;
     }
     setValidation(null);
     setSelectedChoice(null);
@@ -158,7 +198,7 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
       const end = restored.status === "completed" ? lesson.steps.length : restoredIndex;
       return new Set(lesson.steps.slice(0, end).map((item) => item.id));
     });
-  }, [autosave.status.restoredDraft, lesson]);
+  }, [autosave.status.restoredDraft, lesson, personalizedStarterCode]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -173,7 +213,8 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
     setDisplayStepIndex(resumedIndex);
     setCheckpointStepIndex(resumedIndex);
     setCheckpointPercentage(savedProgress.percentage);
-    setCode(savedProgress.codeSnapshot ?? lesson.starterCode);
+    setCode(savedProgress.codeSnapshot ?? personalizedStarterCode);
+    hasEditedCodeRef.current = savedProgress.codeSnapshot !== null;
     setValidation(null);
     setSelectedChoice(null);
     setQuizChecked(false);
@@ -181,7 +222,7 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
       const end = savedProgress.status === "completed" ? lesson.steps.length : resumedIndex;
       return new Set(lesson.steps.slice(0, end).map((item) => item.id));
     });
-  }, [autosave.status.dirty, lesson, savedProgress]);
+  }, [autosave.status.dirty, lesson, personalizedStarterCode, savedProgress]);
 
   const queueProgress = (draft: ProgressDraft) => {
     if (!canModify) return;
@@ -197,9 +238,16 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
       status: "in_progress",
       currentStep: firstStep.id,
       percentage: 0,
-      codeSnapshot: code,
+      codeSnapshot: hasEditedCodeRef.current ? code : personalizedStarterCode,
     });
-  }, [canModify, code, lesson.steps, queueAutosave, savedProgress]);
+  }, [
+    canModify,
+    code,
+    lesson.steps,
+    personalizedStarterCode,
+    queueAutosave,
+    savedProgress,
+  ]);
 
   const step = lesson.steps[displayStepIndex] ?? lesson.steps[0];
   if (!step) return null;
@@ -386,6 +434,7 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
               hardwareMessage={hardwareMessage}
               observationConfirmed={observedStepIds.has(step.id)}
               onCodeChange={(value) => {
+                hasEditedCodeRef.current = true;
                 setCode(value);
                 setValidation(null);
                 setObservedStepIds(new Set());

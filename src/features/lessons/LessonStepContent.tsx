@@ -119,10 +119,34 @@ export function LessonStepContent({
     case "wiring":
       return (
         <div className="wiring-step">
-          <div className="wiring-diagram" role="img" aria-label={step.diagramAlt}>
-            <span aria-hidden="true">NANO</span>
-            <i aria-hidden="true" />
-            <b aria-hidden="true">BUILD</b>
+          <div className="wiring-map">
+            <p className="wiring-map__description">{step.diagramAlt}</p>
+            <table>
+              <caption>Verified signal connection map</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Component</th>
+                  <th scope="col">Signal</th>
+                  <th scope="col">Nano pin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lesson.pinAssignments.map((assignment) => (
+                  <tr key={`${assignment.component}-${assignment.signal}-${assignment.pin}`}>
+                    <th scope="row">
+                      {assignment.component}
+                      {assignment.note ? <small>{assignment.note}</small> : null}
+                    </th>
+                    <td>{assignment.signal}</td>
+                    <td><code>{assignment.pin}</code></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <small>
+              This map covers controlled signal pins. Follow every ordered step below for
+              power, ground, and disconnect instructions.
+            </small>
           </div>
           <ol>
             {step.instructions.map((instruction) => (

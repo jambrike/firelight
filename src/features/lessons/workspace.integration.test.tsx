@@ -37,6 +37,7 @@ import {
 } from "../identity/identity-context";
 import type { IdentityContextValue } from "../identity/identity-context";
 import { findLesson } from "./catalog";
+import { createMorseNameStarterCode } from "./morse";
 
 const timestamp = "2026-08-07T14:00:00.000Z";
 
@@ -255,6 +256,21 @@ describe("lesson workspace integration", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/auth");
     expect(screen.getByRole("button", { name: "Next step" })).toBeDisabled();
 
+    await user.click(stepButton("Follow the wiring instructions"));
+    const firstSparkWiring = findLesson("first-spark")?.steps.find(
+      (step) => step.type === "wiring",
+    );
+    expect(firstSparkWiring?.type).toBe("wiring");
+    const signalMap = screen.getByRole("table", {
+      name: "Verified signal connection map",
+    });
+    expect(screen.getByText(firstSparkWiring?.diagramAlt ?? "missing wiring description"))
+      .toBeVisible();
+    expect(within(signalMap).getByRole("columnheader", { name: "Nano pin" }))
+      .toBeInTheDocument();
+    expect(within(signalMap).getByRole("cell", { name: "LED_BUILTIN" }))
+      .toBeInTheDocument();
+
     await user.click(stepButton("Edit the Arduino sketch"));
     expect(screen.getByLabelText("Arduino sketch")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Arduino sketch")).toBeEnabled();
@@ -302,6 +318,25 @@ describe("lesson workspace integration", () => {
 
     await user.click(stepButton("Edit the Arduino sketch"));
     expect(screen.getByLabelText("Arduino sketch")).toHaveAttribute("readonly");
+  });
+
+  it("personalizes untouched Morse source from the learner profile without injecting raw text", async () => {
+    const user = userEvent.setup();
+    const firstSpark = progressRecord("first-spark", "finish-lesson", {
+      status: "completed",
+      percentage: 100,
+    });
+    const data = bootstrap([firstSpark]);
+    const identity = authenticatedIdentity({
+      ...data,
+      profile: { ...data.profile, displayName: "Zoë 7" },
+    });
+    renderLesson("morse-name", identity);
+
+    await user.click(stepButton("Edit the Arduino sketch"));
+    const editor = screen.getByLabelText("Arduino sketch");
+    expect(editor).toHaveValue(createMorseNameStarterCode("Zoë 7"));
+    expect((editor as HTMLTextAreaElement).value).not.toContain("Zoë 7");
   });
 
   it("resumes the current step and code snapshot with accessible controls", () => {
@@ -552,8 +587,14 @@ describe("lesson workspace integration", () => {
     await user.click(screen.getByRole("button", { name: "Return to checkpoint" }));
     await user.click(screen.getByRole("button", { name: "Check my code" }));
 
+    const validationStep = lesson.steps.find(
+      (step) => step.type === "code-validation",
+    );
+    expect(validationStep?.type).toBe("code-validation");
     expect(
-      screen.getByText("The LED output and safe matching delays are ready to compile."),
+      screen.getByText(
+        validationStep?.successMessage ?? "missing validation success message",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next step" })).toBeEnabled();
   });

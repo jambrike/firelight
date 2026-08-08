@@ -1,6 +1,6 @@
 # Firelight platform foundation
 
-Milestone 4 keeps the product split across five typed boundaries:
+Milestone 5 keeps the product split across five typed boundaries:
 
 - `src/` owns Supabase browser sessions, guarded routing, accessible account and
   activation flows, and synchronized learner views. It never receives a service key.

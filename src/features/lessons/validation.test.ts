@@ -157,6 +157,42 @@ describe("lesson catalog validation", () => {
     expect(validationCodes([invalid])).toContain("INVALID_SERIAL_BAUD");
   });
 
+  it("requires the complete lesson flow and evidence-bearing completion checkpoints", () => {
+    const first = lessonCatalog[0];
+    if (!first) return;
+
+    const missingObservation = {
+      ...first,
+      steps: first.steps.filter((step) => step.type !== "manual-observation"),
+    };
+    expect(validationCodes([missingObservation])).toContain("MISSING_REQUIRED_STEP_TYPE");
+
+    const missingUploadCheckpoint = {
+      ...first,
+      steps: first.steps.map((step): LessonStep =>
+        step.type === "completion"
+          ? {
+              ...step,
+              requiredStepIds: step.requiredStepIds.filter(
+                (id) => id !== "upload-sketch",
+              ),
+            }
+          : step,
+      ),
+    };
+    expect(validationCodes([missingUploadCheckpoint]))
+      .toContain("INVALID_COMPLETION_CHECKPOINT");
+
+    const completion = first.steps.at(-1);
+    if (completion?.type !== "completion") return;
+    const nonFinalCompletion = {
+      ...first,
+      steps: [...first.steps.slice(0, -2), completion, first.steps.at(-2)!],
+    };
+    expect(validationCodes([nonFinalCompletion]))
+      .toContain("INVALID_COMPLETION_CHECKPOINT");
+  });
+
   it("throws a diagnostic error from the build/runtime assertion", () => {
     const first = lessonCatalog[0];
     if (!first) return;
