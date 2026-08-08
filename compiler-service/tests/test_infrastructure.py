@@ -18,6 +18,7 @@ class IsolationInfrastructureTests(unittest.TestCase):
         cls.main = read("main.tf")
         cls.network = read("network.tf")
         cls.iam = read("iam.tf")
+        cls.monitoring = read("monitoring.tf")
         cls.all_terraform = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted(TERRAFORM_ROOT.glob("*.tf"))
@@ -25,6 +26,7 @@ class IsolationInfrastructureTests(unittest.TestCase):
         cls.dockerfile = (SERVICE_ROOT / "Dockerfile").read_text(encoding="utf-8")
         cls.main_compact = " ".join(cls.main.split())
         cls.network_compact = " ".join(cls.network.split())
+        cls.monitoring_compact = " ".join(cls.monitoring.split())
 
     def test_lambda_is_only_the_authenticated_forwarding_gateway(self):
         self.assertIn('command = ["app.gateway_lambda_handler"]', self.main_compact)
@@ -33,6 +35,10 @@ class IsolationInfrastructureTests(unittest.TestCase):
         self.assertIn("FIRELIGHT_COMPILER_SECRET_ARN", self.main)
         self.assertIn("FIRELIGHT_INTERNAL_COMPILER_URL", self.main)
         self.assertIn('CMD ["app.gateway_lambda_handler"]', self.dockerfile)
+        self.assertIn(
+            "COPY docker/verify_lesson_sketches.py",
+            self.dockerfile,
+        )
 
     def test_image_installs_the_checksum_pinned_servo_library(self):
         self.assertIn("docker/install_servo_library.py", self.dockerfile)
@@ -95,6 +101,66 @@ class IsolationInfrastructureTests(unittest.TestCase):
     def test_rollouts_drain_longer_than_the_bounded_compile_request(self):
         self.assertIn("deregistration_delay = 60", self.main_compact)
         self.assertIn("stopTimeout = 60", self.main_compact)
+
+    def test_monitoring_routes_alarm_and_recovery_without_subscriber_data(self):
+        self.assertIn('resource "aws_sns_topic" "compiler_alerts"', self.monitoring)
+        self.assertIn('resource "aws_kms_key" "compiler_alerts"', self.monitoring)
+        self.assertIn("kms_master_key_id = aws_kms_key.compiler_alerts.arn", self.monitoring_compact)
+        self.assertIn("enable_key_rotation = true", self.monitoring_compact)
+        self.assertIn("deletion_window_in_days = 30", self.monitoring_compact)
+        self.assertIn('identifiers = ["cloudwatch.amazonaws.com"]', self.monitoring_compact)
+        self.assertIn('"kms:GenerateDataKey*"', self.monitoring)
+        self.assertIn('"kms:Decrypt"', self.monitoring)
+        self.assertIn('resource "aws_sns_topic_policy" "compiler_alerts"', self.monitoring)
+        self.assertIn(
+            '"SNS:ListSubscriptionsByTopic", "SNS:Publish", "SNS:SetTopicAttributes"',
+            self.monitoring_compact,
+        )
+        self.assertIn('actions = ["SNS:Publish"]', self.monitoring_compact)
+        self.assertIn('variable = "aws:SourceAccount"', self.monitoring_compact)
+        self.assertIn('variable = "aws:SourceArn"', self.monitoring_compact)
+        self.assertNotIn("aws_sns_topic_subscription", self.all_terraform)
+        alarm_count = self.monitoring.count('resource "aws_cloudwatch_metric_alarm"')
+        self.assertEqual(alarm_count, 11)
+        self.assertEqual(
+            self.monitoring_compact.count("alarm_actions = local.compiler_alarm_actions"),
+            alarm_count,
+        )
+        self.assertEqual(
+            self.monitoring_compact.count("ok_actions = local.compiler_alarm_actions"),
+            alarm_count,
+        )
+
+    def test_monitoring_covers_gateway_ecs_and_exact_alb_target_dimensions(self):
+        for metric in (
+            "Url5xxCount",
+            "Errors",
+            "Throttles",
+            "Duration",
+            "RunningTaskCount",
+            "CPUUtilization",
+            "MemoryUtilization",
+            "UnHealthyHostCount",
+            "HTTPCode_Target_5XX_Count",
+            "TargetConnectionErrorCount",
+            "TargetResponseTime",
+        ):
+            with self.subTest(metric=metric):
+                self.assertIn(f'metric_name = "{metric}"', self.monitoring_compact)
+
+        self.assertIn(
+            "LoadBalancer = aws_lb.compiler.arn_suffix",
+            self.monitoring_compact,
+        )
+        self.assertIn(
+            "TargetGroup = aws_lb_target_group.compiler.arn_suffix",
+            self.monitoring_compact,
+        )
+        self.assertEqual(
+            self.monitoring_compact.count('treat_missing_data = "breaching"'),
+            2,
+        )
+        self.assertIn('resource "aws_cloudwatch_dashboard" "compiler"', self.monitoring)
 
 
 if __name__ == "__main__":

@@ -81,8 +81,12 @@ Implemented:
   workflows, protected project and migration-state proofs, migration-first
   deployment, exact-commit staging evidence, signed-in compile canaries,
   immutable accepted-release artifacts, and exact-content verified Worker
-  rollback. No
-  release workflow is triggered by local checks.
+  rollback. CI also runs 14 hermetic browser journeys and builds a restricted
+  compiler image that must compile the six hash-bound typed starter sketches.
+  No release workflow is triggered by local checks.
+- Terraform-defined compiler alarms and dashboard plus secrets-free recurring
+  public health/readiness probes. Recipient subscriptions, hosted alarm drills,
+  and incident-routing acceptance remain controlled rollout work.
 - An operations/release runbook covering secrets and pepper rotation, migrations,
   immutable compiler rollout, monitoring, revocation, deletion, backup/restore,
   incidents, audit retention, and outstanding external acceptance gates.
@@ -90,8 +94,9 @@ Implemented:
 All six repository starter sketches compile for the exact Nano old-bootloader
 target with the pinned Arduino CLI 1.5.1, AVR core 1.8.6, and Servo 1.3.0
 toolchain. Still gated outside this repository: hosted account/project/secret creation,
-environment approvals, DNS cutover, SMTP, monitoring, backup/PITR restore drills,
-AWS Terraform apply and compiler-image build/scan, physical
+environment approvals, DNS cutover, SMTP, alert-recipient subscription and alarm
+drills, backup/PITR restore drills, AWS Terraform apply and compiler-image
+build/scan, physical
 validation of all six builds across the documented browser/OS/kit matrix, and
 procurement/electrical signoff of the exact servo supply, rover motor pack, TT
 motors, and TB6612FNG carrier. The servo and rover must not be powered until that
@@ -140,7 +145,8 @@ Worker secrets; never commit them or add them to `vars`.
 - `supabase/` — local config, email templates, migrations, seed, and pgTAP tests.
 - `shared/` — curriculum and API types used at the browser/Worker boundary.
 - `scripts/validate-lessons.mjs` — build gate for typed curriculum content.
-- `public/_headers` — security and immutable asset caching policy.
+- `public/_headers` — immutable asset caching policy; the Worker applies dynamic
+  security headers to every response.
 - `prototype-archive/` — exact checkpoint reference from commit `98ff7fc`.
 - `docs/architecture.md` — milestone boundaries and local workflow.
 - `docs/hardware-pipeline.md` — compile/upload trust model, operations, and gates.
@@ -148,8 +154,13 @@ Worker secrets; never commit them or add them to `vars`.
   BOM gate, and physical acceptance matrix.
 - `docs/operations-runbook.md` — environment isolation, secrets, releases,
   monitoring, recovery, data operations, and external rollout gates.
+- `docs/monitoring.md` — compiler alarms/dashboard, recurring public probes,
+  image acceptance, notification routing, and hosted drill procedure.
+- `docs/browser-acceptance.md` — hermetic Playwright journeys, accessibility
+  checks, visual-baseline ownership, and remaining physical-browser gates.
 
 See `docs/identity.md`, `docs/lessons.md`, `docs/hardware-pipeline.md`, and
-`docs/compiler-service.md`, then follow `docs/operations-runbook.md` before
+`docs/compiler-service.md`, then follow `docs/operations-runbook.md` and
+`docs/monitoring.md` before
 applying migrations to staging. Local verification performs no deploy, remote
 database mutation, AWS change, secret rotation, or domain migration.

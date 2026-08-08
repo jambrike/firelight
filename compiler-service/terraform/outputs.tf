@@ -34,3 +34,13 @@ output "compiler_vpc_id" {
   description = "No-NAT VPC containing the gateway ENIs, internal ALB, endpoints, and compiler tasks."
   value       = aws_vpc.compiler.id
 }
+
+output "compiler_alerts_topic_arn" {
+  description = "Encrypted SNS topic for compiler ALARM and OK notifications; subscribe approved responders outside Terraform state."
+  value       = aws_sns_topic.compiler_alerts.arn
+}
+
+output "compiler_dashboard_name" {
+  description = "CloudWatch dashboard containing the compiler gateway, ECS service, and internal ALB signals."
+  value       = aws_cloudwatch_dashboard.compiler.dashboard_name
+}

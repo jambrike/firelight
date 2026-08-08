@@ -322,6 +322,14 @@ describe("lesson workspace integration", () => {
     expect(screen.getByText("Preview mode · sign in to edit and save")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/auth");
     expect(screen.getByRole("button", { name: "Next step" })).toBeDisabled();
+    const buildReference = screen.getByRole("complementary", {
+      name: "Build reference",
+    });
+    const pinNote = within(buildReference).getByText(
+      "The LED is already connected on the board; do not add an external LED.",
+    );
+    expect(pinNote.tagName).toBe("SMALL");
+    expect(pinNote.closest("dd")).not.toBeNull();
 
     await user.click(stepButton("Follow the wiring instructions"));
     const firstSparkWiring = findLesson("first-spark")?.steps.find(

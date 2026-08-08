@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from "node:url";
 import {
   CanaryError,
   FIRELIGHT_BOARD_FQBN,
+  buildFirstSparkProgressReplay,
   fetchBounded,
   parseDataEnvelope,
   parsePostdeployEnvironment,
@@ -14,6 +15,7 @@ import {
   sha256Hex,
   validateCompileArtifact,
   validateBootstrap,
+  validateFirstSparkProgressResponse,
   validateIntelHex,
   validateRuntimeConfig,
 } from "./postdeploy-canary.mjs";
@@ -41,6 +43,12 @@ void loop() {
 }
 `;
 const VALID_HEX = ":100000000C945C000C946E000C946E000C946E00CA\n:00000001FF\n";
+const FIRST_SPARK_LESSON = {
+  id: "first-spark",
+  version: 1,
+  starterCode: STARTER_CODE,
+};
+const PROGRESS_UPDATED_AT = "2026-08-08T10:00:00.000Z";
 
 const environment = {
   FIRELIGHT_BASE_URL: BASE_URL,
@@ -91,7 +99,7 @@ function runtimeConfigBody(overrides = {}) {
   };
 }
 
-function bootstrapBody() {
+function bootstrapBody(progress = []) {
   return {
     data: {
       profile: {
@@ -109,11 +117,31 @@ function bootstrapBody() {
         kind: "code",
         claimedAt: "2026-08-08T10:00:00.000Z",
       },
-      progress: [],
+      progress,
       achievements: [],
       nextLesson: null,
     },
   };
+}
+
+function progressRecord(overrides = {}) {
+  return {
+    lessonId: "first-spark",
+    lessonVersion: 1,
+    revision: 7,
+    status: "in_progress",
+    currentStep: "compile-sketch",
+    percentage: 50,
+    codeSnapshot: STARTER_CODE,
+    completionEvidenceId: null,
+    completedAt: null,
+    updatedAt: PROGRESS_UPDATED_AT,
+    ...overrides,
+  };
+}
+
+function progressBody(overrides = {}) {
+  return { data: progressRecord(overrides) };
 }
 
 function compileBody(source = STARTER_CODE, hex = VALID_HEX) {
@@ -231,6 +259,140 @@ test("bootstrap requires a confirmed, activated learner canary", () => {
   );
 });
 
+test("First Spark progress creates safely or replays the current checkpoint", () => {
+  const createdReplay = buildFirstSparkProgressReplay(
+    bootstrapBody(),
+    FIRST_SPARK_LESSON,
+  );
+  assert.deepEqual(createdReplay, {
+    request: {
+      lessonVersion: 1,
+      expectedRevision: null,
+      status: "not_started",
+      currentStep: "meet-the-build",
+      percentage: 0,
+    },
+    previous: null,
+  });
+  assert.deepEqual(
+    validateFirstSparkProgressResponse(
+      progressBody({
+        revision: 1,
+        status: "not_started",
+        currentStep: "meet-the-build",
+        percentage: 0,
+        codeSnapshot: null,
+      }),
+      createdReplay,
+    ),
+    { revision: 1, updatedAt: PROGRESS_UPDATED_AT },
+  );
+
+  const current = progressRecord();
+  const replay = buildFirstSparkProgressReplay(
+    bootstrapBody([current]),
+    FIRST_SPARK_LESSON,
+  );
+  assert.deepEqual(replay.request, {
+    lessonVersion: 1,
+    expectedRevision: 7,
+    status: "in_progress",
+    currentStep: "compile-sketch",
+    percentage: 50,
+  });
+  assert.deepEqual(
+    validateFirstSparkProgressResponse(
+      progressBody({ revision: 8, updatedAt: "2026-08-08T10:01:00.000Z" }),
+      replay,
+    ),
+    { revision: 8, updatedAt: "2026-08-08T10:01:00.000Z" },
+  );
+  assert.throws(
+    () => validateFirstSparkProgressResponse({
+      data: {
+        ...progressBody({ revision: 8 }).data,
+        unexpected: true,
+      },
+    }, replay),
+    assertCanaryCode("INVALID_PROGRESS_RESPONSE"),
+  );
+  assert.throws(
+    () => buildFirstSparkProgressReplay(
+      bootstrapBody([current, current]),
+      FIRST_SPARK_LESSON,
+    ),
+    assertCanaryCode("INVALID_BOOTSTRAP_PROGRESS"),
+  );
+  assert.throws(
+    () => buildFirstSparkProgressReplay(
+      bootstrapBody(Array.from({ length: 257 }, () => ({}))),
+      FIRST_SPARK_LESSON,
+    ),
+    assertCanaryCode("INVALID_BOOTSTRAP_PROGRESS"),
+  );
+});
+
+test("completed First Spark replay carries evidence and rejects revision drift", () => {
+  const evidenceId = "44444444-4444-4444-8444-444444444444";
+  const completedAt = "2026-08-08T09:00:00.000Z";
+  const current = progressRecord({
+    revision: 11,
+    status: "completed",
+    currentStep: "finish-lesson",
+    percentage: 100,
+    completionEvidenceId: evidenceId,
+    completedAt,
+  });
+  const replay = buildFirstSparkProgressReplay(
+    bootstrapBody([current]),
+    FIRST_SPARK_LESSON,
+  );
+  assert.deepEqual(replay.request, {
+    lessonVersion: 1,
+    expectedRevision: 11,
+    status: "completed",
+    currentStep: "finish-lesson",
+    percentage: 100,
+    codeSnapshot: STARTER_CODE,
+    uploadEvidenceId: evidenceId,
+  });
+  const response = progressBody({
+    revision: 12,
+    status: "completed",
+    currentStep: "finish-lesson",
+    percentage: 100,
+    completionEvidenceId: evidenceId,
+    completedAt,
+    updatedAt: "2026-08-08T10:02:00.000Z",
+  });
+  assert.deepEqual(validateFirstSparkProgressResponse(response, replay), {
+    revision: 12,
+    updatedAt: "2026-08-08T10:02:00.000Z",
+  });
+  assert.throws(
+    () => validateFirstSparkProgressResponse({
+      data: { ...response.data, revision: 11 },
+    }, replay),
+    assertCanaryCode("INVALID_PROGRESS_RESPONSE"),
+  );
+
+  const missingEvidence = progressRecord({
+    status: "completed",
+    currentStep: "finish-lesson",
+    percentage: 100,
+    codeSnapshot: null,
+    completionEvidenceId: null,
+    completedAt,
+  });
+  assert.throws(
+    () => buildFirstSparkProgressReplay(
+      bootstrapBody([missingEvidence]),
+      FIRST_SPARK_LESSON,
+    ),
+    assertCanaryCode("INVALID_BOOTSTRAP_PROGRESS"),
+  );
+});
+
 test("runtime config rejects a different Supabase project and extra envelope fields", () => {
   const parsed = parsePostdeployEnvironment(environment);
   assert.deepEqual(validateRuntimeConfig(runtimeConfigBody(), parsed), {
@@ -309,6 +471,15 @@ test("runPostdeployCanary checks every dependency and globally signs out", async
     if (url.pathname === "/api/readiness") return jsonResponse(statusBody("ready"));
     if (url.pathname === "/api/config") return jsonResponse(runtimeConfigBody());
     if (url.pathname === "/api/bootstrap") return jsonResponse(bootstrapBody());
+    if (url.pathname === "/api/lessons/first-spark/progress") {
+      return jsonResponse(progressBody({
+        revision: 1,
+        status: "not_started",
+        currentStep: "meet-the-build",
+        percentage: 0,
+        codeSnapshot: null,
+      }));
+    }
     if (url.pathname === "/api/compile") return jsonResponse(compileBody());
     throw new Error("unexpected mocked request");
   };
@@ -347,11 +518,7 @@ test("runPostdeployCanary checks every dependency and globally signs out", async
     createClientImpl,
     loadLessonImpl: async (repositoryRoot) => {
       assert.equal(repositoryRoot, configuration.repositoryRoot);
-      return {
-        id: "first-spark",
-        version: 1,
-        starterCode: STARTER_CODE,
-      };
+      return FIRST_SPARK_LESSON;
     },
   });
 
@@ -359,6 +526,7 @@ test("runPostdeployCanary checks every dependency and globally signs out", async
     environment: "staging",
     buildId: BUILD_SHA,
     compileJobId: "33333333-3333-4333-8333-333333333333",
+    progressRevision: 1,
   });
   assert.deepEqual(signOutScopes, ["global"]);
   assert.equal(clientOptions.auth.persistSession, false);
@@ -370,8 +538,19 @@ test("runPostdeployCanary checks every dependency and globally signs out", async
     "/api/readiness",
     "/api/config",
     "/api/bootstrap",
+    "/api/lessons/first-spark/progress",
     "/api/compile",
   ]);
+  const progressCall = calls.at(-2);
+  assert.equal(progressCall.init.method, "PUT");
+  assert.equal(progressCall.init.headers.Authorization, `Bearer ${ACCESS_TOKEN}`);
+  assert.deepEqual(JSON.parse(progressCall.init.body), {
+    lessonVersion: 1,
+    expectedRevision: null,
+    status: "not_started",
+    currentStep: "meet-the-build",
+    percentage: 0,
+  });
   const compileCall = calls.at(-1);
   assert.equal(compileCall.init.headers.Authorization, `Bearer ${ACCESS_TOKEN}`);
   assert.deepEqual(JSON.parse(compileCall.init.body), {
@@ -421,14 +600,64 @@ test("runPostdeployCanary signs out after an authenticated failure", async () =>
     runPostdeployCanary(configuration, {
       fetchImpl,
       createClientImpl,
-      loadLessonImpl: async () => ({
-        id: "first-spark",
-        version: 1,
-        starterCode: STARTER_CODE,
-      }),
+      loadLessonImpl: async () => FIRST_SPARK_LESSON,
     }),
     assertCanaryCode("SERVICE_NOT_READY"),
   );
+  assert.equal(signedOut, true);
+});
+
+test("runPostdeployCanary fails closed on progress drift and still signs out", async () => {
+  const configuration = parsePostdeployEnvironment(environment);
+  let signedOut = false;
+  let compileCalled = false;
+  const fetchImpl = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/health") return jsonResponse(statusBody("ok"));
+    if (path === "/api/readiness") return jsonResponse(statusBody("ready"));
+    if (path === "/api/config") return jsonResponse(runtimeConfigBody());
+    if (path === "/api/bootstrap") return jsonResponse(bootstrapBody());
+    if (path === "/api/lessons/first-spark/progress") {
+      return jsonResponse(progressBody({
+        revision: 2,
+        status: "not_started",
+        currentStep: "meet-the-build",
+        percentage: 0,
+        codeSnapshot: null,
+      }));
+    }
+    if (path === "/api/compile") compileCalled = true;
+    throw new Error("unexpected mocked request");
+  };
+  const createClientImpl = () => ({
+    auth: {
+      signInWithPassword: async () => ({
+        data: {
+          session: { access_token: ACCESS_TOKEN },
+          user: {
+            id: CANARY_USER_ID,
+            email: environment.FIRELIGHT_CANARY_EMAIL,
+          },
+        },
+        error: null,
+      }),
+      signOut: async ({ scope }) => {
+        assert.equal(scope, "global");
+        signedOut = true;
+        return { error: null };
+      },
+    },
+  });
+
+  await assert.rejects(
+    runPostdeployCanary(configuration, {
+      fetchImpl,
+      createClientImpl,
+      loadLessonImpl: async () => FIRST_SPARK_LESSON,
+    }),
+    assertCanaryCode("INVALID_PROGRESS_RESPONSE"),
+  );
+  assert.equal(compileCalled, false);
   assert.equal(signedOut, true);
 });
 

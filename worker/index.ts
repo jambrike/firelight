@@ -105,8 +105,6 @@ class ApiRequestError extends Error {
 }
 
 const securityHeaders = {
-  "Content-Security-Policy":
-    "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co http://127.0.0.1:54321 ws://127.0.0.1:54321; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; style-src 'self'; upgrade-insecure-requests",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy":
@@ -116,20 +114,106 @@ const securityHeaders = {
   "X-Frame-Options": "DENY",
 } as const;
 
+const HOSTED_STRICT_TRANSPORT_SECURITY = "max-age=31536000; includeSubDomains";
+
+function isHostedEnvironment(env: Env): boolean {
+  return env.ENVIRONMENT === "staging" || env.ENVIRONMENT === "production";
+}
+
+export function contentSecurityPolicy(env: Env): string {
+  const supabaseUrl = validatedSupabaseUrl(env);
+  const connectSources = ["'self'"];
+  if (supabaseUrl) {
+    connectSources.push(supabaseUrl.origin);
+    connectSources.push(
+      `${supabaseUrl.protocol === "https:" ? "wss:" : "ws:"}//${supabaseUrl.host}`,
+    );
+  }
+  const directives = [
+    "default-src 'self'",
+    "base-uri 'self'",
+    `connect-src ${connectSources.join(" ")}`,
+    "font-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data: blob:",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'",
+  ];
+  if (isHostedEnvironment(env)) directives.push("upgrade-insecure-requests");
+  return directives.join("; ");
+}
+
 function isApiPath(path: string): boolean {
   return path === "/api" || path.startsWith("/api/");
 }
 
-function redactedLogPath(path: string): string {
-  return path.replace(
-    /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi,
-    ":id",
-  );
+export function classifyLogMethod(method: string): string {
+  switch (method) {
+    case "GET":
+    case "HEAD":
+    case "OPTIONS":
+    case "POST":
+    case "PATCH":
+    case "PUT":
+    case "DELETE":
+      return method;
+    default:
+      return "OTHER";
+  }
+}
+
+export function classifyLogRoute(path: string): string {
+  switch (path) {
+    case "/api": return "api.root";
+    case "/api/health": return "api.health";
+    case "/api/readiness": return "api.readiness";
+    case "/api/config": return "api.config";
+    case "/api/bootstrap": return "api.bootstrap";
+    case "/api/account/export": return "api.account_export";
+    case "/api/profile": return "api.profile";
+    case "/api/kits/claim": return "api.kit_claim";
+    case "/api/compile": return "api.compile";
+    case "/api/hardware/upload-evidence": return "api.upload_evidence";
+    case "/api/admin/kits/batches": return "api.admin_kit_batch";
+    case "/api/admin/kits": return "api.admin_kits";
+    case "/api/admin/learners": return "api.admin_learners";
+    case "/api/admin/compile-diagnostics": return "api.admin_compile_diagnostics";
+    case "/api/admin/audit": return "api.admin_audit";
+    case "/api/account": return "api.account_delete";
+    case "/index.html":
+    case "/dashboard.html":
+    case "/learn.html":
+    case "/product.html":
+    case "/tutorial.html":
+    case "/second-tutorial":
+    case "/second-tutorial/":
+    case "/second-tutorial/index.html":
+      return "legacy.redirect";
+    default:
+      if (/^\/api\/lessons\/[^/]+\/progress$/u.test(path)) {
+        return "api.lesson_progress";
+      }
+      if (/^\/api\/admin\/kits\/[^/]+\/revoke$/u.test(path)) {
+        return "api.admin_kit_revoke";
+      }
+      if (/^\/api\/admin\/learners\/[^/]+\/progress$/u.test(path)) {
+        return "api.admin_learner_progress";
+      }
+      if (isApiPath(path)) return "api.unknown";
+      if (path.startsWith("/assets/")) return "asset.versioned";
+      return "asset_or_spa";
+  }
 }
 
 function applyResponseHeaders(context: Context<FirelightWorker>): void {
   for (const [name, value] of Object.entries(securityHeaders)) {
     context.header(name, value);
+  }
+  context.header("Content-Security-Policy", contentSecurityPolicy(context.env));
+  if (isHostedEnvironment(context.env)) {
+    context.header("Strict-Transport-Security", HOSTED_STRICT_TRANSPORT_SECURITY);
   }
 
   if (isApiPath(context.req.path)) {
@@ -873,14 +957,9 @@ function hasCompletedCurrentLesson(
   );
 }
 
-function runtimeIdentityConfigurationReady(env: Env): boolean {
-  if (
-    !hasRuntimeString(env.SUPABASE_URL) ||
-    !hasRuntimeString(env.SUPABASE_PROJECT_REF) ||
-    !hasRuntimeString(env.SUPABASE_PUBLISHABLE_KEY) ||
-    !hasRuntimeString(env.SUPABASE_SERVICE_ROLE_KEY)
-  ) {
-    return false;
+function validatedSupabaseUrl(env: Env): URL | null {
+  if (!hasRuntimeString(env.SUPABASE_URL) || !hasRuntimeString(env.SUPABASE_PROJECT_REF)) {
+    return null;
   }
   try {
     const environment: string = env.ENVIRONMENT;
@@ -894,7 +973,9 @@ function runtimeIdentityConfigurationReady(env: Env): boolean {
         url.password.length === 0 &&
         url.pathname === "/" &&
         url.search.length === 0 &&
-        url.hash.length === 0;
+        url.hash.length === 0
+        ? new URL(url.origin)
+        : null;
     }
     return (environment === "staging" || environment === "production") &&
       /^[a-z0-9]{20}$/.test(env.SUPABASE_PROJECT_REF) &&
@@ -905,10 +986,18 @@ function runtimeIdentityConfigurationReady(env: Env): boolean {
       url.password.length === 0 &&
       url.pathname === "/" &&
       url.search.length === 0 &&
-      url.hash.length === 0;
+      url.hash.length === 0
+      ? new URL(url.origin)
+      : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function runtimeIdentityConfigurationReady(env: Env): boolean {
+  return hasRuntimeString(env.SUPABASE_PUBLISHABLE_KEY) &&
+    hasRuntimeString(env.SUPABASE_SERVICE_ROLE_KEY) &&
+    validatedSupabaseUrl(env) !== null;
 }
 
 function runtimeCompilerConfigurationReady(env: Env): boolean {
@@ -989,8 +1078,8 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       JSON.stringify({
         event: "request.complete",
         requestId,
-        method: context.req.method,
-        path: redactedLogPath(context.req.path),
+        method: classifyLogMethod(context.req.method),
+        route: classifyLogRoute(context.req.path),
         status: context.res.status,
         durationMs: Date.now() - startedAt,
       }),
@@ -1400,7 +1489,8 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
             event: "compile.finish_failed",
             requestId: context.get("requestId"),
             jobId: gate.jobId,
-            errorType: finishError instanceof Error ? finishError.name : "unknown",
+            failureCategory:
+              finishError instanceof RepositoryError ? "repository" : "unexpected",
           }),
         );
         return apiError(
@@ -1714,9 +1804,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         JSON.stringify({
           event: "repository.error",
           requestId: context.get("requestId"),
-          path: redactedLogPath(context.req.path),
+          method: classifyLogMethod(context.req.method),
+          route: classifyLogRoute(context.req.path),
           kind: error.kind,
-          upstreamCode: error.upstreamCode,
         }),
       );
     } else {
@@ -1729,9 +1819,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         JSON.stringify({
           event: "request.error",
           requestId: context.get("requestId"),
-          method: context.req.method,
-          path: redactedLogPath(context.req.path),
-          errorType: error.name,
+          method: classifyLogMethod(context.req.method),
+          route: classifyLogRoute(context.req.path),
+          failureCategory: "unexpected",
         }),
       );
     }

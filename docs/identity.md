@@ -38,6 +38,37 @@ runs the Supabase database linter. Both require the local stack.
 - Run the pgTAP suite and HTTP smoke tests after migration, then verify two real
   accounts cannot read or mutate each other's rows.
 
+## Progress write boundary rollout
+
+`202608080003_progress_write_boundary.sql` is deliberately an expand migration.
+Applying it grants the Worker service role `SELECT`, `INSERT`, and `UPDATE` on
+`lesson_progress`, keeps service `DELETE` revoked, and temporarily retains the
+existing authenticated owner `INSERT`/`UPDATE` grants and policies. This allows
+the previously deployed direct-write release and the new service-write release
+to coexist while the new Worker is proved. The hardware entitlement trigger
+still checks the live kit claim for every insert or update, including writes made
+with service credentials.
+
+The migration also installs
+`public.firelight_finalize_progress_write_boundary()`. It is postgres-owned,
+security definer, access-locks the progress table, is idempotent, and has no
+`EXECUTE` grant for `PUBLIC`, `anon`, `authenticated`, or `service_role`. Hosted
+automation calls it only through the bounded Supabase Management API query in
+`scripts/finalize-progress-write-boundary.mjs`; neither a browser nor the Worker
+can invoke it. Its exact success result proves authenticated access is
+`SELECT`-only, `PUBLIC` and anonymous access confer no mutation privilege,
+service access is `SELECT`/`INSERT`/`UPDATE` without `DELETE`, and no `FOR ALL`,
+`INSERT`, `UPDATE`, or `DELETE` policy remains.
+
+The hosted order is fixed: expand the schema, deploy the service-write Worker,
+run the complete post-deploy canary, contract with the finalizer, run the same
+complete canary again, and only then capture release evidence. Once contracted,
+a release that writes progress directly as `authenticated` is no longer a valid
+rollback target. Recovery stays forward-only: deploy a schema-compatible
+service-write release or add a separately reviewed forward compatibility
+migration, prove it, and contract again. Never edit migration history or restore
+browser mutation grants ad hoc.
+
 ## Deletion and legacy behavior
 
 Code activation is authoritative only while a matching `kit_codes` row remains

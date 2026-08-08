@@ -10,3 +10,5 @@ coverage/
 !.env.example
 supabase/.temp/
 worker-startup.cpuprofile
+playwright-report/
+test-results/

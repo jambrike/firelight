@@ -204,6 +204,15 @@ One image supports two explicit modes:
 - ECS overrides the entry point with `/var/lang/bin/python3 /var/task/app.py serve`.
   Invoking `app.py` without the exact `serve` argument fails closed.
 
+CI also exports the real typed lesson catalog into a deterministic, hash-bound
+fixture and runs `/var/task/verify_lesson_sketches.py` inside this image. The
+verifier independently checks the exact six lesson IDs and versions, every
+source hash, the live Arduino CLI version, installed AVR core files, and Servo
+metadata/sources before calling the production compiler once for each sketch.
+Each resulting artifact must bind to its source hash and the fixed Nano target.
+The exact restricted container invocation is documented in
+[Monitoring and hosted acceptance](monitoring.md#repository-and-image-gates).
+
 ## Local test and image gates
 
 From the repository root:
@@ -215,7 +224,8 @@ python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v
 Tests cover gateway authentication and forwarding, strict internal URLs and
 responses, request/result/concurrency bounds, source policy adversaries,
 subprocess deadlines, diagnostics, Intel HEX, supply-chain pins, and static
-Terraform isolation invariants.
+Terraform isolation and monitoring invariants. They also cover deterministic
+export of all six typed starter sketches and the independent in-image verifier.
 
 Build the exact deployment architecture:
 
@@ -277,8 +287,16 @@ receives the token and needs no rotation action.
 
 Terraform owns the immutable ECR repository, no-NAT VPC and endpoints, security
 groups, internal ALB, ECS cluster/service/task definition, bounded gateway,
-least-privilege roles, log groups, and public buffered Function URL. The region
-is fixed to `eu-west-1`. The public URL and internal ALB output are sensitive.
+least-privilege roles, log groups, public buffered Function URL, encrypted alert
+topic, 11 alarms, and operational dashboard. The region is fixed to
+`eu-west-1`. The public URL and internal ALB output are sensitive.
+
+These Terraform and public-probe definitions are implemented, but hosted
+monitoring is still an external acceptance gate until each environment has been
+applied, primary and backup subscriptions are confirmed, staging has completed
+the notification/alarm drill, and the evidence is reviewed. Follow
+[Monitoring and hosted acceptance](monitoring.md); recipient endpoints never
+belong in Terraform state.
 
 Deployment is two phase because every runtime references an image digest:
 
@@ -314,6 +332,10 @@ internal ALB or expose ALB/task security groups publicly.
 
 ## Recovery runbook
 
+Use the alarm-to-dashboard triage and hosted drill procedure in
+[Monitoring and hosted acceptance](monitoring.md#incident-use) alongside these
+compiler-specific recovery actions.
+
 - Repeated 401: verify Worker and Secrets Manager token versions without printing
   either value; rotate through the controlled procedure.
 - Repeated 503: inspect ECS desired/running counts, ALB target health, VPC endpoint
@@ -329,16 +351,22 @@ internal ALB or expose ALB/task security groups publicly.
 ## Verification record (2026-08-08)
 
 - `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v`:
-  55 tests passed.
+  63 tests passed, including manifest/toolchain verification and 11-alarm static
+  infrastructure coverage.
+- `npm run test:operations`: 64 tests passed; 11 cover the real typed six-lesson
+  catalog export, strict public envelopes, request/response bounds, fixed
+  timeout, and one retry.
+- `npm run lint -- --no-cache`: passed with zero warnings.
 - The pinned Servo installer downloaded the current Arduino CDN artifact, matched
   133,580 bytes and SHA-256
   `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38`,
   safely extracted it, and verified Servo `1.3.0` with AVR support.
-- Terraform 1.15.8: `fmt -check -recursive` and `validate` passed using the locked
-  AWS provider 6.56.0. Validation did not contact or mutate an AWS account.
+- Terraform 1.15.8: `fmt -check -recursive`, offline-backend `init`, `validate`,
+  and the mocked static plan test passed using locked AWS provider 6.56.0; one
+  mocked plan passed and none failed. No AWS account was contacted or mutated.
 - Docker is unavailable in the implementation environment, so the image build,
-  non-root Fargate-mode smoke, embedded CLI/core inspection, and ECR scan were not
-  run.
+  non-root six-sketch image gate, Fargate-mode smoke, embedded CLI/core/Servo
+  inspection, and ECR scan were not run.
 - No AWS plan/apply, API mutation, secret read/write, ECR push, Lambda invocation,
   or Fargate launch was performed.
 - No physical Arduino Nano compile/upload/run acceptance was performed.
@@ -357,5 +385,7 @@ internal ALB or expose ALB/task security groups publicly.
 - Gateway and Worker independently verify source/artifact hashes, FQBN, and HEX.
 - Image, CLI, core dependencies, provider, architecture, and deployed digest are
   pinned.
+- Alarm and recovery actions share a customer-key-encrypted SNS topic; recipient
+  details remain outside Terraform state.
 - Remaining release risks are the unexecuted container/AWS/physical gates,
-  operational cost alarms, and coordinated secret/domain rollout.
+  hosted subscriptions/alarm drill, and coordinated secret/domain rollout.

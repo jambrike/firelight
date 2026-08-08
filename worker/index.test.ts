@@ -4,7 +4,12 @@ import type { ProgressUpdateInput } from "../shared/identity";
 import { FIRELIGHT_BOARD_FQBN } from "../shared/hardware";
 import { findLesson } from "../src/features/lessons/catalog";
 import { sha256Hex } from "./compiler-gateway";
-import { createFirelightApp } from "./index";
+import {
+  classifyLogMethod,
+  classifyLogRoute,
+  contentSecurityPolicy,
+  createFirelightApp,
+} from "./index";
 import { hashKitCode } from "./kit-codes";
 import { RepositoryError } from "./identity-repository";
 import type {
@@ -203,6 +208,21 @@ const testEnv = {
   ASSETS: exports.default,
 } as unknown as Env;
 
+function hostedEnv(environment: "staging" | "production", projectRef: string): Env {
+  return {
+    ...testEnv,
+    ENVIRONMENT: environment,
+    BUILD_ID: "a".repeat(40),
+    SUPABASE_URL: `https://${projectRef}.supabase.co`,
+    SUPABASE_PROJECT_REF: projectRef,
+    COMPILER_SERVICE_URL:
+      "https://firelightcompiler.lambda-url.eu-west-1.on.aws/",
+    COMPILER_SERVICE_ORIGIN:
+      "https://firelightcompiler.lambda-url.eu-west-1.on.aws",
+    COMPILER_SERVICE_HOST: "firelightcompiler.lambda-url.eu-west-1.on.aws",
+  } as unknown as Env;
+}
+
 function requestWithRepository(
   repository: IdentityRepository,
   path: string,
@@ -350,6 +370,56 @@ describe("Firelight Worker", () => {
     });
   });
 
+  it.each([
+    ["staging", "abcdefghijklmnopqrst"],
+    ["production", "zyxwvutsrqponmlkjihg"],
+  ] as const)(
+    "pins %s CSP and HSTS to its exact validated Supabase origin",
+    async (environment, projectRef) => {
+      const env = hostedEnv(environment, projectRef);
+      const app = createFirelightApp();
+      const response = await app.request("https://firelight.test/api/health", {}, env);
+      const csp = response.headers.get("content-security-policy") ?? "";
+
+      expect(csp).toContain(
+        `connect-src 'self' https://${projectRef}.supabase.co wss://${projectRef}.supabase.co`,
+      );
+      expect(csp).toContain("upgrade-insecure-requests");
+      expect(csp).not.toContain("*.supabase.co");
+      expect(csp).not.toContain("127.0.0.1");
+      expect(csp).not.toContain("localhost");
+      expect(response.headers.get("strict-transport-security")).toBe(
+        "max-age=31536000; includeSubDomains",
+      );
+    },
+  );
+
+  it("keeps development CSP loopback-only without hosted HSTS or HTTPS upgrades", async () => {
+    const app = createFirelightApp();
+    const response = await app.request("https://firelight.test/api/health", {}, testEnv);
+    const csp = response.headers.get("content-security-policy") ?? "";
+
+    expect(csp).toContain(
+      "connect-src 'self' http://127.0.0.1:54321 ws://127.0.0.1:54321",
+    );
+    expect(csp).not.toContain("*.supabase.co");
+    expect(csp).not.toContain("upgrade-insecure-requests");
+    expect(response.headers.get("strict-transport-security")).toBeNull();
+  });
+
+  it("fails CSP closed when a hosted Supabase origin is not valid", () => {
+    const env: Env = {
+      ...hostedEnv("production", "zyxwvutsrqponmlkjihg"),
+      SUPABASE_URL: "https://attacker.test",
+    };
+    const csp = contentSecurityPolicy(env);
+
+    expect(csp).toContain("connect-src 'self';");
+    expect(csp).not.toContain("attacker.test");
+    expect(csp).not.toContain("supabase.co");
+    expect(csp).not.toContain("127.0.0.1");
+  });
+
   it("fails closed when public identity configuration is missing", async () => {
     const app = createFirelightApp();
     const response = await app.request("https://firelight.test/api/config", {}, {
@@ -384,6 +454,22 @@ describe("Firelight Worker", () => {
 
     expect(response.status).toBe(401);
     expect(body.error.code).toBe("SESSION_INVALID");
+  });
+
+  it("maps a Supabase request deadline to the stable identity-unavailable error", async () => {
+    const repository = makeRepository({
+      authenticate: vi.fn(async () => {
+        throw new RepositoryError("unavailable", "Supabase request timed out.");
+      }),
+    });
+    const response = await requestWithRepository(repository, "/api/bootstrap");
+    const body = await response.json<{ error: { code: string; message: string } }>();
+
+    expect(response.status).toBe(503);
+    expect(body.error).toMatchObject({
+      code: "IDENTITY_SERVICE_UNAVAILABLE",
+      message: "Account services are temporarily unavailable.",
+    });
   });
 
   it("builds bootstrap achievements and the next lesson from synchronized progress", async () => {
@@ -1343,7 +1429,7 @@ describe("Firelight Worker", () => {
     expect(body.error.code).toBe(code);
   });
 
-  it("redacts UUID route parameters from structured request logs", async () => {
+  it("logs only the closed route template for parameterized requests", async () => {
     const learnerId = "66666666-6666-4666-8666-666666666666";
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
@@ -1355,9 +1441,97 @@ describe("Firelight Worker", () => {
       const structured = log.mock.calls
         .map(([entry]) => typeof entry === "string" ? entry : "")
         .find((entry) => entry.includes('"event":"request.complete"'));
-      expect(structured).toContain('"path":"/api/admin/learners/:id/progress"');
+      expect(structured).toContain('"route":"api.admin_learner_progress"');
+      expect(structured).not.toContain('"path"');
       expect(structured).not.toContain(learnerId);
     } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("classifies arbitrary plain, encoded, kit, token, and control paths as constants", async () => {
+    const attackerInputs = [
+      "/api/unknown/builder@example.test",
+      "/api/unknown/builder%40example.test",
+      "/api/unknown/ABCD-EFGH-JKMP-NRST",
+      "/api/unknown/eyJhbGciOiJIUzI1NiJ9.payload.signature",
+      "/api/unknown/%0Aforged-log-entry",
+      "/builder@example.test",
+    ];
+    expect(attackerInputs.map(classifyLogRoute)).toEqual([
+      "api.unknown",
+      "api.unknown",
+      "api.unknown",
+      "api.unknown",
+      "api.unknown",
+      "asset_or_spa",
+    ]);
+    expect(classifyLogMethod("builder@example.test")).toBe("OTHER");
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      for (const path of attackerInputs) {
+        await requestWithRepository(makeRepository(), path);
+      }
+      const serializedLogs = log.mock.calls
+        .map((call) => typeof call[0] === "string" ? call[0] : "")
+        .join("\n");
+      for (const sensitive of [
+        "builder@example.test",
+        "builder%40example.test",
+        "ABCD-EFGH-JKMP-NRST",
+        "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        "%0Aforged-log-entry",
+        "forged-log-entry",
+      ]) {
+        expect(serializedLogs).not.toContain(sensitive);
+      }
+      expect(serializedLogs).not.toContain('"path"');
+      expect(serializedLogs).toContain('"route":"api.unknown"');
+      expect(serializedLogs).toContain('"route":"asset_or_spa"');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("never writes attacker-controlled repository or exception data to error logs", async () => {
+    const sensitive = "builder@example.test-ABCD-EFGH-JKMP-NRST-token";
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const repositoryFailure = await requestWithRepository(
+        makeRepository({
+          getBootstrap: vi.fn(async () => {
+            throw new RepositoryError("unavailable", sensitive, sensitive);
+          }),
+        }),
+        "/api/bootstrap",
+      );
+      expect(repositoryFailure.status).toBe(503);
+
+      const unexpected = new Error("safe response must not echo this");
+      unexpected.name = sensitive;
+      const unexpectedFailure = await requestWithRepository(
+        makeRepository({
+          getBootstrap: vi.fn(async () => {
+            throw unexpected;
+          }),
+        }),
+        "/api/bootstrap",
+      );
+      expect(unexpectedFailure.status).toBe(500);
+
+      const serializedLogs = [...log.mock.calls, ...errorLog.mock.calls]
+        .map((call) => typeof call[0] === "string" ? call[0] : "")
+        .join("\n");
+      expect(serializedLogs).not.toContain(sensitive);
+      expect(serializedLogs).not.toContain("builder@example.test");
+      expect(serializedLogs).not.toContain("ABCD-EFGH-JKMP-NRST");
+      expect(serializedLogs).not.toContain('"path"');
+      expect(serializedLogs).toContain('"route":"api.bootstrap"');
+      expect(serializedLogs).toContain('"failureCategory":"unexpected"');
+    } finally {
+      errorLog.mockRestore();
       log.mockRestore();
     }
   });
@@ -1406,6 +1580,9 @@ describe("Firelight Worker", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
-    expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain(
+      "connect-src 'self' http://127.0.0.1:54321 ws://127.0.0.1:54321",
+    );
+    expect(response.headers.get("strict-transport-security")).toBeNull();
   });
 });

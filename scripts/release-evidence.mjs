@@ -11,7 +11,8 @@ import {
 } from "./verify-worker-version.mjs";
 
 export const RELEASE_EVIDENCE_SCHEMA = "firelight.release-evidence";
-export const RELEASE_EVIDENCE_VERSION = 1;
+export const RELEASE_EVIDENCE_VERSION = 2;
+export const PROGRESS_SERVICE_WRITES_CAPABILITY = "service-v1";
 const ACCOUNT_ID = /^[0-9a-f]{32}$/u;
 const BUILD_SHA = /^[0-9a-f]{40}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -152,6 +153,7 @@ export async function captureReleaseEvidence(configuration, fetchImpl) {
     environment: configuration.releaseEnvironment,
     workerName: configuration.workerName,
     buildId: configuration.buildId,
+    progressServiceWrites: PROGRESS_SERVICE_WRITES_CAPABILITY,
     versionId: deployment.versionId,
     deploymentId: deployment.deploymentId,
     deployedAt: deployment.deployedAt,
@@ -162,9 +164,10 @@ export function validateReleaseEvidence(value, expected) {
   if (
     !isRecord(value) ||
     Object.keys(value).sort().join(",") !==
-      "accountId,buildId,deployedAt,deploymentId,environment,schema,version,versionId,workerName" ||
+      "accountId,buildId,deployedAt,deploymentId,environment,progressServiceWrites,schema,version,versionId,workerName" ||
     value.schema !== RELEASE_EVIDENCE_SCHEMA ||
     value.version !== RELEASE_EVIDENCE_VERSION ||
+    value.progressServiceWrites !== PROGRESS_SERVICE_WRITES_CAPABILITY ||
     value.accountId !== expected.accountId ||
     value.environment !== expected.releaseEnvironment ||
     value.workerName !== expected.workerName ||

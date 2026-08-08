@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "dev:worker": "npm run build && wrangler dev",
     "validate:lessons": "node scripts/validate-lessons.mjs",
     "verify:arduino": "node scripts/compile-lessons.mjs",
@@ -21,6 +22,9 @@
     "test:worker": "vitest run --config vitest.worker.config.ts",
     "test:compiler": "python3 -m unittest discover -s compiler-service/tests -p 'test_*.py'",
     "test:operations": "node --test scripts/*.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "playwright test --update-snapshots",
+    "typecheck:e2e": "tsc -p e2e/tsconfig.json --noEmit",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
@@ -29,7 +33,7 @@
     "db:test": "supabase test db",
     "cf-typegen": "wrangler types",
     "cf-typegen:check": "wrangler types --check",
-    "check": "npm run cf-typegen:check && npm run typecheck && npm run lint && npm run test && npm run build",
+    "check": "npm run cf-typegen:check && npm run typecheck && npm run typecheck:e2e && npm run lint && npm run test && npm run build",
     "check:startup": "wrangler check startup",
     "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
     "deploy": "npm run check && wrangler deploy"
@@ -45,8 +49,10 @@
     "wouter": "^3.10.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
     "@cloudflare/vitest-pool-workers": "^0.20.2",
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "1.62.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",

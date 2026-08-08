@@ -3,7 +3,9 @@ import test from "node:test";
 import { URL } from "node:url";
 import { CanaryError } from "./postdeploy-canary.mjs";
 import {
+  PROGRESS_SERVICE_WRITES_CAPABILITY,
   RELEASE_EVIDENCE_SCHEMA,
+  RELEASE_EVIDENCE_VERSION,
   captureReleaseEvidence,
   parseReleaseEvidenceEnvironment,
   validateReleaseEvidence,
@@ -107,11 +109,12 @@ test("capture binds the latest 100% deployment to verified version metadata", as
   });
   assert.deepEqual(evidence, {
     schema: RELEASE_EVIDENCE_SCHEMA,
-    version: 1,
+    version: RELEASE_EVIDENCE_VERSION,
     accountId: ACCOUNT_ID,
     environment: "production",
     workerName: "firelight-production",
     buildId: BUILD_ID,
+    progressServiceWrites: PROGRESS_SERVICE_WRITES_CAPABILITY,
     versionId: VERSION_ID,
     deploymentId: DEPLOYMENT_ID,
     deployedAt: DEPLOYED_AT,
@@ -123,11 +126,12 @@ test("artifact validation rejects a self-asserted or cross-environment tuple", (
   const configuration = parseReleaseEvidenceEnvironment(environment);
   const evidence = {
     schema: RELEASE_EVIDENCE_SCHEMA,
-    version: 1,
+    version: RELEASE_EVIDENCE_VERSION,
     accountId: ACCOUNT_ID,
     environment: "production",
     workerName: "firelight-production",
     buildId: BUILD_ID,
+    progressServiceWrites: PROGRESS_SERVICE_WRITES_CAPABILITY,
     versionId: VERSION_ID,
     deploymentId: DEPLOYMENT_ID,
     deployedAt: DEPLOYED_AT,
@@ -135,6 +139,19 @@ test("artifact validation rejects a self-asserted or cross-environment tuple", (
   assert.equal(validateReleaseEvidence(evidence, configuration), evidence);
   assert.throws(
     () => validateReleaseEvidence({ ...evidence, buildId: "c".repeat(40) }, configuration),
+    assertCode("RELEASE_EVIDENCE_MISMATCH"),
+  );
+  assert.throws(
+    () => validateReleaseEvidence({
+      ...evidence,
+      progressServiceWrites: "browser-direct-v1",
+    }, configuration),
+    assertCode("RELEASE_EVIDENCE_MISMATCH"),
+  );
+  const { progressServiceWrites: _capability, ...legacyEvidence } = evidence;
+  assert.equal(_capability, PROGRESS_SERVICE_WRITES_CAPABILITY);
+  assert.throws(
+    () => validateReleaseEvidence({ ...legacyEvidence, version: 1 }, configuration),
     assertCode("RELEASE_EVIDENCE_MISMATCH"),
   );
 });

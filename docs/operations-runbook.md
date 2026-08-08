@@ -223,9 +223,14 @@ the commit SHA in the `BUILD_ID` binding and Cloudflare version metadata, and
 probes health, readiness, public config, an authenticated bootstrap, and one
 controlled First Spark compile. The canary requires the exact environment,
 commit SHA, Supabase project reference, and signed-in canary user ID/email; it
-signs the dedicated account out globally even on failure. Only after that canary
-succeeds does the workflow capture the exact 100% Cloudflare deployment/version/
-build tuple and retain it as a 90-day immutable workflow artifact.
+signs the dedicated account out globally even on failure. For the progress-write
+boundary release, the applied migration is still in its compatible expand state.
+After the first complete canary succeeds, the workflow calls the postgres-only,
+idempotent finalizer through an exact bounded Supabase Management API query. It
+then runs the complete canary a second time against the contracted boundary.
+Only after both proofs succeed does the workflow capture the exact 100%
+Cloudflare deployment/version/build tuple and retain it as a 90-day immutable
+workflow artifact.
 
 There is one explicit first-deploy path when no valid `/api/config` exists. Run
 the staging workflow manually and type `BOOTSTRAP_STAGING_DATABASE`. The target
@@ -260,8 +265,12 @@ hash before approval. The protected job checks out the exact previewed SHA,
 recomputes the migration tree, matches its environment's project-reference hash,
 rechecks the Management API and live `/api/config`, and requires that remote
 migration history still matches the preview. It then reruns the dry-run, applies,
-deploys, and runs the complete production canary. A successful canary is followed
-by the same exact Cloudflare release-tuple artifact used for rollback eligibility.
+deploys, and runs the complete production canary while the progress migration is
+in its compatible expand state. The workflow then executes the postgres-only
+progress-boundary finalizer through the Management API and repeats the complete
+production canary against the contracted state. Only the twice-proved release is
+followed by the same exact Cloudflare release-tuple artifact used for rollback
+eligibility.
 
 For the first production database-bound deployment only, manually type
 `BOOTSTRAP_PRODUCTION_DATABASE`. The preview then enters the separately protected
@@ -296,6 +305,43 @@ migration: roll the Worker back to a schema-compatible version and repair the
 database with a reviewed forward migration. For suspected corruption, stop
 writes, preserve evidence, and restore into an isolated recovery project before
 deciding whether to promote a recovery point.
+
+### Progress-write expand/contract boundary
+
+The progress-write cutover is one forward-only release with two explicit states:
+
+1. **Expand:** `db push` installs the service grants and locked finalizer while
+   retaining authenticated owner `INSERT`/`UPDATE` grants and policies. The old
+   and new Worker paths remain compatible at this point.
+2. **Deploy:** publish the Worker version that validates progress and persists it
+   with service credentials. Do not contract before that exact build is live.
+3. **Prove:** run `scripts/postdeploy-canary.mjs` in full, including an
+   authenticated progress mutation and its controlled compile.
+4. **Contract:** run `scripts/finalize-progress-write-boundary.mjs` with only the
+   protected environment's `SUPABASE_ACCESS_TOKEN` and exact 20-character
+   `SUPABASE_PROJECT_REF`. The token needs database-write permission for that one
+   Management API query. The script accepts only HTTP 201 JSON containing the
+   finalizer's exact canonical boundary result and prints no provider response.
+5. **Prove again:** rerun the complete post-deploy canary after contraction.
+   Capture release evidence only after this second proof passes.
+
+The finalizer takes an exclusive table lock, removes every `FOR ALL`, `INSERT`,
+`UPDATE`, and `DELETE` progress policy, revokes `PUBLIC`, anonymous, and
+authenticated `INSERT`/`UPDATE`/`DELETE`, retains authenticated owner `SELECT`,
+and verifies effective anonymous mutation access is false and service
+`SELECT`/`INSERT`/`UPDATE` remains available with service `DELETE` revoked. It is
+idempotent, so a workflow retry can safely repeat the contract step. No API role
+can execute the database function directly.
+
+Before contraction, a failed deploy may use a previously verified direct-write
+Worker because the expand state is compatible. After contraction, any release
+that depends on authenticated direct progress writes is schema-incompatible and
+must not be selected by the Worker rollback procedure. Restore service by
+deploying a previously verified service-write version or by shipping a reviewed
+forward repair. If an emergency truly requires compatibility to be reopened,
+use a new reviewed migration with the narrow owner policies and grants, prove
+both paths, then contract again; never delete, rewrite, or mark the original
+migration unapplied, and never issue ad-hoc grants in the SQL editor.
 
 ## Compiler image and infrastructure rollout
 
@@ -492,6 +538,9 @@ never commit state or copy sensitive outputs into the repository.
    out separately so the post-rollback canary compiles that release's First Spark
    content, not the current branch's lesson. Evidence is retained for 90 days;
    an older version without that artifact is not eligible for automated rollback.
+   After the progress-write finalizer has run, only a version recorded as using
+   the service progress-write boundary is schema-compatible; a direct browser
+   writer is not a rollback candidate even if its static pages still render.
 5. If the database changed, leave the migrated schema in place and ship a forward
    repair. Use PITR only for confirmed data damage, first in isolation. If the
    compiler changed, use the immutable-digest rollback above; Worker rollback does
@@ -499,9 +548,17 @@ never commit state or copy sensitive outputs into the repository.
 6. Monitor through the agreed observation window, communicate learner impact
    without exposing personal data, then complete root cause and corrective tests.
 
-The last-resort web recovery is the previously verified static/Worker release;
-keep its version and domain rollback procedure available until pilot acceptance.
-Never combine a Worker rollback with an unreviewed database downgrade.
+The last-resort web recovery is a previously verified schema-compatible
+static/Worker release; keep its version and domain rollback procedure available
+until pilot acceptance. After progress-write contraction, an older direct-write
+static release may be used only as a read-only outage page, not to record learner
+progress. Never combine a Worker rollback with an unreviewed database downgrade.
+
+Compiler alarms, dashboard signals, public probes, notification routing, and the
+staging drill procedure are defined in
+[`monitoring.md`](./monitoring.md). Repository definitions are not hosted
+acceptance: confirm both responders, ALARM and OK delivery, metric ingestion, and
+the public build identity before relying on them during an incident.
 
 ## Audit handling and retention
 
@@ -535,8 +592,10 @@ Automated checks do not satisfy these gates. Record named owners and evidence
 before pilot rollout:
 
 - Create separate hosted Cloudflare, Supabase, AWS, GitHub environment, SMTP,
-  monitoring, backup/PITR, DNS, and approval configuration; complete a restore
-  drill and an incident rollback rehearsal.
+  backup/PITR, DNS, and approval configuration. Apply the repository monitoring
+  definitions, confirm primary and backup alert recipients, complete the staged
+  notification/metric drill, then complete a restore drill and incident rollback
+  rehearsal.
 - Build and scan the exact compiler image, verify its embedded toolchain and
   compile path, apply reviewed AWS Terraform, and test the gateway/ALB/ECS
   isolation and failure paths. Repository-source compilation with the pinned
@@ -555,4 +614,5 @@ before pilot rollout:
 
 The detailed hardware evidence matrix is in
 [`curriculum-verification.md`](./curriculum-verification.md), and the compiler
-trust boundary is in [`compiler-service.md`](./compiler-service.md).
+trust boundary is in [`compiler-service.md`](./compiler-service.md). Hosted
+monitoring acceptance is in [`monitoring.md`](./monitoring.md).

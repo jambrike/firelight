@@ -32,6 +32,32 @@ jobs:
       - run: npx wrangler deploy --env staging --dry-run
       - run: npx wrangler deploy --env production --dry-run
 
+  browser-acceptance:
+    # The zero-diff baselines are captured on the matching macOS 26 arm64 image.
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: npm run typecheck:e2e
+      - run: npm run build
+      - run: npm run test:e2e
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-acceptance-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   database:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -52,12 +78,17 @@ jobs:
 
   compiler-service:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      - run: npm ci
       - run: python -m compileall -q compiler-service
       - run: python -m unittest discover -s compiler-service/tests -p 'test_*.py'
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
@@ -71,4 +102,32 @@ jobs:
         run: terraform validate
       - working-directory: compiler-service/terraform
         run: terraform test
-      - run: docker build --tag firelight-compiler:ci compiler-service
+      - name: Export the typed six-lesson fixture
+        env:
+          FIRELIGHT_LESSON_FIXTURES: ${{ runner.temp }}/firelight-lesson-sketches
+        run: node scripts/export-lesson-sketches.mjs "$FIRELIGHT_LESSON_FIXTURES"
+      - name: Build the pinned compiler image
+        run: >-
+          docker build
+          --platform linux/amd64
+          --tag firelight-compiler:ci
+          compiler-service
+      - name: Compile all six lessons inside the restricted image
+        env:
+          FIRELIGHT_LESSON_FIXTURES: ${{ runner.temp }}/firelight-lesson-sketches
+        run: |
+          docker run --rm \
+            --platform linux/amd64 \
+            --network none \
+            --user 1000:1000 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 2g \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=536870912,mode=1777 \
+            --mount "type=bind,src=${FIRELIGHT_LESSON_FIXTURES},dst=/fixtures,readonly" \
+            --entrypoint /var/lang/bin/python3 \
+            firelight-compiler:ci \
+            /var/task/verify_lesson_sketches.py --root /fixtures

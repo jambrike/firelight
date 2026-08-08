@@ -80,6 +80,9 @@ describe("Supabase progress repository", () => {
       lesson_id: "first-spark",
       revision: 1,
     });
+    const headers = new Headers(requests[0]?.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
+    expect(headers.get("apikey")).toBe("test-service-role-key");
   });
 
   it("filters a later update by the expected revision and advances exactly once", async () => {
@@ -105,7 +108,8 @@ describe("Supabase progress repository", () => {
     expect(requests[0]?.url.searchParams.get("revision")).toBe("eq.7");
     expect(parseRequestBody(requests[0]?.init.body)).toMatchObject({ revision: 8 });
     const headers = new Headers(requests[0]?.init.headers);
-    expect(headers.get("authorization")).toBe("Bearer learner-token");
+    expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
+    expect(headers.get("apikey")).toBe("test-service-role-key");
   });
 
   it("turns an empty conditional update into a revision conflict", async () => {
@@ -189,6 +193,77 @@ describe("Supabase progress repository", () => {
     await expect(
       repository.upsertProgress(userId, "first-spark", update(7)),
     ).rejects.toMatchObject({ kind: "conflict" });
+  });
+});
+
+describe("Supabase request deadline", () => {
+  const authenticatedUser = {
+    id: userId,
+    email: "deadline@example.test",
+    email_confirmed_at: now,
+    last_sign_in_at: now,
+    is_anonymous: false,
+  };
+
+  it("fails a never-resolving header fetch and aborts the request", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const fetcher: RepositoryFetcher = vi.fn(async (_url, init) => {
+      requestSignal = init.signal;
+      return new Promise<Response>(() => undefined);
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      fetcher,
+      5,
+    );
+
+    await expect(repository.authenticate()).rejects.toMatchObject({
+      kind: "unavailable",
+      message: "Supabase request timed out.",
+    });
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("cancels a stalled response reader when the same deadline expires", async () => {
+    let cancellations = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"id":'));
+      },
+      cancel() {
+        cancellations += 1;
+      },
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      vi.fn(async () => new Response(stream)),
+      5,
+    );
+
+    await expect(repository.authenticate()).rejects.toMatchObject({
+      kind: "unavailable",
+      message: "Supabase request timed out.",
+    });
+    expect(cancellations).toBe(1);
+  });
+
+  it("clears the deadline timer after a complete response", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      vi.fn(async (_url, init) => {
+        requestSignal = init.signal;
+        return Response.json(authenticatedUser);
+      }),
+      10,
+    );
+
+    await expect(repository.authenticate()).resolves.toMatchObject({ id: userId });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requestSignal?.aborted).toBe(false);
   });
 });
 

@@ -19,8 +19,13 @@ const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
 const LOWERCASE_BUILD_SHA = /^[0-9a-f]{40}$/;
 const LOWERCASE_UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const RFC3339_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
+const LESSON_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const STEP_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const PROJECT_REF = /^[a-z0-9]{20}$/;
 const SAFE_REMOTE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+const MAX_BOOTSTRAP_PROGRESS_RECORDS = 256;
 const ENVIRONMENT_BASE_URLS = Object.freeze({
   staging: "https://staging.firelight.ie",
   production: "https://firelight.ie",
@@ -377,7 +382,31 @@ export function validateRuntimeConfig(body, expected) {
 }
 
 function validTimestamp(value) {
-  return typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value));
+  if (typeof value !== "string" || value.length > 40) return false;
+  const match = RFC3339_TIMESTAMP.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const maximumDay = daysInMonth[month - 1];
+  return year >= 1 &&
+    month >= 1 &&
+    month <= 12 &&
+    maximumDay !== undefined &&
+    day >= 1 &&
+    day <= maximumDay &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59;
 }
 
 export function validateBootstrap(body, authenticatedIdentity) {
@@ -439,6 +468,171 @@ export function validateBootstrap(body, authenticatedIdentity) {
     fail("CANARY_ACTIVATION_REQUIRED");
   }
   return { profileId: profile.id, activationId: activation.id };
+}
+
+function validateCanaryProgressRecord(
+  value,
+  expectedLesson,
+  errorCode = "INVALID_BOOTSTRAP_PROGRESS",
+) {
+  const progress = exactKeys(
+    value,
+    [
+      "lessonId",
+      "lessonVersion",
+      "revision",
+      "status",
+      "currentStep",
+      "percentage",
+      "codeSnapshot",
+      "completionEvidenceId",
+      "completedAt",
+      "updatedAt",
+    ],
+    errorCode,
+  );
+  const codeSnapshotBytes = typeof progress.codeSnapshot === "string"
+    ? TEXT_ENCODER.encode(progress.codeSnapshot).byteLength
+    : 0;
+  const validState =
+    (progress.status === "not_started" && progress.percentage === 0) ||
+    (
+      progress.status === "in_progress" &&
+      Number.isSafeInteger(progress.percentage) &&
+      progress.percentage >= 0 &&
+      progress.percentage < 100
+    ) ||
+    (progress.status === "completed" && progress.percentage === 100);
+  const validCompletion = progress.status === "completed"
+    ? (
+        typeof progress.codeSnapshot === "string" &&
+        progress.codeSnapshot.length > 0 &&
+        typeof progress.completionEvidenceId === "string" &&
+        LOWERCASE_UUID_V4.test(progress.completionEvidenceId) &&
+        validTimestamp(progress.completedAt)
+      )
+    : progress.completionEvidenceId === null && progress.completedAt === null;
+  if (
+    progress.lessonId !== expectedLesson.id ||
+    typeof progress.lessonId !== "string" ||
+    !LESSON_SLUG.test(progress.lessonId) ||
+    progress.lessonVersion !== expectedLesson.version ||
+    !Number.isSafeInteger(progress.revision) ||
+    progress.revision < 1 ||
+    progress.revision >= Number.MAX_SAFE_INTEGER ||
+    typeof progress.currentStep !== "string" ||
+    progress.currentStep.length === 0 ||
+    progress.currentStep.length > 100 ||
+    !STEP_ID.test(progress.currentStep) ||
+    !Number.isSafeInteger(progress.percentage) ||
+    (progress.codeSnapshot !== null && typeof progress.codeSnapshot !== "string") ||
+    codeSnapshotBytes > 65_536 ||
+    !validState ||
+    !validCompletion ||
+    !validTimestamp(progress.updatedAt)
+  ) {
+    fail(errorCode);
+  }
+  return progress;
+}
+
+export function buildFirstSparkProgressReplay(body, lessonValue) {
+  const lesson = validateFirstSparkLesson(lessonValue);
+  const data = exactKeys(
+    parseDataEnvelope(body, "INVALID_BOOTSTRAP_ENVELOPE"),
+    ["profile", "activation", "progress", "achievements", "nextLesson"],
+    "INVALID_BOOTSTRAP_RESPONSE",
+  );
+  if (
+    !Array.isArray(data.progress) ||
+    data.progress.length > MAX_BOOTSTRAP_PROGRESS_RECORDS
+  ) {
+    fail("INVALID_BOOTSTRAP_PROGRESS");
+  }
+  const firstSparkEntries = data.progress.filter(
+    (entry) =>
+      isRecord(entry) &&
+      entry.lessonId === lesson.id,
+  );
+  if (firstSparkEntries.some(
+    (entry) => !Number.isSafeInteger(entry.lessonVersion) || entry.lessonVersion < 1,
+  )) {
+    fail("INVALID_BOOTSTRAP_PROGRESS");
+  }
+  const matches = firstSparkEntries.filter(
+    (entry) => entry.lessonVersion === lesson.version,
+  );
+  if (matches.length > 1) fail("INVALID_BOOTSTRAP_PROGRESS");
+  if (matches.length === 0) {
+    return {
+      request: {
+        lessonVersion: lesson.version,
+        expectedRevision: null,
+        status: "not_started",
+        currentStep: "meet-the-build",
+        percentage: 0,
+      },
+      previous: null,
+    };
+  }
+
+  const previous = validateCanaryProgressRecord(matches[0], lesson);
+  const request = {
+    lessonVersion: previous.lessonVersion,
+    expectedRevision: previous.revision,
+    status: previous.status,
+    currentStep: previous.currentStep,
+    percentage: previous.percentage,
+    ...(previous.status === "completed"
+      ? {
+          codeSnapshot: previous.codeSnapshot,
+          uploadEvidenceId: previous.completionEvidenceId,
+        }
+      : {}),
+  };
+  return { request, previous };
+}
+
+export function validateFirstSparkProgressResponse(body, replay) {
+  if (
+    !isRecord(replay) ||
+    !isRecord(replay.request) ||
+    (replay.previous !== null && !isRecord(replay.previous))
+  ) {
+    fail("INVALID_PROGRESS_RESPONSE");
+  }
+  const expectedLesson = {
+    id: "first-spark",
+    version: replay.request.lessonVersion,
+  };
+  const progress = validateCanaryProgressRecord(
+    parseDataEnvelope(body, "INVALID_PROGRESS_ENVELOPE"),
+    expectedLesson,
+    "INVALID_PROGRESS_RESPONSE",
+  );
+  const previous = replay.previous;
+  const expectedRevision = (replay.request.expectedRevision ?? 0) + 1;
+  const expectedCodeSnapshot = previous === null ? null : previous.codeSnapshot;
+  const expectedCompletionEvidence = replay.request.status === "completed"
+    ? replay.request.uploadEvidenceId
+    : null;
+  const expectedCompletedAt = previous === null ? null : previous.completedAt;
+  if (
+    progress.revision !== expectedRevision ||
+    progress.status !== replay.request.status ||
+    progress.currentStep !== replay.request.currentStep ||
+    progress.percentage !== replay.request.percentage ||
+    progress.codeSnapshot !== expectedCodeSnapshot ||
+    progress.completionEvidenceId !== expectedCompletionEvidence ||
+    progress.completedAt !== expectedCompletedAt ||
+    (
+      previous !== null &&
+      Date.parse(progress.updatedAt) < Date.parse(previous.updatedAt)
+    )
+  ) {
+    fail("INVALID_PROGRESS_RESPONSE");
+  }
+  return { revision: progress.revision, updatedAt: progress.updatedAt };
 }
 
 export function sha256Hex(value) {
@@ -702,6 +896,23 @@ export async function runPostdeployCanary(
       { timeoutMs: AUTH_TIMEOUT_MS },
     );
     validateBootstrap(bootstrap, authenticatedIdentity);
+    const progressReplay = buildFirstSparkProgressReplay(bootstrap, lesson);
+
+    const progress = await requestJson(
+      fetchImpl,
+      `${configuration.baseUrl}/api/lessons/${lesson.id}/progress`,
+      {
+        method: "PUT",
+        headers: {
+          Accept: "application/json",
+          Authorization: authorization,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(progressReplay.request),
+      },
+      { timeoutMs: AUTH_TIMEOUT_MS, maximumBytes: MAX_JSON_RESPONSE_BYTES },
+    );
+    const savedProgress = validateFirstSparkProgressResponse(progress, progressReplay);
 
     const compile = await requestJson(
       fetchImpl,
@@ -722,7 +933,10 @@ export async function runPostdeployCanary(
       },
       { timeoutMs: COMPILE_TIMEOUT_MS, maximumBytes: MAX_JSON_RESPONSE_BYTES },
     );
-    result = validateCompileArtifact(compile, lesson.starterCode);
+    result = {
+      ...validateCompileArtifact(compile, lesson.starterCode),
+      progressRevision: savedProgress.revision,
+    };
   } catch (error) {
     failure = error instanceof CanaryError ? error : new CanaryError("CANARY_FAILED");
   } finally {
@@ -744,6 +958,7 @@ export async function runPostdeployCanary(
     environment: configuration.expectedEnvironment,
     buildId: configuration.expectedBuildId,
     compileJobId: result.compileJobId,
+    progressRevision: result.progressRevision,
   };
 }
 
@@ -759,7 +974,7 @@ async function main() {
     createClientImpl: createClient,
   });
   process.stdout.write(
-    `Postdeploy canary passed for ${result.environment} build ${result.buildId}; compile job ${result.compileJobId}.\n`,
+    `Postdeploy canary passed for ${result.environment} build ${result.buildId}; progress revision ${result.progressRevision}; compile job ${result.compileJobId}.\n`,
   );
 }
 

@@ -36,6 +36,7 @@ LABEL org.opencontainers.image.title="Firelight Arduino compiler" \
 COPY --from=toolchain /usr/local/bin/arduino-cli /usr/local/bin/arduino-cli
 COPY --from=toolchain /opt/arduino /opt/arduino
 COPY app.py ${LAMBDA_TASK_ROOT}/app.py
+COPY docker/verify_lesson_sketches.py ${LAMBDA_TASK_ROOT}/verify_lesson_sketches.py
 RUN chmod 1777 /tmp
 
 EXPOSE 8080

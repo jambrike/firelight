@@ -33,6 +33,7 @@ import {
 } from "../shared/hardware";
 
 const MAX_UPSTREAM_JSON_BYTES = 3 * 1024 * 1024;
+const SUPABASE_REQUEST_TIMEOUT_MS = 15_000;
 const ACCOUNT_EXPORT_PAGE_SIZE = 1_000;
 const PROGRESS_SELECT =
   "lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completion_evidence_id,completed_at,updated_at";
@@ -205,6 +206,13 @@ export type RepositoryFetcher = (
   input: URL,
   init: RequestInit,
 ) => Promise<Response>;
+
+class SupabaseRequestDeadlineError extends Error {
+  constructor() {
+    super("Supabase request deadline exceeded.");
+    this.name = "SupabaseRequestDeadlineError";
+  }
+}
 
 interface SupabaseErrorBody {
   readonly code: string | null;
@@ -772,9 +780,35 @@ function isExactProgressReplay(
     snapshotMatches;
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function cancelBodyQuietly(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  try {
+    await body?.cancel();
+  } catch {
+    // A deadline or upstream failure may already have errored the stream.
+  }
+}
+
+async function cancelReaderQuietly<T>(
+  reader: ReadableStreamDefaultReader<T>,
+): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // A deadline or upstream failure may already have errored the stream.
+  }
+}
+
+async function readBoundedJson(
+  response: Response,
+  signal: AbortSignal,
+): Promise<unknown> {
+  if (signal.aborted) {
+    await cancelBodyQuietly(response.body);
+    throw new SupabaseRequestDeadlineError();
+  }
   const declaredLength = response.headers.get("content-length");
   if (declaredLength && Number(declaredLength) > MAX_UPSTREAM_JSON_BYTES) {
+    await cancelBodyQuietly(response.body);
     throw new RepositoryError("unavailable", "Supabase returned an oversized response.");
   }
 
@@ -783,6 +817,10 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  const cancelOnAbort = () => {
+    void cancelReaderQuietly(reader);
+  };
+  signal.addEventListener("abort", cancelOnAbort, { once: true });
 
   try {
     for (;;) {
@@ -794,12 +832,13 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       }
       total += chunk.byteLength;
       if (total > MAX_UPSTREAM_JSON_BYTES) {
-        await reader.cancel();
+        await cancelReaderQuietly(reader);
         throw new RepositoryError("unavailable", "Supabase returned an oversized response.");
       }
       chunks.push(chunk);
     }
   } finally {
+    signal.removeEventListener("abort", cancelOnAbort);
     reader.releaseLock();
   }
 
@@ -849,8 +888,14 @@ class SupabaseIdentityRepository implements IdentityRepository {
   readonly #accessToken: string;
   readonly #accessTokenClaims: AccessTokenClaims | null;
   readonly #fetcher: RepositoryFetcher;
+  readonly #requestTimeoutMs: number;
 
-  constructor(env: Env, accessToken: string, fetcher: RepositoryFetcher) {
+  constructor(
+    env: Env,
+    accessToken: string,
+    fetcher: RepositoryFetcher,
+    requestTimeoutMs: number,
+  ) {
     const supabaseUrl = readConfiguredValue(env.SUPABASE_URL);
     const expectedProjectRef = readConfiguredValue(env.SUPABASE_PROJECT_REF);
     const publishableKey = readConfiguredValue(env.SUPABASE_PUBLISHABLE_KEY);
@@ -877,6 +922,14 @@ class SupabaseIdentityRepository implements IdentityRepository {
     this.#serviceRoleKey = serviceRoleKey;
     this.#accessToken = accessToken;
     this.#fetcher = fetcher;
+    if (
+      !Number.isSafeInteger(requestTimeoutMs) ||
+      requestTimeoutMs < 1 ||
+      requestTimeoutMs > 60_000
+    ) {
+      throw new RepositoryError("unavailable", "Supabase is not configured.");
+    }
+    this.#requestTimeoutMs = requestTimeoutMs;
   }
 
   async #request(
@@ -892,21 +945,47 @@ class SupabaseIdentityRepository implements IdentityRepository {
     headers.set("Authorization", `Bearer ${authorization}`);
     if (init.body) headers.set("Content-Type", "application/json");
 
-    let response: Response;
-    try {
-      response = await this.#fetcher(new URL(path, this.#baseUrl), {
-        ...init,
-        headers,
-      });
-    } catch {
-      throw new RepositoryError("unavailable", "Supabase could not be reached.");
-    }
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new SupabaseRequestDeadlineError());
+      }, this.#requestTimeoutMs);
+    });
 
-    const body = await readBoundedJson(response);
-    if (!response.ok) {
-      throw mapUpstreamError(response.status, parseSupabaseError(body));
+    try {
+      const operation = (async (): Promise<unknown> => {
+        let response: Response;
+        try {
+          response = await this.#fetcher(new URL(path, this.#baseUrl), {
+            ...init,
+            headers,
+            signal: controller.signal,
+          });
+        } catch {
+          if (controller.signal.aborted) {
+            throw new SupabaseRequestDeadlineError();
+          }
+          throw new RepositoryError("unavailable", "Supabase could not be reached.");
+        }
+
+        const body = await readBoundedJson(response, controller.signal);
+        if (!response.ok) {
+          throw mapUpstreamError(response.status, parseSupabaseError(body));
+        }
+        return body;
+      })();
+
+      return await Promise.race([operation, deadline]);
+    } catch (error) {
+      if (error instanceof SupabaseRequestDeadlineError || controller.signal.aborted) {
+        throw new RepositoryError("unavailable", "Supabase request timed out.");
+      }
+      throw error;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
-    return body;
   }
 
   async #readCompleteExportRows(
@@ -1334,7 +1413,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
             method: "POST",
             headers: { Prefer: "return=representation,missing=default" },
             body: JSON.stringify(progressRecord),
-          }),
+          }, "service"),
         );
       } catch (error) {
         if (
@@ -1363,7 +1442,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
             ? progressValues
             : { ...progressValues, code_snapshot: input.codeSnapshot },
         ),
-      }),
+      }, "service"),
     );
     if (saved) return saved;
     const replay = await this.#readProgress(userId, lessonId, input.lessonVersion);
@@ -1601,6 +1680,12 @@ export function createSupabaseIdentityRepository(
   env: Env,
   accessToken: string,
   fetcher: RepositoryFetcher = fetch,
+  requestTimeoutMs = SUPABASE_REQUEST_TIMEOUT_MS,
 ): IdentityRepository {
-  return new SupabaseIdentityRepository(env, accessToken, fetcher);
+  return new SupabaseIdentityRepository(
+    env,
+    accessToken,
+    fetcher,
+    requestTimeoutMs,
+  );
 }

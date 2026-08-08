@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "@playwright/test"],
+    "tsBuildInfoFile": "../node_modules/.cache/tsconfig.e2e.tsbuildinfo"
+  },
+  "include": ["./**/*.ts"]
+}

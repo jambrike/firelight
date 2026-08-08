@@ -600,8 +600,10 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
               {lesson.pinAssignments.map((assignment) => (
                 <div key={`${assignment.component}-${assignment.signal}-${assignment.pin}`}>
                   <dt>{assignment.component} · {assignment.signal}</dt>
-                  <dd>{assignment.pin}</dd>
-                  {assignment.note ? <small>{assignment.note}</small> : null}
+                  <dd>
+                    {assignment.pin}
+                    {assignment.note ? <small>{assignment.note}</small> : null}
+                  </dd>
                 </div>
               ))}
             </dl>
