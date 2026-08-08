@@ -1,4 +1,4 @@
-import type { LessonSlug } from "../../../shared/curriculum";
+import { isLessonSlug, type LessonSlug } from "../../../shared/curriculum";
 import type {
   ApiErrorBody,
   BootstrapData,
@@ -8,6 +8,14 @@ import type {
   ProgressUpdateInput,
   PublicRuntimeConfig,
 } from "../../../shared/identity";
+import {
+  isRfc3339Timestamp,
+  MAX_NANO_UPLOAD_BYTES,
+  type CompileArtifact,
+  type CompileSketchInput,
+  type UploadEvidence,
+  type UploadEvidenceInput,
+} from "../../../shared/hardware";
 
 export class FirelightApiError extends Error {
   readonly status: number;
@@ -41,6 +49,57 @@ function parseErrorBody(value: unknown): ApiErrorBody["error"] | null {
     code: error.code,
     message: error.message,
     requestId: error.requestId,
+  };
+}
+
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+function parseUploadEvidence(value: unknown): UploadEvidence | null {
+  if (!isRecord(value)) return null;
+  const {
+    id,
+    compileJobId,
+    lessonId,
+    lessonVersion,
+    sourceHash,
+    artifactHash,
+    bytesWritten,
+    recordedAt,
+    attestation,
+  } = value;
+  if (
+    typeof id !== "string" ||
+    !UUID_V4_PATTERN.test(id) ||
+    typeof compileJobId !== "string" ||
+    !UUID_V4_PATTERN.test(compileJobId) ||
+    typeof lessonId !== "string" ||
+    !isLessonSlug(lessonId) ||
+    !Number.isSafeInteger(lessonVersion) ||
+    Number(lessonVersion) < 1 ||
+    typeof sourceHash !== "string" ||
+    !SHA256_PATTERN.test(sourceHash) ||
+    typeof artifactHash !== "string" ||
+    !SHA256_PATTERN.test(artifactHash) ||
+    !Number.isSafeInteger(bytesWritten) ||
+    Number(bytesWritten) < 1 ||
+    Number(bytesWritten) > MAX_NANO_UPLOAD_BYTES ||
+    !isRfc3339Timestamp(recordedAt) ||
+    attestation !== "browser-web-serial-v1"
+  ) {
+    return null;
+  }
+  return {
+    id,
+    compileJobId,
+    lessonId,
+    lessonVersion: Number(lessonVersion),
+    sourceHash,
+    artifactHash,
+    bytesWritten: Number(bytesWritten),
+    recordedAt,
+    attestation,
   };
 }
 
@@ -134,6 +193,38 @@ export class FirelightApi {
         body: JSON.stringify(input),
       },
     );
+  }
+
+  compileSketch(input: CompileSketchInput, signal?: AbortSignal): Promise<CompileArtifact> {
+    return this.#request<CompileArtifact>("/api/compile", {
+      method: "POST",
+      body: JSON.stringify(input),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  async recordUploadEvidence(
+    input: UploadEvidenceInput,
+    signal?: AbortSignal,
+  ): Promise<UploadEvidence> {
+    const value = await this.#request<unknown>("/api/hardware/upload-evidence", {
+      method: "POST",
+      body: JSON.stringify(input),
+      ...(signal ? { signal } : {}),
+    });
+    const evidence = parseUploadEvidence(value);
+    if (
+      evidence?.compileJobId !== input.compileJobId ||
+      evidence.artifactHash !== input.artifactHash ||
+      evidence.bytesWritten !== input.bytesWritten
+    ) {
+      throw new FirelightApiError(
+        200,
+        "INVALID_RESPONSE",
+        "Firelight received invalid upload evidence.",
+      );
+    }
+    return evidence;
   }
 
   deleteAccount(): Promise<{ readonly deleted: true }> {

@@ -8,6 +8,7 @@ export type HardwareTransportErrorCode =
   | "device-not-connected"
   | "device-disconnected"
   | "port-close-failed"
+  | "serial-read-failed"
   | "artifact-invalid"
   | "upload-cancelled"
   | "upload-failed";

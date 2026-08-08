@@ -1,6 +1,9 @@
 import { exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressUpdateInput } from "../shared/identity";
+import { FIRELIGHT_BOARD_FQBN } from "../shared/hardware";
+import { findLesson } from "../src/features/lessons/catalog";
+import { sha256Hex } from "./compiler-gateway";
 import { createFirelightApp } from "./index";
 import { RepositoryError } from "./identity-repository";
 import type {
@@ -17,6 +20,7 @@ const user: AuthenticatedUser = {
   email: "builder@example.com",
   emailConfirmed: true,
   lastSignInAt: new Date().toISOString(),
+  isAnonymous: false,
 };
 
 const profile: ProfileRecord = {
@@ -46,6 +50,7 @@ const bootstrap: BootstrapRecords = {
       currentStep: "complete",
       percentage: 100,
       codeSnapshot: null,
+      completionEvidenceId: null,
       completedAt: now,
       updatedAt: now,
     },
@@ -62,6 +67,22 @@ function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRe
     })),
     claimKit: vi.fn(async () => bootstrap.activation!),
     hasActivation: vi.fn(async () => true),
+    beginCompileJob: vi.fn(async () => ({
+      result: "started" as const,
+      jobId: "33333333-3333-4333-8333-333333333333",
+    })),
+    finishCompileJob: vi.fn(async () => undefined),
+    recordUploadEvidence: vi.fn(async (_userId, compileJobId, artifactHash, bytesWritten) => ({
+      id: "44444444-4444-4444-8444-444444444444",
+      compileJobId,
+      lessonId: "first-spark" as const,
+      lessonVersion: 1,
+      sourceHash: "a".repeat(64),
+      artifactHash,
+      bytesWritten,
+      recordedAt: now,
+      attestation: "browser-web-serial-v1" as const,
+    })),
     upsertProgress: vi.fn(async (_userId, lessonId, input: ProgressUpdateInput) => ({
       lessonId: lessonId as "first-spark",
       lessonVersion: input.lessonVersion,
@@ -70,6 +91,7 @@ function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRe
       currentStep: input.currentStep,
       percentage: input.percentage,
       codeSnapshot: input.codeSnapshot ?? null,
+      completionEvidenceId: input.uploadEvidenceId ?? null,
       completedAt: input.status === "completed" ? now : null,
       updatedAt: now,
     })),
@@ -78,25 +100,67 @@ function makeRepository(overrides: Partial<IdentityRepository> = {}): IdentityRe
   };
 }
 
-const testEnv: Env = {
+const testEnv = {
   ENVIRONMENT: "development",
   BUILD_ID: "local",
-  SUPABASE_URL: "https://supabase.firelight.test",
+  SUPABASE_URL: "http://127.0.0.1:54321",
   SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
   KIT_CODE_PEPPER: "firelight-local-kit-pepper",
+  COMPILER_SERVICE_URL: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws/",
+  COMPILER_SERVICE_ORIGIN: "https://abcdefghijklmnopqrst.lambda-url.eu-west-1.on.aws",
+  COMPILER_SERVICE_TOKEN:
+    "test-service-token-that-is-at-least-thirty-two-characters",
   ASSETS: exports.default,
-};
+} as unknown as Env;
 
 function requestWithRepository(
   repository: IdentityRepository,
   path: string,
   init: RequestInit = {},
+  compilerFetcher?: (request: Request) => Promise<Response>,
 ) {
-  const app = createFirelightApp({ createRepository: () => repository });
+  const app = createFirelightApp({
+    createRepository: () => repository,
+    ...(compilerFetcher ? { compilerFetcher } : {}),
+  });
   const headers = new Headers(init.headers);
   if (!headers.has("Authorization")) headers.set("Authorization", "Bearer valid-token");
   return app.request(`https://firelight.test${path}`, { ...init, headers }, testEnv);
+}
+
+const firstSpark = findLesson("first-spark")!;
+const validHex = ":100000000C945C000C946E000C946E000C946E00CA\n:00000001FF\n";
+
+function compileRequest(source = firstSpark.starterCode): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lessonId: "first-spark",
+      lessonVersion: firstSpark.version,
+      fqbn: FIRELIGHT_BOARD_FQBN,
+      source,
+    }),
+  };
+}
+
+async function successfulCompiler(request: Request): Promise<Response> {
+  const body = await request.clone().json<{
+    fqbn: string;
+    source: string;
+  }>();
+  return Response.json({
+    ok: true,
+    artifact: {
+      format: "intel-hex",
+      fqbn: body.fqbn,
+      sourceHash: await sha256Hex(body.source),
+      artifactHash: await sha256Hex(validHex),
+      hex: validHex,
+    },
+    diagnostics: [],
+  });
 }
 
 const legacyRedirects = [
@@ -310,6 +374,8 @@ describe("Firelight Worker", () => {
       status: "completed",
       currentStep: "finish-lesson",
       percentage: 100,
+      codeSnapshot: "void setup() {}",
+      uploadEvidenceId: "44444444-4444-4444-8444-444444444444",
     } as const;
     const response = await requestWithRepository(
       repository,
@@ -323,6 +389,59 @@ describe("Firelight Worker", () => {
 
     expect(response.status).toBe(200);
     expect(repository.upsertProgress).toHaveBeenCalledWith(user.id, "first-spark", input);
+  });
+
+  it("fails a progress revocation race with the activation contract", async () => {
+    const repository = makeRepository({
+      upsertProgress: vi.fn(async () => {
+        throw new RepositoryError("forbidden", "Kit access is no longer active.");
+      }),
+    });
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: null,
+          status: "in_progress",
+          currentStep: "meet-the-build",
+          percentage: 0,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json<{ error: { code: string } }>()).error.code).toBe(
+      "ACTIVATION_REQUIRED",
+    );
+  });
+
+  it("requires upload evidence and the uploaded sketch for terminal progress", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(
+      repository,
+      "/api/lessons/first-spark/progress",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lessonVersion: 1,
+          expectedRevision: 4,
+          status: "completed",
+          currentStep: "finish-lesson",
+          percentage: 100,
+          codeSnapshot: firstSpark.starterCode,
+        }),
+      },
+    );
+    const body = await response.json<{ error: { code: string } }>();
+
+    expect(response.status).toBe(422);
+    expect(body.error.code).toBe("UPLOAD_EVIDENCE_REQUIRED");
+    expect(repository.upsertProgress).not.toHaveBeenCalled();
   });
 
   it("requires an optimistic revision on every progress mutation", async () => {
@@ -497,14 +616,215 @@ describe("Firelight Worker", () => {
     expect(repository.upsertProgress).toHaveBeenCalledWith(user.id, "morse-name", input);
   });
 
-  it("keeps compile as an authenticated, activated not-ready boundary", async () => {
-    const response = await requestWithRepository(makeRepository(), "/api/compile", {
-      method: "POST",
+  it("compiles a validated allowlisted sketch and records only its hashes", async () => {
+    const repository = makeRepository();
+    const compiler = vi.fn(successfulCompiler);
+    const response = await requestWithRepository(
+      repository,
+      "/api/compile",
+      compileRequest(),
+      compiler,
+    );
+    const body = await response.json<{
+      data: {
+        compileJobId: string;
+        fqbn: string;
+        sourceHash: string;
+        artifactHash: string;
+        hex: string;
+      };
+    }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data).toMatchObject({
+      compileJobId: "33333333-3333-4333-8333-333333333333",
+      fqbn: FIRELIGHT_BOARD_FQBN,
+      hex: validHex,
     });
+    expect(body.data).not.toHaveProperty("source");
+    expect(JSON.stringify(body)).not.toContain(testEnv.COMPILER_SERVICE_URL);
+    expect(repository.beginCompileJob).toHaveBeenCalledWith(user.id, {
+      lessonId: "first-spark",
+      lessonVersion: 1,
+      sourceHash: body.data.sourceHash,
+    });
+    expect(repository.finishCompileJob).toHaveBeenCalledWith(
+      user.id,
+      expect.objectContaining({
+        jobId: body.data.compileJobId,
+        state: "succeeded",
+        artifactHash: body.data.artifactHash,
+      }),
+    );
+    expect(compiler).toHaveBeenCalledOnce();
+  });
+
+  it("rejects anonymous or unconfirmed sessions before creating compile work", async () => {
+    const repository = makeRepository({
+      authenticate: vi.fn(async () => ({ ...user, isAnonymous: true })),
+    });
+    const compiler = vi.fn(successfulCompiler);
+    const response = await requestWithRepository(
+      repository,
+      "/api/compile",
+      compileRequest(),
+      compiler,
+    );
     const body = await response.json<{ error: { code: string } }>();
 
-    expect(response.status).toBe(503);
-    expect(body.error.code).toBe("COMPILER_NOT_READY");
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("NON_ANONYMOUS_ACCOUNT_REQUIRED");
+    expect(repository.beginCompileJob).not.toHaveBeenCalled();
+    expect(compiler).not.toHaveBeenCalled();
+  });
+
+  it("does not return an artifact when access is revoked before compile commit", async () => {
+    const finishCompileJob = vi.fn(async () => {
+      throw new RepositoryError("forbidden", "Kit access is no longer active.");
+    });
+    const repository = makeRepository({ finishCompileJob });
+    const response = await requestWithRepository(
+      repository,
+      "/api/compile",
+      compileRequest(),
+      vi.fn(successfulCompiler),
+    );
+    const body = await response.json<{ data?: unknown; error: { code: string } }>();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("ACTIVATION_REQUIRED");
+    expect(body.data).toBeUndefined();
+    expect(finishCompileJob).toHaveBeenCalledOnce();
+  });
+
+  it("enforces the exact Nano target and 64 KiB source limit before job creation", async () => {
+    const repository = makeRepository();
+    const wrongTarget = compileRequest();
+    if (typeof wrongTarget.body !== "string") throw new TypeError("Expected JSON body.");
+    const wrongBody = JSON.parse(wrongTarget.body) as Record<string, unknown>;
+    wrongBody.fqbn = "arduino:avr:uno";
+    const wrongBoardResponse = await requestWithRepository(repository, "/api/compile", {
+      ...wrongTarget,
+      body: JSON.stringify(wrongBody),
+    });
+    const wrongBoardError = await wrongBoardResponse.json<{ error: { code: string } }>();
+    expect(wrongBoardResponse.status).toBe(422);
+    expect(wrongBoardError.error.code).toBe("BOARD_TARGET_UNSUPPORTED");
+
+    const oversizedResponse = await requestWithRepository(
+      repository,
+      "/api/compile",
+      compileRequest(`${firstSpark.starterCode}\n/*${"x".repeat(65_536)}*/`),
+    );
+    const oversizedError = await oversizedResponse.json<{ error: { code: string } }>();
+    expect(oversizedResponse.status).toBe(413);
+    expect(oversizedError.error.code).toBe("SKETCH_TOO_LARGE");
+    expect(repository.beginCompileJob).not.toHaveBeenCalled();
+  });
+
+  it("maps atomic active and rolling rate gates without calling the compiler", async () => {
+    const compiler = vi.fn(successfulCompiler);
+    const activeRepository = makeRepository({
+      beginCompileJob: vi.fn(async () => ({ result: "active" as const })),
+    });
+    const active = await requestWithRepository(
+      activeRepository,
+      "/api/compile",
+      compileRequest(),
+      compiler,
+    );
+    expect(active.status).toBe(409);
+    expect((await active.json<{ error: { code: string } }>()).error.code).toBe(
+      "COMPILE_ALREADY_RUNNING",
+    );
+
+    const limitedRepository = makeRepository({
+      beginCompileJob: vi.fn(async () => ({
+        result: "rate_limited" as const,
+        scope: "hour" as const,
+        retryAfterSeconds: 3600,
+      })),
+    });
+    const limited = await requestWithRepository(
+      limitedRepository,
+      "/api/compile",
+      compileRequest(),
+      compiler,
+    );
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("3600");
+    expect(compiler).not.toHaveBeenCalled();
+  });
+
+  it("records upload success only against the authenticated learner's artifact", async () => {
+    const repository = makeRepository();
+    const response = await requestWithRepository(
+      repository,
+      "/api/hardware/upload-evidence",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compileJobId: "33333333-3333-4333-8333-333333333333",
+          artifactHash: "b".repeat(64),
+          bytesWritten: 256,
+        }),
+      },
+    );
+    const body = await response.json<{ data: { id: string; attestation: string } }>();
+
+    expect(response.status).toBe(200);
+    expect(body.data.attestation).toBe("browser-web-serial-v1");
+    expect(repository.recordUploadEvidence).toHaveBeenCalledWith(
+      user.id,
+      "33333333-3333-4333-8333-333333333333",
+      "b".repeat(64),
+      256,
+    );
+
+    const oversized = await requestWithRepository(
+      repository,
+      "/api/hardware/upload-evidence",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compileJobId: "33333333-3333-4333-8333-333333333333",
+          artifactHash: "b".repeat(64),
+          bytesWritten: 30_721,
+        }),
+      },
+    );
+    const oversizedBody = await oversized.json<{ error: { code: string } }>();
+    expect(oversized.status).toBe(422);
+    expect(oversizedBody.error.code).toBe("UPLOAD_SIZE_INVALID");
+    expect(repository.recordUploadEvidence).toHaveBeenCalledOnce();
+  });
+
+  it("fails an upload-evidence revocation race with the activation contract", async () => {
+    const repository = makeRepository({
+      recordUploadEvidence: vi.fn(async () => {
+        throw new RepositoryError("forbidden", "Kit access is no longer active.");
+      }),
+    });
+    const response = await requestWithRepository(
+      repository,
+      "/api/hardware/upload-evidence",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compileJobId: "33333333-3333-4333-8333-333333333333",
+          artifactHash: "b".repeat(64),
+          bytesWritten: 256,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json<{ error: { code: string } }>()).error.code).toBe(
+      "ACTIVATION_REQUIRED",
+    );
   });
 
   it("requires a recent online sign-in before account deletion", async () => {

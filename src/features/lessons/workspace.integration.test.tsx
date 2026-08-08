@@ -17,7 +17,20 @@ import type {
   LessonProgressStatus,
   ProgressUpdateInput,
 } from "../../../shared/identity";
+import type { UploadEvidence } from "../../../shared/hardware";
 import { LessonPage } from "../../pages/LessonPage";
+import type {
+  ArduinoTransport,
+  CompileArtifact,
+  HardwareWorkflowPhase,
+} from "../hardware/contracts";
+import { FIRELIGHT_BOARD_FQBN } from "../hardware/contracts";
+import {
+  HardwareWorkflowFactoryContext,
+  type HardwareWorkflowFactory,
+} from "../hardware/workflow-context";
+import { sha256TextHex } from "../hardware/artifact";
+import { HardwareWorkflowController } from "../hardware/workflow";
 import {
   anonymousIdentity,
   IdentityContext,
@@ -47,6 +60,9 @@ function progressRecord(
     currentStep,
     percentage: options.percentage ?? (status === "completed" ? 100 : 20),
     codeSnapshot: options.codeSnapshot ?? null,
+    completionEvidenceId: status === "completed"
+      ? "55555555-5555-4555-8555-555555555555"
+      : null,
     completedAt: status === "completed" ? timestamp : null,
     updatedAt: timestamp,
   };
@@ -88,6 +104,7 @@ function savedFromInput(
     currentStep: input.currentStep,
     percentage: input.percentage,
     codeSnapshot: input.codeSnapshot ?? null,
+    completionEvidenceId: input.uploadEvidenceId ?? null,
     completedAt: input.status === "completed" ? timestamp : null,
     updatedAt: timestamp,
   };
@@ -110,9 +127,10 @@ function authenticatedIdentity(
 function renderLesson(
   lessonId: LessonSlug,
   identity: IdentityContextValue = anonymousIdentity,
+  workflowFactory?: HardwareWorkflowFactory,
 ): ReturnType<typeof render> {
   const location = memoryLocation({ path: `/learn/${lessonId}` });
-  const element: ReactElement = (
+  const lessonTree: ReactElement = (
     <IdentityContext.Provider value={identity}>
       <Router hook={location.hook} searchHook={location.searchHook}>
         <Route path="/learn/:lesson">
@@ -121,11 +139,107 @@ function renderLesson(
       </Router>
     </IdentityContext.Provider>
   );
+  const element = workflowFactory ? (
+    <HardwareWorkflowFactoryContext.Provider value={workflowFactory}>
+      {lessonTree}
+    </HardwareWorkflowFactoryContext.Provider>
+  ) : lessonTree;
   return render(element);
+}
+
+function successfulHardwareFactory(
+  lessonId: LessonSlug = "first-spark",
+  serialText = "128\n",
+): HardwareWorkflowFactory {
+  const artifact: CompileArtifact = {
+    compileJobId: "33333333-3333-4333-8333-333333333333",
+    format: "intel-hex",
+    fqbn: FIRELIGHT_BOARD_FQBN,
+    sourceHash: "a".repeat(64),
+    artifactHash: "b".repeat(64),
+    hex: ":00000001FF\n",
+    diagnostics: [],
+  };
+  const evidence: UploadEvidence = {
+    id: "55555555-5555-4555-8555-555555555555",
+    compileJobId: artifact.compileJobId,
+    lessonId: "first-spark",
+    lessonVersion: 1,
+    sourceHash: artifact.sourceHash,
+    artifactHash: artifact.artifactHash,
+    bytesWritten: 128,
+    recordedAt: timestamp,
+    attestation: "browser-web-serial-v1",
+  };
+  return () => {
+    const listeners = new Set<(phase: HardwareWorkflowPhase) => void>();
+    let phase: HardwareWorkflowPhase = "idle";
+    const transport: ArduinoTransport = {
+      get phase() {
+        return phase;
+      },
+      detectCapability: () => ({ supported: true }),
+      connect: async () => {
+        phase = "connected";
+        return { displayName: "Test Nano" };
+      },
+      disconnect: async () => {
+        phase = "idle";
+      },
+      cancel: async () => {
+        phase = "idle";
+      },
+      validateArtifact: async () => undefined,
+      upload: async (_compiled, onProgress) => {
+        phase = "uploading";
+        onProgress({ phase: "writing", bytesWritten: 128, totalBytes: 128 });
+        phase = "success";
+        return { bytesWritten: 128, completedAt: timestamp };
+      },
+      readSerial: async (options, onData) => {
+        onData(serialText);
+        return {
+          baudRate: options.baudRate,
+          text: serialText,
+          bytesRead: new TextEncoder().encode(serialText).byteLength,
+          truncated: false,
+        };
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    return new HardwareWorkflowController({
+      compiler: {
+        compile: async (request) => ({
+          ...artifact,
+          sourceHash: await sha256TextHex(request.source),
+        }),
+      },
+      transport,
+      evidenceRecorder: {
+        record: async (compiled) => ({
+          ...evidence,
+          lessonId,
+          sourceHash: compiled.sourceHash,
+          artifactHash: compiled.artifactHash,
+        }),
+      },
+    });
+  };
 }
 
 function stepButton(name: string | RegExp): HTMLButtonElement {
   return screen.getByRole("button", { name });
+}
+
+async function waitForCurrentStepToAdvance(): Promise<void> {
+  await act(async () => {
+    await vi.waitFor(() => {
+      expect(screen.getByRole("button", { name: "Next step" })).toBeEnabled();
+    });
+  });
 }
 
 describe("lesson workspace integration", () => {
@@ -277,8 +391,8 @@ describe("lesson workspace integration", () => {
 
   it("locks the workspace when completion is queued while keeping failed autosave retryable", async () => {
     vi.useFakeTimers();
-    const saved = progressRecord("first-spark", "finish-lesson", {
-      percentage: 90,
+    const saved = progressRecord("first-spark", "compile-sketch", {
+      percentage: 50,
       revision: 8,
       codeSnapshot: "// ready to finish",
     });
@@ -289,9 +403,20 @@ describe("lesson workspace integration", () => {
       )
       .mockRejectedValueOnce(new Error("Save interrupted."));
     const identity = authenticatedIdentity(bootstrap([saved]), saveProgress);
-    const view = renderLesson("first-spark", identity);
+    const view = renderLesson("first-spark", identity, successfulHardwareFactory());
 
     try {
+      fireEvent.click(screen.getByRole("button", { name: "Compile sketch" }));
+      await waitForCurrentStepToAdvance();
+      fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+      fireEvent.click(screen.getByRole("button", { name: "Choose Nano" }));
+      await waitForCurrentStepToAdvance();
+      fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+      fireEvent.click(screen.getByRole("button", { name: "Send to board" }));
+      await waitForCurrentStepToAdvance();
+      fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+      fireEvent.click(screen.getByRole("button", { name: "I observed this" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next step" }));
       fireEvent.click(screen.getByRole("button", { name: "Complete lesson" }));
 
       expect(view.container.querySelector(".lesson-workspace")).toHaveAttribute(
@@ -316,6 +441,7 @@ describe("lesson workspace integration", () => {
         currentStep: "finish-lesson",
         percentage: 100,
         codeSnapshot: "// ready to finish",
+        uploadEvidenceId: "55555555-5555-4555-8555-555555555555",
       });
       expect(screen.getByRole("button", { name: "Retry save" })).toBeInTheDocument();
 
@@ -334,6 +460,50 @@ describe("lesson workspace integration", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("shows real 9600-baud output before a serial-check can be confirmed", async () => {
+    const prerequisites = ["first-spark", "morse-name", "button-reaction"].map(
+      (lessonId) => progressRecord(lessonId as LessonSlug, "finish-lesson", {
+        status: "completed",
+        percentage: 100,
+      }),
+    );
+    const saved = progressRecord("distance-scout", "compile-sketch", {
+      percentage: 45,
+      revision: 3,
+      codeSnapshot: "// distance sketch",
+    });
+    const identity = authenticatedIdentity(bootstrap([...prerequisites, saved]));
+    renderLesson(
+      "distance-scout",
+      identity,
+      successfulHardwareFactory("distance-scout", "23.4\n24.1\n"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Compile sketch" }));
+    await waitForCurrentStepToAdvance();
+    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose Nano" }));
+    await waitForCurrentStepToAdvance();
+    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send to board" }));
+    await waitForCurrentStepToAdvance();
+    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+
+    const confirm = screen.getByRole("button", { name: "I observed this signal" });
+    expect(confirm).toBeDisabled();
+    expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent(
+      "No serial output captured yet.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Read serial output" }));
+    await vi.waitFor(() => {
+      expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent("23.4");
+    });
+
+    expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent("23.4 24.1");
+    expect(confirm).toBeEnabled();
   });
 
   it("does not treat an authenticated identity without bootstrap data as activated", () => {
@@ -452,13 +622,13 @@ describe("lesson workspace integration", () => {
       expect(screen.getByRole("button", { name: "Compile sketch" })).toBeDisabled();
       expect(
         screen.getAllByText(
-          "Use desktop Chrome or Edge with Web Serial enabled for hardware steps.",
+          "Web Serial requires a current desktop Chrome or Microsoft Edge browser.",
         ).length,
       ).toBeGreaterThanOrEqual(1);
       const reference = screen.getByRole("complementary", { name: "Build reference" });
       expect(
         within(reference).getByText(
-          "Use desktop Chrome or Edge with Web Serial enabled for hardware steps.",
+          "Web Serial requires a current desktop Chrome or Microsoft Edge browser.",
         ),
       ).toBeInTheDocument();
     } finally {

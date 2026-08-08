@@ -8,8 +8,25 @@ import type {
   LessonProgress,
   ProgressUpdateInput,
 } from "../shared/identity";
+import {
+  FIRELIGHT_BOARD_FQBN,
+  MAX_NANO_UPLOAD_BYTES,
+  MAX_SKETCH_SOURCE_BYTES,
+} from "../shared/hardware";
+import type {
+  CompileSketchInput,
+  UploadEvidenceInput,
+} from "../shared/hardware";
 import { findLesson } from "../src/features/lessons/catalog";
 import type { LessonCatalogEntry } from "../src/features/lessons/catalog";
+import { validateLessonCode } from "../src/features/lessons/code-validation";
+import {
+  CompilerGatewayError,
+  diagnosticSummary,
+  requestCompilation,
+  sha256Hex,
+} from "./compiler-gateway";
+import type { CompilerFetcher } from "./compiler-gateway";
 import {
   createSupabaseIdentityRepository,
   RepositoryError,
@@ -32,6 +49,7 @@ interface FirelightWorker {
 
 interface AppDependencies {
   readonly createRepository?: IdentityRepositoryFactory;
+  readonly compilerFetcher?: CompilerFetcher;
 }
 
 type ErrorStatus =
@@ -47,7 +65,8 @@ type ErrorStatus =
   | 429
   | 500
   | 502
-  | 503;
+  | 503
+  | 504;
 
 class ApiRequestError extends Error {
   readonly status: ErrorStatus;
@@ -271,6 +290,9 @@ function parseDisplayName(value: unknown): string {
 }
 
 const CROCKFORD_CODE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{16}$/;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 function normalizeKitCode(value: unknown): string {
   if (!isRecord(value) || typeof value.code !== "string") {
@@ -309,6 +331,115 @@ async function hashKitCode(code: string, pepper: string): Promise<string> {
   );
 }
 
+function parseCompileInput(value: unknown): CompileSketchInput {
+  if (!isRecord(value)) {
+    throw new ApiRequestError(422, "COMPILE_REQUEST_INVALID", "Sketch details are required.");
+  }
+  const lesson = typeof value.lessonId === "string"
+    ? findCurriculumLesson(value.lessonId)
+    : undefined;
+  if (!lesson) {
+    throw new ApiRequestError(404, "LESSON_NOT_FOUND", "That lesson does not exist.");
+  }
+  if (!Number.isInteger(value.lessonVersion) || Number(value.lessonVersion) < 1) {
+    throw new ApiRequestError(422, "LESSON_VERSION_INVALID", "Lesson version is invalid.");
+  }
+  if (Number(value.lessonVersion) !== lesson.version) {
+    throw new ApiRequestError(
+      409,
+      "LESSON_VERSION_CHANGED",
+      "Refresh this lesson before compiling.",
+    );
+  }
+  if (value.fqbn !== FIRELIGHT_BOARD_FQBN) {
+    throw new ApiRequestError(
+      422,
+      "BOARD_TARGET_UNSUPPORTED",
+      "Firelight v1 compiles only for the Nano old-bootloader kit board.",
+    );
+  }
+  if (typeof value.source !== "string" || value.source.trim().length === 0) {
+    throw new ApiRequestError(422, "SKETCH_REQUIRED", "Enter an Arduino sketch to compile.");
+  }
+  if (new TextEncoder().encode(value.source).byteLength > MAX_SKETCH_SOURCE_BYTES) {
+    throw new ApiRequestError(
+      413,
+      "SKETCH_TOO_LARGE",
+      "Arduino sketches are limited to 64 KiB.",
+    );
+  }
+  if (hasUnsupportedControlCharacter(value.source)) {
+    throw new ApiRequestError(
+      422,
+      "SKETCH_INVALID",
+      "The sketch contains unsupported control characters.",
+    );
+  }
+  return {
+    lessonId: lesson.id,
+    lessonVersion: lesson.version,
+    fqbn: FIRELIGHT_BOARD_FQBN,
+    source: value.source,
+  };
+}
+
+function parseUploadEvidenceInput(value: unknown): UploadEvidenceInput {
+  if (!isRecord(value)) {
+    throw new ApiRequestError(
+      422,
+      "UPLOAD_EVIDENCE_INVALID",
+      "Upload details are required.",
+    );
+  }
+  if (typeof value.compileJobId !== "string" || !UUID_PATTERN.test(value.compileJobId)) {
+    throw new ApiRequestError(
+      422,
+      "COMPILE_JOB_INVALID",
+      "The compile job reference is invalid.",
+    );
+  }
+  if (typeof value.artifactHash !== "string" || !SHA256_PATTERN.test(value.artifactHash)) {
+    throw new ApiRequestError(
+      422,
+      "ARTIFACT_HASH_INVALID",
+      "The compiled artifact reference is invalid.",
+    );
+  }
+  if (
+    !Number.isInteger(value.bytesWritten) ||
+    Number(value.bytesWritten) < 1 ||
+    Number(value.bytesWritten) > MAX_NANO_UPLOAD_BYTES
+  ) {
+    throw new ApiRequestError(
+      422,
+      "UPLOAD_SIZE_INVALID",
+      "The reported upload size is invalid.",
+    );
+  }
+  return {
+    compileJobId: value.compileJobId,
+    artifactHash: value.artifactHash,
+    bytesWritten: Number(value.bytesWritten),
+  };
+}
+
+function requireVerifiedLearner(user: AuthenticatedUser): void {
+  if (user.isAnonymous) {
+    throw new ApiRequestError(
+      403,
+      "NON_ANONYMOUS_ACCOUNT_REQUIRED",
+      "Sign in with a confirmed Firelight account to use hardware actions.",
+    );
+  }
+  if (!user.emailConfirmed) {
+    throw new ApiRequestError(
+      403,
+      "EMAIL_CONFIRMATION_REQUIRED",
+      "Confirm your email before using hardware actions.",
+    );
+  }
+}
+
 function parseProgressInput(value: unknown): ProgressUpdateInput {
   if (!isRecord(value)) {
     throw new ApiRequestError(422, "PROGRESS_INVALID", "Progress data is required.");
@@ -320,6 +451,7 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
   const currentStepValue = value.currentStep;
   const percentage = value.percentage;
   const codeSnapshot = value.codeSnapshot;
+  const uploadEvidenceId = value.uploadEvidenceId;
 
   if (!Number.isInteger(lessonVersion) || Number(lessonVersion) < 1) {
     throw new ApiRequestError(422, "LESSON_VERSION_INVALID", "Lesson version is invalid.");
@@ -332,6 +464,28 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
       422,
       "PROGRESS_REVISION_INVALID",
       "The saved-progress revision is invalid.",
+    );
+  }
+  if (status === "completed") {
+    if (typeof uploadEvidenceId !== "string" || !UUID_PATTERN.test(uploadEvidenceId)) {
+      throw new ApiRequestError(
+        422,
+        "UPLOAD_EVIDENCE_REQUIRED",
+        "Upload this compiled sketch before completing the lesson.",
+      );
+    }
+    if (typeof codeSnapshot !== "string" || codeSnapshot.length === 0) {
+      throw new ApiRequestError(
+        422,
+        "COMPLETION_SKETCH_REQUIRED",
+        "The completed lesson must include the uploaded sketch.",
+      );
+    }
+  } else if (uploadEvidenceId !== undefined) {
+    throw new ApiRequestError(
+      422,
+      "UPLOAD_EVIDENCE_INVALID",
+      "Upload evidence can only be attached to completed progress.",
     );
   }
   if (status !== "not_started" && status !== "in_progress" && status !== "completed") {
@@ -384,6 +538,7 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
     currentStep,
     percentage: numericPercentage,
     ...(codeSnapshot !== undefined ? { codeSnapshot } : {}),
+    ...(typeof uploadEvidenceId === "string" ? { uploadEvidenceId } : {}),
   };
 }
 
@@ -466,6 +621,7 @@ function isRecentSignIn(lastSignInAt: string | null): boolean {
 
 export function createFirelightApp(dependencies: AppDependencies = {}) {
   const createRepository = dependencies.createRepository ?? createSupabaseIdentityRepository;
+  const compilerFetcher = dependencies.compilerFetcher ?? ((request: Request) => fetch(request));
   const app = new Hono<FirelightWorker>();
 
   const requestContext: MiddlewareHandler<FirelightWorker> = async (context, next) => {
@@ -635,6 +791,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       const progress = await repository.upsertProgress(user.id, lesson.id, input);
       return context.json({ data: progress });
     } catch (error) {
+      if (error instanceof RepositoryError && error.kind === "forbidden") {
+        return apiError(
+          context,
+          403,
+          "ACTIVATION_REQUIRED",
+          "Kit access is no longer active. Activate a Firelight kit to save progress.",
+        );
+      }
       if (error instanceof RepositoryError && error.kind === "conflict") {
         return apiError(
           context,
@@ -643,13 +807,27 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
           "This lesson changed on another device. Refresh and try again.",
         );
       }
+      if (
+        input.status === "completed" &&
+        error instanceof RepositoryError &&
+        error.kind === "invalid"
+      ) {
+        return apiError(
+          context,
+          422,
+          "COMPLETION_EVIDENCE_REJECTED",
+          "Compile and upload this exact sketch before completing the lesson.",
+        );
+      }
       throw error;
     }
   });
 
   app.post("/api/compile", requireAuth, async (context) => {
+    const input = parseCompileInput(await readJsonBody(context, 512 * 1024));
     const repository = context.get("repository");
     const user = context.get("user");
+    requireVerifiedLearner(user);
     if (!(await repository.hasActivation(user.id))) {
       return apiError(
         context,
@@ -658,12 +836,224 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         "Activate a Firelight kit before compiling.",
       );
     }
-    return apiError(
-      context,
-      503,
-      "COMPILER_NOT_READY",
-      "The secure compiler arrives in the hardware pipeline milestone.",
-    );
+    const definition = findLesson(input.lessonId);
+    if (definition?.version !== input.lessonVersion) {
+      return apiError(
+        context,
+        409,
+        "LESSON_VERSION_CHANGED",
+        "Refresh this lesson before compiling.",
+      );
+    }
+    if (definition.prerequisites.length > 0) {
+      const records = await repository.getBootstrap(user.id);
+      const missing = definition.prerequisites.filter(
+        (prerequisite) => !hasCompletedCurrentLesson(records.progress, prerequisite),
+      );
+      if (missing.length > 0) {
+        return apiError(
+          context,
+          403,
+          "LESSON_PREREQUISITE_REQUIRED",
+          "Complete this lesson's prerequisites before compiling.",
+        );
+      }
+    }
+    const compileStep = definition.steps.find((step) => step.type === "compile");
+    const validationStep = compileStep
+      ? definition.steps.find(
+          (step) => step.type === "code-validation" && step.id === compileStep.validationStepId,
+        )
+      : undefined;
+    if (validationStep?.type !== "code-validation") {
+      return apiError(
+        context,
+        503,
+        "LESSON_CONFIGURATION_INVALID",
+        "This lesson is temporarily unavailable for compilation.",
+      );
+    }
+    const lessonValidation = validateLessonCode(validationStep.validatorId, input.source);
+    if (!lessonValidation.valid) {
+      return apiError(
+        context,
+        422,
+        "LESSON_CODE_CHECK_FAILED",
+        "Run the lesson code check and fix the highlighted requirements first.",
+      );
+    }
+
+    const sourceHash = await sha256Hex(input.source);
+    const gate = await repository.beginCompileJob(user.id, {
+      lessonId: input.lessonId,
+      lessonVersion: input.lessonVersion,
+      sourceHash,
+    });
+    if (gate.result === "active") {
+      return apiError(
+        context,
+        409,
+        "COMPILE_ALREADY_RUNNING",
+        "Wait for the current compile to finish before starting another.",
+      );
+    }
+    if (gate.result === "rate_limited") {
+      context.header("Retry-After", String(gate.retryAfterSeconds));
+      return apiError(
+        context,
+        429,
+        gate.scope === "hour" ? "COMPILE_HOURLY_LIMIT" : "COMPILE_DAILY_LIMIT",
+        gate.scope === "hour"
+          ? "The hourly compile limit has been reached. Try again later."
+          : "The daily compile limit has been reached. Try again tomorrow.",
+      );
+    }
+    if (gate.result === "not_entitled") {
+      return apiError(
+        context,
+        403,
+        "ACTIVATION_REQUIRED",
+        "Activate a Firelight kit before compiling.",
+      );
+    }
+
+    const startedAt = Date.now();
+    try {
+      const result = await requestCompilation(
+        {
+          url: context.env.COMPILER_SERVICE_URL,
+          expectedOrigin: context.env.COMPILER_SERVICE_ORIGIN,
+          token: context.env.COMPILER_SERVICE_TOKEN,
+          environment: context.env.ENVIRONMENT,
+        },
+        input.source,
+        sourceHash,
+        compilerFetcher,
+      );
+      const durationMs = Math.min(60_000, Math.max(0, Date.now() - startedAt));
+      await repository.finishCompileJob(user.id, {
+        jobId: gate.jobId,
+        state: "succeeded",
+        durationMs,
+        safeErrorCode: null,
+        artifactHash: result.artifactHash,
+        diagnosticSummary: diagnosticSummary(result.diagnostics),
+      });
+      return context.json({
+        data: {
+          compileJobId: gate.jobId,
+          format: "intel-hex" as const,
+          fqbn: FIRELIGHT_BOARD_FQBN,
+          sourceHash: result.sourceHash,
+          artifactHash: result.artifactHash,
+          hex: result.hex,
+          diagnostics: result.diagnostics,
+        },
+      });
+    } catch (error) {
+      if (error instanceof RepositoryError && error.kind === "forbidden") {
+        return apiError(
+          context,
+          403,
+          "ACTIVATION_REQUIRED",
+          "Kit access was revoked before compilation completed.",
+        );
+      }
+      const failure = error instanceof CompilerGatewayError
+        ? error
+        : new CompilerGatewayError(
+            "upstream",
+            "COMPILER_INTERNAL_ERROR",
+            "The compiler could not complete this request.",
+          );
+      const durationMs = Math.min(60_000, Math.max(0, Date.now() - startedAt));
+      try {
+        await repository.finishCompileJob(user.id, {
+          jobId: gate.jobId,
+          state: "failed",
+          durationMs,
+          safeErrorCode: failure.code,
+          artifactHash: null,
+          diagnosticSummary: diagnosticSummary(
+            failure.diagnostics.length > 0 ? failure.diagnostics : [failure.message],
+          ),
+        });
+      } catch (finishError) {
+        if (finishError instanceof RepositoryError && finishError.kind === "forbidden") {
+          return apiError(
+            context,
+            403,
+            "ACTIVATION_REQUIRED",
+            "Kit access was revoked before compilation completed.",
+          );
+        }
+        console.error(
+          JSON.stringify({
+            event: "compile.finish_failed",
+            requestId: context.get("requestId"),
+            jobId: gate.jobId,
+            errorType: finishError instanceof Error ? finishError.name : "unknown",
+          }),
+        );
+        return apiError(
+          context,
+          503,
+          "COMPILE_STATE_UNAVAILABLE",
+          "The compile result could not be recorded. Try again.",
+        );
+      }
+
+      const status: ErrorStatus = failure.kind === "compile"
+        ? 422
+        : failure.kind === "timeout"
+          ? 504
+          : failure.kind === "configuration"
+            ? 503
+            : 502;
+      return apiError(context, status, failure.code, failure.message);
+    }
+  });
+
+  app.post("/api/hardware/upload-evidence", requireAuth, async (context) => {
+    const input = parseUploadEvidenceInput(await readJsonBody(context, 4096));
+    const repository = context.get("repository");
+    const user = context.get("user");
+    requireVerifiedLearner(user);
+    if (!(await repository.hasActivation(user.id))) {
+      return apiError(
+        context,
+        403,
+        "ACTIVATION_REQUIRED",
+        "Activate a Firelight kit before recording an upload.",
+      );
+    }
+    try {
+      const evidence = await repository.recordUploadEvidence(
+        user.id,
+        input.compileJobId,
+        input.artifactHash,
+        input.bytesWritten,
+      );
+      return context.json({ data: evidence });
+    } catch (error) {
+      if (error instanceof RepositoryError && error.kind === "forbidden") {
+        return apiError(
+          context,
+          403,
+          "ACTIVATION_REQUIRED",
+          "Kit access is no longer active. Activate a Firelight kit before recording an upload.",
+        );
+      }
+      if (error instanceof RepositoryError && error.kind === "invalid") {
+        return apiError(
+          context,
+          422,
+          "UPLOAD_EVIDENCE_REJECTED",
+          "The upload did not match this account's compiled sketch.",
+        );
+      }
+      throw error;
+    }
   });
 
   app.delete("/api/account", requireAuth, async (context) => {
@@ -687,6 +1077,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     ["/api/kits/claim", "POST"],
     ["/api/lessons/:id/progress", "PUT"],
     ["/api/compile", "POST"],
+    ["/api/hardware/upload-evidence", "POST"],
     ["/api/account", "DELETE"],
   ] as const;
 

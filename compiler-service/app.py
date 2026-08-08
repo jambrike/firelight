@@ -1,8 +1,10 @@
-"""Firelight's private, bounded Arduino Nano compiler Lambda.
+"""Firelight's bounded Arduino Nano compiler and authenticated gateway.
 
-The module intentionally has no application dependencies. The Lambda Python base
-image supplies boto3 for the one cold-start Secrets Manager read; all request and
-compiler handling uses the standard library.
+The module intentionally has no application dependencies. A public Lambda
+gateway authenticates the Cloudflare Worker and forwards bounded source to an
+internal Fargate service. Only the Fargate process invokes the toolchain; its ECS
+task has no task role or application secrets. The Lambda Python base image
+supplies boto3 for the gateway's one cold-start Secrets Manager read.
 """
 
 from __future__ import annotations
@@ -11,15 +13,20 @@ import base64
 import binascii
 import hashlib
 import hmac
+import http.server
 import json
 import os
 import re
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -38,12 +45,17 @@ MAX_DIAGNOSTIC_LINE_BYTES = 512
 MAX_HEX_BYTES = 128 * 1024
 MAX_RESULT_BYTES = 192 * 1024
 MAX_FLASH_BYTES = 30_720
-COMPILE_TIMEOUT_SECONDS = 45.0
+COMPILE_TIMEOUT_SECONDS = 40.0
+GATEWAY_FORWARD_TIMEOUT_SECONDS = 42.0
+INTERNAL_COMPILER_PORT = 8080
+INTERNAL_HTTP_IO_TIMEOUT_SECONDS = 5.0
+INTERNAL_COMPILE_CONCURRENCY = 1
 
 ARDUINO_CLI = os.environ.get("ARDUINO_CLI_PATH", "/usr/local/bin/arduino-cli")
 ARDUINO_CONFIG = os.environ.get(
     "ARDUINO_CLI_CONFIG_PATH", "/opt/arduino/arduino-cli.yaml"
 )
+ARDUINO_LIBRARIES = "/opt/arduino/libraries"
 
 _ERROR_MESSAGES = {
     "artifact_invalid": "The compiler produced an invalid artifact.",
@@ -56,6 +68,7 @@ _ERROR_MESSAGES = {
     "method_not_allowed": "Only POST requests are accepted.",
     "request_too_large": "The request exceeds the service limit.",
     "source_too_large": "The source exceeds the 64 KiB limit.",
+    "source_policy_rejected": "The sketch uses a compiler feature that Firelight lessons do not allow.",
     "unauthorized": "The request is not authorized.",
     "unsupported_media_type": "Content-Type must be application/json.",
     "unsupported_target": "The requested board target is not supported.",
@@ -71,6 +84,7 @@ _PUBLIC_ERROR_CODES = {
     "method_not_allowed": "COMPILER_METHOD_NOT_ALLOWED",
     "request_too_large": "COMPILER_REQUEST_TOO_LARGE",
     "source_too_large": "COMPILER_SOURCE_TOO_LARGE",
+    "source_policy_rejected": "COMPILER_SOURCE_POLICY_REJECTED",
     "unauthorized": "COMPILER_UNAUTHORIZED",
     "unsupported_media_type": "COMPILER_UNSUPPORTED_MEDIA_TYPE",
     "unsupported_target": "COMPILER_UNSUPPORTED_TARGET",
@@ -91,10 +105,39 @@ _PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_])/(?:[^/\s:'\"]+/)*[^/\s:'\"]+"
 )
 _URL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"']+")
-_DIAGNOSTIC_RE = re.compile(
-    r"(?i)(?:\bfatal error\b|\berror\s*:|\bwarning\s*:|\bnote\s*:|"
-    r"error during build|compilation failed|exit status)"
+_STRUCTURED_DIAGNOSTIC_RE = re.compile(
+    r"(?i)^(?:\[redacted\])*(?:\[path\]|[A-Za-z0-9_.-]+\.(?:ino|c|cc|cpp|h|hpp)):"
+    r"\d+(?::\d+)?:\s*(?:fatal error|error|warning|note)\s*:"
 )
+_GLOBAL_DIAGNOSTIC_RE = re.compile(
+    r"(?i)^(?:error during build|compilation failed|exit status)\b"
+)
+_ALLOWED_PREPROCESSOR_RE = re.compile(
+    r"^\s*#\s*include\s*<Servo\.h>\s*(?://.*)?$"
+)
+_FORBIDDEN_SOURCE_RE = re.compile(
+    r"(?i)(?:\b(?:asm|__asm|__asm__|__attribute__|__has_include|include_next)\b|"
+    r"\.(?:incbin|include)\b|\.\./|/proc/|/etc/|/var/|/tmp/|file://|%:|\?\?=)"
+)
+_FORBIDDEN_TRANSLATION_RE = re.compile(
+    r'(?:\\(?:\r\n|\r|\n)|\?\?[=/\'()!<>-]|%:|(?:\bu8|\b[LuU])?R")'
+)
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep the gateway pinned to its Terraform-provided internal ALB."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        return None
+
+
+_internal_http_opener = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    _RejectRedirects(),
+)
+
+
 @dataclass(frozen=True)
 class ProcessResult:
     returncode: int
@@ -334,7 +377,87 @@ def _parse_request(event: Mapping[str, Any]) -> tuple[str, str]:
         raise CompilerError("invalid_request", status=400) from None
     if source_size > MAX_SOURCE_BYTES:
         raise CompilerError("source_too_large", status=413)
+    _validate_source_policy(source)
     return fqbn, source
+
+
+def _validate_source_policy(source: str) -> None:
+    """Reject compiler-controlled features before tool execution.
+
+    The C translation phase removes backslash-newline pairs before tokenizing,
+    and replaces comments before recognizing preprocessor directives. Reject
+    alternate/spliced tokens outright and inspect the comment-masked form so a
+    lexical trick cannot bypass the defense-in-depth policy. Process isolation,
+    not this policy, remains the security boundary.
+    """
+
+    if _FORBIDDEN_TRANSLATION_RE.search(source):
+        raise CompilerError("source_policy_rejected", status=422)
+    source_without_comments = _mask_cpp_comments(source)
+    for line in source_without_comments.splitlines():
+        if line.lstrip().startswith("#") and not _ALLOWED_PREPROCESSOR_RE.fullmatch(line):
+            raise CompilerError("source_policy_rejected", status=422)
+    if _FORBIDDEN_SOURCE_RE.search(source_without_comments):
+        raise CompilerError("source_policy_rejected", status=422)
+
+
+def _mask_cpp_comments(source: str) -> str:
+    """Mask C/C++ comments while retaining newlines and string contents."""
+
+    output: list[str] = []
+    index = 0
+    state = "code"
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+
+        if state == "code":
+            if character == "/" and following == "/":
+                output.extend((" ", " "))
+                index += 2
+                state = "line-comment"
+                continue
+            if character == "/" and following == "*":
+                output.extend((" ", " "))
+                index += 2
+                state = "block-comment"
+                continue
+            if character in ('"', "'"):
+                state = "string" if character == '"' else "character"
+            output.append(character)
+            index += 1
+            continue
+
+        if state == "line-comment":
+            output.append(character if character in "\r\n" else " ")
+            index += 1
+            if character == "\n":
+                state = "code"
+            continue
+
+        if state == "block-comment":
+            if character == "*" and following == "/":
+                output.extend((" ", " "))
+                index += 2
+                state = "code"
+            else:
+                output.append(character if character in "\r\n" else " ")
+                index += 1
+            continue
+
+        literal_state = state
+        if character == "\\" and following:
+            output.extend((character, following))
+            index += 2
+            continue
+        output.append(character)
+        index += 1
+        if (literal_state == "string" and character == '"') or (
+            literal_state == "character" and character == "'"
+        ):
+            state = "code"
+
+    return "".join(output)
 
 
 def _compiler_environment(work_root: Path) -> dict[str, str]:
@@ -469,7 +592,10 @@ def _safe_diagnostics(
     used_bytes = 0
     for candidate in cleaned.splitlines():
         line = " ".join(candidate.strip().split())
-        if not line or not _DIAGNOSTIC_RE.search(line):
+        if not line or not (
+            _STRUCTURED_DIAGNOSTIC_RE.search(line)
+            or _GLOBAL_DIAGNOSTIC_RE.search(line)
+        ):
             continue
         encoded = line.encode("utf-8")[:MAX_DIAGNOSTIC_LINE_BYTES]
         line = encoded.decode("utf-8", "ignore")
@@ -568,6 +694,7 @@ def compile_sketch(
         raise CompilerError("invalid_request", status=400) from None
     if not source or b"\x00" in source_bytes or len(source_bytes) > MAX_SOURCE_BYTES:
         raise CompilerError("invalid_request", status=400)
+    _validate_source_policy(source)
     source_hash = hashlib.sha256(source_bytes).hexdigest()
 
     with tempfile.TemporaryDirectory(prefix="firelight-compile-", dir="/tmp") as temp_dir:
@@ -589,6 +716,8 @@ def compile_sketch(
             "compile",
             "--fqbn",
             ALLOWED_FQBN,
+            "--libraries",
+            ARDUINO_LIBRARIES,
             "--build-path",
             str(build_dir),
             "--output-dir",
@@ -716,6 +845,329 @@ def handle_event(
         return _error_response("internal_error", 500)
 
 
-def lambda_handler(event: Any, context: Any) -> dict[str, Any]:
+def _validate_internal_compiler_url(value: str) -> str:
+    """Accept only the Terraform-managed eu-west-1 internal ALB endpoint."""
+
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError):
+        raise RuntimeError("internal compiler URL is invalid") from None
+    hostname = parsed.hostname or ""
+    if (
+        parsed.scheme != "http"
+        or not hostname.endswith(".eu-west-1.elb.amazonaws.com")
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 80)
+        or parsed.path != "/compile"
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("internal compiler URL is invalid")
+    return urllib.parse.urlunsplit(("http", parsed.netloc, "/compile", "", ""))
+
+
+def _artifact_from_internal_response(
+    status: int,
+    raw_body: bytes,
+    *,
+    expected_source: str,
+) -> CompileArtifact:
+    if len(raw_body) > MAX_RESULT_BYTES:
+        raise CompilerError("compiler_unavailable", status=503)
+    try:
+        payload = json.loads(
+            raw_body.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise CompilerError("compiler_unavailable", status=503) from None
+    if not isinstance(payload, dict):
+        raise CompilerError("compiler_unavailable", status=503)
+
+    if status != 200:
+        error = payload.get("error")
+        code_lookup = {public: private for private, public in _PUBLIC_ERROR_CODES.items()}
+        if not isinstance(error, dict) or not isinstance(error.get("code"), str):
+            raise CompilerError("compiler_unavailable", status=503)
+        private_code = code_lookup.get(error["code"])
+        expected_statuses = {
+            "artifact_invalid": 500,
+            "artifact_too_large": 500,
+            "compile_failed": 422,
+            "compile_timeout": 504,
+            "compiler_unavailable": 503,
+            "internal_error": 500,
+            "invalid_request": 400,
+            "request_too_large": 413,
+            "source_policy_rejected": 422,
+            "source_too_large": 413,
+            "unsupported_media_type": 415,
+            "unsupported_target": 422,
+        }
+        if private_code is None or expected_statuses.get(private_code) != status:
+            raise CompilerError("compiler_unavailable", status=503)
+        diagnostics_value = payload.get("diagnostics", [])
+        diagnostics = (
+            tuple(item for item in diagnostics_value if isinstance(item, str))
+            if isinstance(diagnostics_value, list)
+            else ()
+        )
+        raise CompilerError(private_code, status=status, diagnostics=diagnostics)
+
+    artifact_value = payload.get("artifact")
+    if (
+        set(payload) != {"artifact", "diagnostics", "ok"}
+        or payload.get("ok") is not True
+        or payload.get("diagnostics") != []
+        or not isinstance(artifact_value, dict)
+        or set(artifact_value)
+        != {"artifactHash", "format", "fqbn", "hex", "sourceHash"}
+    ):
+        raise CompilerError("compiler_unavailable", status=503)
+    expected_source_hash = hashlib.sha256(expected_source.encode("utf-8")).hexdigest()
+    fqbn = artifact_value.get("fqbn")
+    source_hash = artifact_value.get("sourceHash")
+    artifact_hash = artifact_value.get("artifactHash")
+    artifact_format = artifact_value.get("format")
+    hex_text = artifact_value.get("hex")
+    if (
+        fqbn != ALLOWED_FQBN
+        or source_hash != expected_source_hash
+        or artifact_format != ARTIFACT_FORMAT
+        or not isinstance(artifact_hash, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", artifact_hash)
+        or not isinstance(hex_text, str)
+        or len(hex_text.encode("utf-8", "surrogatepass")) > MAX_HEX_BYTES
+    ):
+        raise CompilerError("compiler_unavailable", status=503)
+    _validate_intel_hex(hex_text)
+    if not hmac.compare_digest(
+        artifact_hash,
+        hashlib.sha256(hex_text.encode("utf-8")).hexdigest(),
+    ):
+        raise CompilerError("compiler_unavailable", status=503)
+    return CompileArtifact(
+        fqbn=fqbn,
+        source_hash=source_hash,
+        artifact_hash=artifact_hash,
+        hex_text=hex_text,
+    )
+
+
+def _invoke_isolated_compiler(source: str) -> CompileArtifact:
+    """Forward a validated sketch to the SG-restricted internal ALB."""
+
+    endpoint = _validate_internal_compiler_url(
+        os.environ.get("FIRELIGHT_INTERNAL_COMPILER_URL", "")
+    )
+    body = json.dumps(
+        {"fqbn": ALLOWED_FQBN, "source": source},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _internal_http_opener.open(
+            request,
+            timeout=GATEWAY_FORWARD_TIMEOUT_SECONDS,
+        ) as response:
+            raw_body = response.read(MAX_RESULT_BYTES + 1)
+            return _artifact_from_internal_response(
+                response.status,
+                raw_body,
+                expected_source=source,
+            )
+    except urllib.error.HTTPError as error:
+        raw_body = error.read(MAX_RESULT_BYTES + 1)
+        return _artifact_from_internal_response(
+            error.code,
+            raw_body,
+            expected_source=source,
+        )
+    except CompilerError:
+        raise
+    except (OSError, TimeoutError, ValueError):
+        raise CompilerError("compiler_unavailable", status=503) from None
+
+
+def gateway_lambda_handler(event: Any, context: Any) -> dict[str, Any]:
     del context
-    return handle_event(event)
+    return handle_event(
+        event,
+        token_loader=_load_service_token,
+        compile_fn=_invoke_isolated_compiler,
+    )
+
+
+# Keep the conventional Lambda name safe if an operator omits image_config.
+lambda_handler = gateway_lambda_handler
+
+
+def isolated_handle_event(
+    event: Any,
+    *,
+    compile_fn: Callable[[str], CompileArtifact] = compile_sketch,
+) -> dict[str, Any]:
+    """Handle a request already authenticated by the network-isolated gateway."""
+
+    if not isinstance(event, Mapping):
+        return _error_response("invalid_request", 400)
+    if _request_method(event) != "POST":
+        response = _error_response("method_not_allowed", 405)
+        response["headers"]["allow"] = "POST"
+        return response
+    try:
+        _, source = _parse_request(event)
+        artifact = compile_fn(source)
+        return _json_response(
+            200,
+            {
+                "ok": True,
+                "artifact": {
+                    "artifactHash": artifact.artifact_hash,
+                    "format": artifact.format,
+                    "fqbn": artifact.fqbn,
+                    "hex": artifact.hex_text,
+                    "sourceHash": artifact.source_hash,
+                },
+                "diagnostics": [],
+            },
+        )
+    except CompilerError as error:
+        diagnostics = _safe_diagnostics("\n".join(error.diagnostics))
+        return _error_response(error.code, error.status, diagnostics)
+    except Exception:
+        return _error_response("internal_error", 500)
+
+
+_internal_compile_slots = threading.BoundedSemaphore(INTERNAL_COMPILE_CONCURRENCY)
+
+
+class _BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 8
+
+
+class _CompilerRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Minimal internal HTTP surface; the ALB security group is the caller ACL."""
+
+    server_version = "FirelightCompiler/1"
+    sys_version = ""
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(INTERNAL_HTTP_IO_TIMEOUT_SECONDS)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        # Access logs can accidentally capture learner-controlled paths/headers.
+        del format, args
+
+    def _send_json_response(self, response: Mapping[str, Any]) -> None:
+        body = str(response["body"]).encode("utf-8")
+        if len(body) > MAX_RESULT_BYTES:
+            response = _error_response("internal_error", 500)
+            body = str(response["body"]).encode("utf-8")
+        self.send_response(int(response["statusCode"]))
+        for name, value in response["headers"].items():
+            self.send_header(str(name), str(value))
+        self.send_header("connection", "close")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+
+    def _send_not_found(self) -> None:
+        self._send_json_response(_error_response("invalid_request", 404))
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        if self.path != "/healthz":
+            self._send_not_found()
+            return
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-type", "application/json")
+        self.send_header("connection", "close")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        if self.path != "/compile":
+            self._send_not_found()
+            return
+        content_lengths = self.headers.get_all("content-length", failobj=[])
+        if len(content_lengths) != 1 or self.headers.get("transfer-encoding") is not None:
+            self._send_json_response(_error_response("invalid_request", 400))
+            return
+        try:
+            content_length = int(content_lengths[0])
+        except ValueError:
+            self._send_json_response(_error_response("invalid_request", 400))
+            return
+        if content_length < 0 or content_length > MAX_REQUEST_BYTES:
+            self._send_json_response(_error_response("request_too_large", 413))
+            return
+        try:
+            body = self.rfile.read(content_length)
+        except (OSError, TimeoutError):
+            self._send_json_response(_error_response("invalid_request", 400))
+            return
+        if len(body) != content_length:
+            self._send_json_response(_error_response("invalid_request", 400))
+            return
+        try:
+            text_body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            self._send_json_response(_error_response("invalid_request", 400))
+            return
+        event = {
+            "requestContext": {"http": {"method": "POST"}},
+            "headers": {"content-type": self.headers.get("content-type", "")},
+            "body": text_body,
+            "isBase64Encoded": False,
+        }
+        if not _internal_compile_slots.acquire(blocking=False):
+            self._send_json_response(_error_response("compiler_unavailable", 503))
+            return
+        try:
+            response = isolated_handle_event(event)
+        finally:
+            _internal_compile_slots.release()
+        self._send_json_response(response)
+
+
+def serve_isolated_compiler() -> None:
+    """Run the no-secret/no-task-role compiler service inside Fargate."""
+
+    server = _BoundedThreadingHTTPServer(
+        ("0.0.0.0", INTERNAL_COMPILER_PORT),
+        _CompilerRequestHandler,
+    )
+    server.serve_forever()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments != ["serve"]:
+        raise SystemExit("usage: app.py serve")
+    serve_isolated_compiler()
+    return 0
+
+
+if __name__ == "__main__":
+    main()

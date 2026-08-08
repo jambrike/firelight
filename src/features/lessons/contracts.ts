@@ -94,6 +94,7 @@ export interface UploadStep extends LessonStepBase {
 export interface SerialCheckStep extends LessonStepBase {
   readonly type: "serial-check";
   readonly uploadStepId: string;
+  readonly baudRate: 9_600;
   readonly expectedObservation: string;
 }
 

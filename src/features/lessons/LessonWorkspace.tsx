@@ -9,11 +9,13 @@ import {
   ShieldAlert,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "wouter";
 import type { LessonProgress } from "../../../shared/identity";
 import { HardwareStatus, Panel, ProgressBar } from "../../components/ui";
-import { inspectCurrentBrowserHardware } from "../hardware/deferred";
+import { FIRELIGHT_BOARD_FQBN } from "../hardware/contracts";
+import { getHardwareCapabilityGuidance } from "../hardware/web-serial";
+import { useHardwareWorkflowFactory } from "../hardware/workflow-context";
 import { useIdentity } from "../identity/identity-context";
 import { useProgressAutosave } from "../progress";
 import type { ProgressDraft } from "../progress";
@@ -40,16 +42,6 @@ function findSavedStepIndex(
 function percentageAt(index: number, total: number): number {
   if (total <= 0) return 0;
   return Math.min(99, Math.floor((index / total) * 100));
-}
-
-function isHardwareStep(type: LessonCatalogEntry["steps"][number]["type"]): boolean {
-  return (
-    type === "compile" ||
-    type === "connect" ||
-    type === "upload" ||
-    type === "serial-check" ||
-    type === "manual-observation"
-  );
 }
 
 export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntry }) {
@@ -86,7 +78,24 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
   const highestAppliedRevisionRef = useRef(savedProgress?.revision ?? 0);
   const hydratedProgressRef = useRef(savedProgress !== null);
   const queuedInitialRef = useRef(false);
-  const hardware = useMemo(() => inspectCurrentBrowserHardware(), []);
+  const accessToken = identity.session?.access_token ?? null;
+  const workflowFactory = useHardwareWorkflowFactory();
+  const hardwareWorkflow = useMemo(
+    () => workflowFactory(() => accessToken),
+    [accessToken, workflowFactory],
+  );
+  const hardware = useSyncExternalStore(
+    hardwareWorkflow.subscribe,
+    hardwareWorkflow.getSnapshot,
+    hardwareWorkflow.getSnapshot,
+  );
+  const [observedStepIds, setObservedStepIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  useEffect(() => () => {
+    void hardwareWorkflow.dispose();
+  }, [hardwareWorkflow]);
 
   const resolveConflict = async () => {
     const bootstrap = await identity.refresh();
@@ -199,13 +208,19 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
 
   const stepCanAdvance = (() => {
     if (!canModify || displayStepIndex !== checkpointStepIndex) return false;
-    if (isHardwareStep(step.type)) return false;
+    if (step.type === "compile") return hardware.artifact !== null;
+    if (step.type === "connect") return hardware.device !== null;
+    if (step.type === "upload") return hardware.evidence !== null;
+    if (step.type === "serial-check" || step.type === "manual-observation") {
+      return hardware.evidence !== null && observedStepIds.has(step.id);
+    }
     if (step.type === "code-validation") return validation?.valid === true;
     if (step.type === "quiz") {
       return quizChecked && selectedChoice === step.correctChoiceId;
     }
     if (step.type === "completion") {
-      return step.requiredStepIds.every((id) => completedStepIds.has(id));
+      return hardware.evidence !== null &&
+        step.requiredStepIds.every((id) => completedStepIds.has(id));
     }
     return true;
   })();
@@ -224,6 +239,7 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
         currentStep: step.id,
         percentage: 100,
         codeSnapshot: code,
+        ...(hardware.evidence ? { uploadEvidenceId: hardware.evidence.id } : {}),
       });
       return;
     }
@@ -267,6 +283,26 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
   const codeReadOnlyMessage = isCompleted
     ? "This completed sketch is read-only. You can focus and copy it while reviewing."
     : "This preview sketch is read-only. You can focus and copy it; unlock builder mode to edit.";
+  const hardwareMessage = (() => {
+    if (!hardware.capability.supported) {
+      return getHardwareCapabilityGuidance(hardware.capability);
+    }
+    if (hardware.error) return hardware.error;
+    if (hardware.phase === "compiling") return "The secure compiler is building this sketch.";
+    if (hardware.phase === "compiled") return "Compiled for the Nano old bootloader. Choose the board next.";
+    if (hardware.phase === "connecting") return "Choose the Nano serial port in the browser prompt.";
+    if (hardware.serialReading) return "Reading bounded serial output at 9600 baud…";
+    if (hardware.phase === "connected") return hardware.device?.displayName ?? "Nano connected.";
+    if (hardware.phase === "uploading") return "Keep the USB cable connected while Firelight writes the sketch.";
+    if (hardware.phase === "success") {
+      return "Upload succeeded and browser evidence was recorded for lesson completion.";
+    }
+    return getHardwareCapabilityGuidance(hardware.capability);
+  })();
+
+  const runHardwareAction = (action: Promise<unknown>) => {
+    void action.catch(() => undefined);
+  };
 
   return (
     <div className="lesson-workspace" data-access={workspaceAccess}>
@@ -347,9 +383,13 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
               quizChecked={quizChecked}
               validation={validation}
               hardware={hardware}
+              hardwareMessage={hardwareMessage}
+              observationConfirmed={observedStepIds.has(step.id)}
               onCodeChange={(value) => {
                 setCode(value);
                 setValidation(null);
+                setObservedStepIds(new Set());
+                runHardwareAction(hardwareWorkflow.invalidateCode());
                 queueProgress({
                   status: "in_progress",
                   currentStep: checkpointStep.id,
@@ -368,6 +408,31 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
                 if (step.type === "code-validation") {
                   setValidation(validateLessonCode(step.validatorId, code));
                 }
+              }}
+              onCompile={() => {
+                runHardwareAction(
+                  hardwareWorkflow.compile({
+                    lessonId: lesson.id,
+                    lessonVersion: lesson.version,
+                    fqbn: FIRELIGHT_BOARD_FQBN,
+                    source: code,
+                  }),
+                );
+              }}
+              onConnect={() => {
+                runHardwareAction(hardwareWorkflow.connect());
+              }}
+              onUpload={() => {
+                setObservedStepIds(new Set());
+                runHardwareAction(hardwareWorkflow.upload());
+              }}
+              onReadSerial={() => {
+                if (step.type === "serial-check") {
+                  runHardwareAction(hardwareWorkflow.readSerial(step.baudRate));
+                }
+              }}
+              onConfirmObservation={() => {
+                setObservedStepIds((current) => new Set(current).add(step.id));
               }}
             />
           </div>
@@ -421,10 +486,35 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
         <aside className="lesson-reference" aria-label="Build reference">
           <Panel>
             <p className="eyebrow">Hardware state</p>
-            <HardwareStatus />
+            <HardwareStatus phase={hardware.phase} />
             <p id="hardware-note" className="muted-copy">
-              {hardware.message}
+              {hardwareMessage}
             </p>
+            {hardware.phase === "compiling" ||
+            hardware.phase === "connecting" ||
+            hardware.phase === "uploading" ||
+            hardware.serialReading ? (
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  runHardwareAction(hardwareWorkflow.cancel());
+                }}
+              >
+                Cancel hardware action
+              </button>
+            ) : null}
+            {hardware.device ? (
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => {
+                  runHardwareAction(hardwareWorkflow.disconnect());
+                }}
+              >
+                Disconnect board
+              </button>
+            ) : null}
           </Panel>
           <Panel>
             <Wrench aria-hidden="true" />

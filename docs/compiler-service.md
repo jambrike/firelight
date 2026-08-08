@@ -1,23 +1,45 @@
 # Compiler service
 
-## Boundary and contract
+## Isolation boundary
 
-The compiler is a repository-owned AWS Lambda container in `eu-west-1`. The
-Cloudflare Worker is its only intended caller:
+Learner source is never compiled in the public Lambda. The deployed request path
+is:
 
 ```text
-browser --authenticated lesson request--> Worker
-Worker --service token + source--> Lambda Function URL
-Lambda --local pinned toolchain--> validated Intel HEX
-Worker --validated artifact--> browser Web Serial flow
+browser --authenticated lesson request--> Cloudflare Worker
+Worker --service token + bounded source--> public Lambda Function URL
+Lambda gateway --HTTP through its VPC SG--> internal ALB
+internal ALB --HTTP through its SG--> private ECS/Fargate compiler task
+compiler task --validated Intel HEX--> gateway --validated artifact--> Worker
 ```
 
-The Function URL and service token must stay in server-side Worker secrets. They
-must never be placed in a `VITE_*` variable, returned by a Worker route, embedded
-in browser JavaScript, or written to application logs. The endpoint deliberately
-has no CORS configuration. Knowing the URL is not authorization; the token is.
+The Lambda gateway authenticates the server-only Worker credential before method
+or body processing, validates the closed request contract, applies the source
+policy, and forwards to the Terraform-provided internal ALB. It does not call
+`compile_sketch`; both `app.lambda_handler` and the image's default command point
+to `app.gateway_lambda_handler`.
 
-The Lambda accepts only:
+The Fargate service is the only process that can invoke Arduino CLI. It has no
+public IP, internet route, application secret, task IAM role, ECS Exec access, or
+writable root filesystem. It runs as UID 1000 with Linux capabilities dropped
+and writes only to its bounded ephemeral `/tmp` volume. Its task execution role
+is used only by the Fargate agent to pull the one ECR image and deliver logs. AWS
+documents that execution-role credentials are not directly accessible to
+containers; the task definition
+deliberately omits a task role altogether. See [ECS task execution roles](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html)
+and [ECS task isolation](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
+
+The internal compiler has no application authentication because its caller
+identity is enforced by the security-group chain. The ALB accepts port 80 only
+from the gateway security group, and compiler tasks accept port 8080 only from
+the ALB security group. The ALB is internal and has no public DNS route.
+
+## Public request contract
+
+The Function URL and service token are Worker secrets. They must never be placed
+in a `VITE_*` variable, returned by an API route, embedded in browser JavaScript,
+or written to logs. The endpoint has no CORS configuration. Knowing its URL is
+not authorization.
 
 ```http
 POST / HTTP/1.1
@@ -27,28 +49,32 @@ X-Firelight-Compiler-Token: <server-side secret>
 {"fqbn":"arduino:avr:nano:cpu=atmega328old","source":"void setup() {}\nvoid loop() {}\n"}
 ```
 
-A successful response has this shape:
+A successful response is:
 
 ```json
 {
   "ok": true,
   "artifact": {
-    "artifactHash": "<lowercase SHA-256 of the exact returned HEX UTF-8 bytes>",
+    "artifactHash": "<lowercase SHA-256 of exact HEX UTF-8 bytes>",
     "format": "intel-hex",
     "fqbn": "arduino:avr:nano:cpu=atmega328old",
     "hex": ":...\n:00000001FF\n",
-    "sourceHash": "<lowercase SHA-256 of the submitted source UTF-8 bytes>"
+    "sourceHash": "<lowercase SHA-256 of submitted source UTF-8 bytes>"
   },
   "diagnostics": []
 }
 ```
 
-`artifactHash` is a defense-in-depth assertion. The Worker must recompute it when
-present, recompute `sourceHash`, and validate the FQBN and Intel HEX itself. The
-Worker owns the compile-job UUID and decorates the browser artifact only after
-its database job exists; the Lambda neither accepts nor issues a `compileJobId`.
+The gateway treats the internal service as untrusted output: it bounds the body,
+rejects redirects, ignores proxy environment variables, checks the exact JSON
+shape, recomputes source and artifact hashes, validates the FQBN and Intel HEX,
+and rejects status/error-code mismatches. The Worker repeats the source, target,
+hash, and HEX checks before returning an artifact to the browser.
 
-Non-2xx responses always use a stable code and fixed message:
+The Worker owns the compile-job UUID. Neither AWS surface accepts or issues a
+`compileJobId`, and neither persists raw source or HEX.
+
+Non-2xx responses use stable codes and fixed messages:
 
 ```json
 {
@@ -61,13 +87,13 @@ Non-2xx responses always use a stable code and fixed message:
 }
 ```
 
-Expected codes are `COMPILER_UNAUTHORIZED`, `COMPILER_METHOD_NOT_ALLOWED`,
+Codes are `COMPILER_UNAUTHORIZED`, `COMPILER_METHOD_NOT_ALLOWED`,
 `COMPILER_UNSUPPORTED_MEDIA_TYPE`, `COMPILER_INVALID_REQUEST`,
 `COMPILER_REQUEST_TOO_LARGE`, `COMPILER_SOURCE_TOO_LARGE`,
-`COMPILER_UNSUPPORTED_TARGET`, `COMPILER_FAILED`, `COMPILER_TIMEOUT`,
-`COMPILER_ARTIFACT_INVALID`, `COMPILER_ARTIFACT_TOO_LARGE`,
-`COMPILER_UNAVAILABLE`, and `COMPILER_INTERNAL_ERROR`. Callers must branch on
-`code`, not message text.
+`COMPILER_SOURCE_POLICY_REJECTED`, `COMPILER_UNSUPPORTED_TARGET`,
+`COMPILER_FAILED`, `COMPILER_TIMEOUT`, `COMPILER_ARTIFACT_INVALID`,
+`COMPILER_ARTIFACT_TOO_LARGE`, `COMPILER_UNAVAILABLE`, and
+`COMPILER_INTERNAL_ERROR`. Callers branch on `code`, not message text.
 
 ## Enforced limits
 
@@ -76,72 +102,122 @@ Expected codes are `COMPILER_UNAUTHORIZED`, `COMPILER_METHOD_NOT_ALLOWED`,
 | Decoded request JSON | 512 KiB |
 | Source | 65,536 UTF-8 bytes |
 | Board targets | one exact old-bootloader FQBN |
-| Compiler process wall time | 45 seconds |
-| Lambda timeout | 50 seconds |
+| Public Lambda timeout | 45 seconds |
+| Gateway wait for internal service | 42 seconds |
+| Internal ALB idle timeout | 45 seconds |
+| Target/task rollout drain | 60 seconds |
+| Compiler process wall time | 40 seconds |
+| Internal socket read/write timeout | 5 seconds |
+| Concurrent compiler processes per task | 1 |
+| Internal HTTP accept backlog per task | 8 |
 | Captured compiler stdout + stderr | 64 KiB |
 | Returned diagnostic lines | 16 |
 | Returned diagnostics | 8 KiB total, 512 bytes per line |
 | Intel HEX text | 128 KiB |
 | Unique/maximum application flash address | below 30,720 bytes |
 | JSON response | 192 KiB |
-| Lambda ephemeral storage | 512 MiB |
-| Lambda memory | 1,024 MiB |
-| Reserved concurrency | 5 by default (configurable 1–20) |
+| Gateway reserved concurrency | 5 by default, configurable 1–20 |
+| Fargate service | 2 tasks by default, 1 vCPU / 2 GiB each |
 
-The compiler runs in a new mode-0700 `/tmp` directory for every invocation.
-Its child environment is allowlisted and contains no AWS or Firelight secret
-variables. The process starts in a new process group; a deadline kills that
-whole group, and Arduino CLI is restricted to one compiler job. Output is drained
-but retained only up to the shared 64 KiB budget.
+The gateway stops waiting at 42 seconds so it can return a bounded error before
+Lambda's 45-second hard deadline. The compiler process is killed by its own
+40-second process-group deadline, leaving time to return a stable timeout. Each task
+accepts health requests concurrently but admits only one compile process; excess
+requests fail quickly with `COMPILER_UNAVAILABLE` for the Worker to handle.
 
-On success, the service chooses the non-bootloader `.hex`, normalizes line endings
-to LF with one trailing LF, and verifies record lengths, checksums, EOF ordering,
-record types, non-overlap, non-empty data, and the Nano application flash ceiling.
+Each compile uses a new mode-0700 directory on the task's writable `/tmp` volume.
+The child environment is allowlisted and contains no AWS or Firelight variables.
+The process starts in a new process group, a deadline kills that whole group,
+Arduino CLI uses one compiler job, and output is drained while retaining only the
+shared 64 KiB budget.
 
-On failure, it returns only lines carrying compiler severity markers. ANSI and
-control characters, temporary/runtime paths, HTTP/WebSocket URLs, and the service
-token are removed. Unexpected exception details are never returned or logged.
-All responses set `Cache-Control: no-store`, HSTS, `nosniff`, a deny-all CSP, and
-no CORS headers.
+On success, the compiler chooses the non-bootloader `.hex`, normalizes line
+endings, then verifies record lengths, checksums, EOF ordering, record types,
+non-overlap, non-empty data, and the Nano application flash ceiling. On failure,
+only compiler severity lines survive. ANSI/control characters, paths, URLs, and
+the service token are redacted; exception details are never returned or logged.
 
-## Pinned supply chain
+## Defense-in-depth source policy
+
+The source validator rejects compiler-controlled preprocessor directives except
+the repository's exact `#include <Servo.h>`, inline assembly/file inclusion,
+absolute or parent paths, raw C++ string literals, alternate preprocessor tokens,
+trigraphs, and backslash-newline splicing (including lone-CR files). It
+comment-masks before inspecting directives so a comment boundary cannot disguise one.
+
+This policy is deliberately only defense in depth. It is not treated as a parser
+for C++ and is not the security boundary. Fargate isolation, absent task
+credentials/secrets, read-only root storage, bounded subprocess handling, and the
+no-internet VPC remain required even when the policy accepts a sketch.
+
+## Private network and IAM
+
+Terraform creates a dedicated VPC across two availability zones. It creates no
+internet gateway, NAT gateway, public subnet, or default route. Private endpoints
+provide only what the AWS-managed runtimes need:
+
+| Endpoint | Consumer | Purpose |
+| --- | --- | --- |
+| Secrets Manager interface | Lambda gateway | Read the single auth token |
+| ECR API + ECR DKR interfaces | Fargate agent | Authenticate and pull the pinned image |
+| S3 gateway | Fargate agent | Fetch the regional ECR layer objects |
+| CloudWatch Logs interface | Fargate agent | Create streams and put log events |
+
+Endpoint policies scope Secrets Manager to the one secret, ECR image calls to the
+one repository, S3 to the regional ECR layer bucket, and Logs to the two service
+log groups. Security-group egress permits the gateway only to the internal ALB
+and interface endpoints; tasks may reach only the interface endpoints and ECR's
+S3 prefix list. There is no `0.0.0.0/0` rule.
+
+The gateway execution role can write its own logs, read the named secret, decrypt
+only its optional customer-managed key, and manage the Lambda VPC network
+interfaces required by AWS. The ECS execution role can obtain an ECR token, read
+the named repository's image layers, and write the compiler log group. It has no
+Secrets Manager, KMS, S3 application-data, ECS, or broad application permission.
+The container definitions contain empty `environment` and `secrets` collections.
+
+## Pinned supply chain and container modes
 
 | Component | Pin |
 | --- | --- |
 | Lambda Python base | `public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37` |
 | Arduino CLI | `1.5.1`, Linux 64-bit archive SHA-256 `28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b` |
 | Arduino AVR core | `arduino:avr@1.8.6`, archive SHA-256 `ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6` |
+| Arduino Servo library | `1.3.0`, registry archive SHA-256 `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38` |
 | Terraform AWS provider | `6.56.0` |
-| Runtime architecture | `linux/amd64` / Lambda `x86_64` |
+| Runtime architecture | `linux/amd64`, Lambda/ECS `x86_64` |
+| Fargate platform | `1.4.0` |
 
-The image build verifies the Arduino CLI archive before installing it. It also
-checks the downloaded package index against repository-owned URL, size, version,
-and checksum pins for the AVR core and all three transitive linux/amd64 tools
-(`avr-gcc`, `avrdude`, and `arduinoOTA`) before Arduino CLI may download them.
-The core is installed into the image at build time and the runtime does not
-update indexes or download dependencies. Terraform addresses the private ECR
-image by digest, never by tag. These pins should be updated in one reviewed
-change after building, compiling the smoke sketch, inspecting the ECR scan, and
-running a physical Nano old-bootloader upload gate.
+The build verifies the Arduino CLI archive and repository-owned URL, size,
+version, and checksum pins for the AVR core plus its `avr-gcc`, `avrdude`, and
+`arduinoOTA` dependencies. It separately downloads Servo 1.3.0 from Arduino's
+library CDN, rejects redirects, verifies its exact byte size and checksum, safely
+extracts the ZIP, and checks `name`, `version`, AVR architecture support, and
+required AVR sources. Compile commands include only the fixed
+`/opt/arduino/libraries` path. Runtime never updates indexes or downloads
+toolchain dependencies. Terraform addresses ECR by digest, never tag.
 
-Upstream references: [Arduino CLI releases](https://github.com/arduino/arduino-cli/releases),
-[Arduino AVR core](https://github.com/arduino/ArduinoCore-avr), and
-[AWS Lambda Python images](https://docs.aws.amazon.com/lambda/latest/dg/python-image.html).
+One image supports two explicit modes:
 
-## Test and build gates
+- Lambda's image command is `app.gateway_lambda_handler`, which only authenticates
+  and forwards.
+- ECS overrides the entry point with `/var/lang/bin/python3 /var/task/app.py serve`.
+  Invoking `app.py` without the exact `serve` argument fails closed.
 
-Run unit tests from the repository root:
+## Local test and image gates
+
+From the repository root:
 
 ```sh
-python3 -m unittest discover -s compiler-service/tests -v
+python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v
 ```
 
-The tests mock Arduino CLI at the process boundary. They cover authentication,
-request and result bounds, the exact FQBN, UTF-8 source sizing, hashes, diagnostic
-redaction, compiler failure/timeout behavior, bounded subprocess capture, and
-Intel HEX validation.
+Tests cover gateway authentication and forwarding, strict internal URLs and
+responses, request/result/concurrency bounds, source policy adversaries,
+subprocess deadlines, diagnostics, Intel HEX, supply-chain pins, and static
+Terraform isolation invariants.
 
-Build an x86_64 image from the repository root:
+Build the exact deployment architecture:
 
 ```sh
 IMAGE_TAG="firelight-compiler:$(git rev-parse --short HEAD)"
@@ -153,7 +229,7 @@ docker buildx build \
   compiler-service
 ```
 
-Confirm the embedded versions without starting the Lambda handler:
+Inspect embedded versions:
 
 ```sh
 docker run --rm --platform linux/amd64 \
@@ -164,107 +240,122 @@ docker run --rm --platform linux/amd64 \
   --entrypoint /usr/local/bin/arduino-cli \
   "$IMAGE_TAG" \
   --config-file /opt/arduino/arduino-cli.yaml core list
+
+docker run --rm --platform linux/amd64 \
+  --entrypoint /bin/sh \
+  "$IMAGE_TAG" -c \
+  'grep -E "^(name|version|architectures)=" /opt/arduino/libraries/Servo/library.properties'
 ```
 
-The release gate also requires a container smoke compile using the exact FQBN and
-a physical upload to an Arduino Nano configured for the old ATmega328P
-bootloader. Unit tests cannot prove the toolchain image builds, AWS can pull the
-image, or a physical board accepts and runs the artifact.
+Smoke the internal service mode locally, then post the exact two-field JSON
+contract to `http://127.0.0.1:8080/compile`:
+
+```sh
+docker run --rm --platform linux/amd64 -p 127.0.0.1:8080:8080 \
+  --entrypoint /var/lang/bin/python3 \
+  "$IMAGE_TAG" /var/task/app.py serve
+```
+
+The release gate also requires an image scan, a container smoke compile, and a
+physical upload to an Arduino Nano configured for the old ATmega328P bootloader.
 
 ## Secret creation and rotation
 
-Create the auth token outside Terraform so plaintext never enters Terraform
-configuration, plans, state, shell arguments, or outputs. The Secrets Manager
-`SecretString` must be the raw 32–512-byte token with no leading/trailing
-whitespace. One safe workflow is to create a mode-0600 temporary file, generate
-at least 256 random bits into it, use `aws secretsmanager create-secret` with a
-`file://` value in `eu-west-1`, configure the same value through the Worker's
-secret-input command, then securely remove the temporary file. Do not paste the
-token into chat, tickets, CI logs, `.tfvars`, or command-line arguments.
+Create the token outside Terraform so plaintext never enters plans, state, shell
+arguments, or outputs. `SecretString` is the raw 32–512-byte token with no
+leading/trailing whitespace. Put the same value in the Cloudflare Worker secret
+store. Never paste it into chat, tickets, CI logs, `.tfvars`, or command-line
+arguments.
 
-The Lambda caches the secret for at most five minutes per warm environment to
-reduce Secrets Manager calls. A rotation therefore needs a controlled window:
-update the Secrets Manager value and Worker secret, publish a fresh Lambda
-version (or wait for all old caches to expire), test the server-to-server route,
-then revoke the old value. Wrong and missing tokens have the same fixed 401 body;
-comparison is SHA-256-then-`hmac.compare_digest` over equal-length digests.
+The gateway caches the token for at most five minutes per warm environment.
+Rotate by updating Secrets Manager and the Worker secret during a controlled
+window, publish a fresh gateway version or wait for old caches to expire, test
+authorized and unauthorized calls, then revoke the old token. Fargate never
+receives the token and needs no rotation action.
 
-The Terraform execution role can read only the named secret and write only its
-own log group. If the secret uses a customer-managed KMS key, set
-`auth_secret_kms_key_arn` to grant `kms:Decrypt` only on that key.
+## Terraform deployment gate
 
-## Infrastructure and deployment gate
+Terraform owns the immutable ECR repository, no-NAT VPC and endpoints, security
+groups, internal ALB, ECS cluster/service/task definition, bounded gateway,
+least-privilege roles, log groups, and public buffered Function URL. The region
+is fixed to `eu-west-1`. The public URL and internal ALB output are sensitive.
 
-Terraform owns a scan-on-push, immutable ECR repository, bounded Lambda,
-least-privilege role, 14-day log group, immutable published version plus `live`
-alias, and buffered Lambda Function URL. The region is deliberately hard-coded
-to `eu-west-1`. The URL output is marked sensitive.
+Deployment is two phase because every runtime references an image digest:
 
-The Function URL uses AWS `AuthType=NONE` because the Worker does not hold AWS
-SigV4 credentials. Current AWS Function URLs need public invoke policy statements
-for this mode; AWS provider 6.56 manages those statements. Application auth still
-runs before method/body validation. Reserved concurrency contains cost and
-resource impact, but unauthorized calls can still consume invocations; configure
-AWS budgets/alarms and rotate the unguessable URL/token if it is disclosed.
-See [AWS Function URL access control](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
-
-Deployment is intentionally two-phase because Lambda can be created only after
-its digest-addressed image exists:
-
-1. Install Docker Buildx, Terraform, AWS CLI, and credentials authorized for the
-   narrowly scoped ECR/Lambda/IAM/Logs/Secrets resources.
-2. Copy `terraform/terraform.tfvars.example` outside version control, replace the
-   example secret ARN, and retain the dummy digest only for the repository
-   bootstrap.
+1. Install Docker Buildx, Terraform, and AWS CLI with narrowly scoped operator
+   credentials. Create the service token outside Terraform.
+2. Copy `terraform.tfvars.example` outside version control. Choose an unused
+   RFC1918 VPC CIDR (Terraform derives two subnets) and use the placeholder digest
+   only for repository bootstrap.
 3. From `compiler-service/terraform`, run `terraform init`, `terraform fmt -check`,
-   `terraform validate`, review a plan, then bootstrap only
-   `aws_ecr_repository.compiler` and `aws_ecr_lifecycle_policy.compiler`.
-4. Build the linux/amd64 image, authenticate Docker to that ECR repository, tag
-   it with a non-secret release identifier, and push it.
-5. Obtain the pushed `imageDigest` from ECR, inspect scan findings, replace the
-   dummy `image_digest`, and confirm it begins `sha256:` followed by 64 lowercase
-   hex characters.
-6. Run a full `terraform plan`; review the public Function URL policy, exact
-   secret/KMS/log permissions, 50-second timeout, concurrency, region, and image
-   digest. Only an authorized operator may apply it.
-7. Retrieve the sensitive URL explicitly and store it directly as a Worker
-   server-side secret. Do not echo it into CI logs. Perform authorized,
-   unauthorized, timeout, compile-failure, and response-bound smoke tests.
+   and `terraform validate`; review a plan, then bootstrap only the ECR repository
+   and lifecycle policy.
+4. Build and smoke the linux/amd64 image, push it, obtain the registry-reported
+   digest, review the ECR scan, and replace the placeholder.
+5. Review a full plan for the absence of internet/NAT resources, public task IPs,
+   task-role fields and task secrets; verify the exact endpoint/IAM/SG rules,
+   `app.gateway_lambda_handler`, 45-second gateway timeout, and digest.
+6. Apply only after cost, security, image, rollback, and physical-hardware gates
+   have owners. Store `compiler_gateway_function_url` directly as the Worker
+   `COMPILER_SERVICE_URL` secret without printing it to logs. Set
+   `COMPILER_SERVICE_ORIGIN` to that URL's exact `https://<host>` origin (no path
+   or trailing slash); the Worker checks both values to prevent redirect/origin
+   drift.
+7. Test unauthorized, authorized, invalid-source, compile-failure, busy-service,
+   timeout, and artifact-bound responses from staging.
 
-Do not run `terraform apply` until the Docker build, ECR scan, AWS credential,
-cost-control, and physical-board gates have owners. This repository change does
-not build an image, push to ECR, create/modify a secret, or deploy AWS resources.
+Function URLs with `AuthType=NONE` require public resource-policy permissions;
+AWS provider 6.56 manages both current permissions when it creates the URL. The
+application token is still checked before request parsing. See [Lambda Function URL access control](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
 
-## Verification record (2026-08-07)
+ALB deletion protection defaults on. An intentional environment teardown must be
+a reviewed two-step change that first disables it. Never point the Worker at the
+internal ALB or expose ALB/task security groups publicly.
 
-- `python3 -m unittest discover -s compiler-service/tests -v`: 33 tests passed.
-- Terraform 1.15.8: `fmt -check` and `validate` passed after a local-only
-  `init -backend=false` downloaded the locked AWS provider 6.56.0; it did not
-  contact an AWS account.
-- Docker is not installed in the implementation environment, so the Lambda image
-  build, embedded CLI/core inspection, and container smoke compile were not run.
-- No AWS plan/apply, API mutation, secret read/write, ECR push/scan, or Lambda URL
-  request was performed.
-- No physical Arduino Nano compile/upload/run gate was performed.
+## Recovery runbook
+
+- Repeated 401: verify Worker and Secrets Manager token versions without printing
+  either value; rotate through the controlled procedure.
+- Repeated 503: inspect ECS desired/running counts, ALB target health, VPC endpoint
+  status, and Fargate-agent ECR/Logs events. Do not add a NAT route as a shortcut.
+- Timeouts: compare gateway duration with task CPU/memory and compiler deadline;
+  drain/replace unhealthy tasks rather than raising the 45-second public bound.
+- Bad image release: restore the last reviewed digest and task definition through
+  Terraform, then publish/alias the matching gateway version.
+- Suspected source escape or credential exposure: disable the public Function URL,
+  rotate the gateway token, stop the ECS service, preserve redacted AWS audit
+  records, and do not return service until image and IAM boundaries are reviewed.
+
+## Verification record (2026-08-08)
+
+- `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v`:
+  55 tests passed.
+- The pinned Servo installer downloaded the current Arduino CDN artifact, matched
+  133,580 bytes and SHA-256
+  `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38`,
+  safely extracted it, and verified Servo `1.3.0` with AVR support.
+- Terraform 1.15.8: `fmt -check -recursive` and `validate` passed using the locked
+  AWS provider 6.56.0. Validation did not contact or mutate an AWS account.
+- Docker is unavailable in the implementation environment, so the image build,
+  non-root Fargate-mode smoke, embedded CLI/core inspection, and ECR scan were not
+  run.
+- No AWS plan/apply, API mutation, secret read/write, ECR push, Lambda invocation,
+  or Fargate launch was performed.
+- No physical Arduino Nano compile/upload/run acceptance was performed.
 
 ## Security review checklist
 
-- Only the exact Nano old-bootloader FQBN is accepted; request fields are closed.
-- Authentication precedes method, content type, JSON, and source processing.
-- The shared token is absent from Terraform state and compiler child processes.
-- Source, request, log, diagnostics, HEX, flash, response, time, disk, memory, and
-  concurrency boundaries are explicit.
-- No shell is used for compilation; all command arguments are fixed except
-  service-created paths.
-- The process group is killed at 45 seconds; Lambda has a five-second cleanup
-  margin.
-- Compiler output is never logged and only sanitized severity lines can return.
-- Paths, controls, ANSI, URLs, and the auth token are redacted from diagnostics.
-- Generated HEX is checksum/shape/address validated before return.
-- The base image, CLI archive/checksum, core, provider, architecture, and deployed
-  image digest are pinned.
-- IAM is resource-scoped; log retention, image scanning, tag immutability,
-  reserved concurrency, no CORS, and no-store headers are configured.
-- Remaining operational risks are public-endpoint invocation cost, coordinated
-  secret rotation, upstream image/core rebuild verification, AWS policy behavior,
-  and the unexecuted physical-hardware gate.
+- Public Lambda authenticates then forwards; it never calls `compile_sketch`.
+- Internal ALB and task ports are security-group restricted; tasks have no public
+  IP, task role, secrets, ECS Exec, NAT, IGW, or `0.0.0.0/0` route/rule.
+- Execution-role permissions are agent-only ECR pull and log delivery operations.
+- Source policy is explicitly defense in depth, not the isolation boundary.
+- Request, source, result, diagnostics, flash, process output, time, concurrency,
+  memory, disk, and network boundaries are explicit.
+- No shell executes learner-controlled values; source is written only to a fresh
+  temporary sketch file.
+- Gateway and Worker independently verify source/artifact hashes, FQBN, and HEX.
+- Image, CLI, core dependencies, provider, architecture, and deployed digest are
+  pinned.
+- Remaining release risks are the unexecuted container/AWS/physical gates,
+  operational cost alarms, and coordinated secret/domain rollout.

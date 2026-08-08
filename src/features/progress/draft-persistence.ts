@@ -6,6 +6,8 @@ const MAX_OWNER_ID_LENGTH = 128;
 const MAX_STEP_LENGTH = 100;
 const MAX_CODE_BYTES = 65_536;
 const DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface ProgressDraftScope {
   readonly ownerId: string;
@@ -70,10 +72,18 @@ export function isValidPersistedDraft(value: unknown): value is ProgressDraft {
     return false;
   }
   const numericPercentage = Number(percentage);
+  if (status === "completed" && numericPercentage === 100) {
+    return (
+      typeof value.codeSnapshot === "string" &&
+      value.codeSnapshot.length > 0 &&
+      typeof value.uploadEvidenceId === "string" &&
+      UUID_PATTERN.test(value.uploadEvidenceId)
+    );
+  }
+  if (value.uploadEvidenceId !== undefined) return false;
   return (
     (status === "not_started" && numericPercentage === 0) ||
-    (status === "in_progress" && numericPercentage < 100) ||
-    (status === "completed" && numericPercentage === 100)
+    (status === "in_progress" && numericPercentage < 100)
   );
 }
 

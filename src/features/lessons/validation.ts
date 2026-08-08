@@ -30,6 +30,7 @@ export const lessonCatalogValidationCodes = [
   "FORWARD_STEP_REFERENCE",
   "DUPLICATE_QUIZ_CHOICE",
   "INVALID_QUIZ_CHOICE_REFERENCE",
+  "INVALID_SERIAL_BAUD",
   "UNSUPPORTED_PIN",
   "ACCESSIBLE_LABEL_REQUIRED",
 ] as const;
@@ -65,6 +66,10 @@ interface StepReference {
 }
 
 const supportedPinSet: ReadonlySet<string> = new Set(supportedArduinoPins);
+
+function isSupportedSerialBaud(value: unknown): boolean {
+  return value === 9_600;
+}
 
 function stepReferences(step: LessonStep): readonly StepReference[] {
   switch (step.type) {
@@ -227,6 +232,15 @@ function validateStepGraph(
           `Quiz step "${step.id}" has no choice "${step.correctChoiceId}".`,
         );
       }
+    }
+
+    if (step.type === "serial-check" && !isSupportedSerialBaud(step.baudRate)) {
+      issue(
+        issues,
+        "INVALID_SERIAL_BAUD",
+        `${path}.baudRate`,
+        `Serial step "${step.id}" must use the supported 9600 baud lesson monitor.`,
+      );
     }
   });
 }

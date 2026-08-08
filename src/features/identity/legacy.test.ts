@@ -43,6 +43,7 @@ const savedProgress: LessonProgress = {
   currentStep: "legacy-complete",
   percentage: 100,
   codeSnapshot: null,
+  completionEvidenceId: null,
   completedAt: "2026-08-06T00:00:00.000Z",
   updatedAt: "2026-08-06T00:00:00.000Z",
 };
@@ -65,7 +66,7 @@ describe("legacy progress migration", () => {
     expect(storage.getItem).not.toHaveBeenCalledWith(legacyKeys.plaintextPassword);
   });
 
-  it("syncs a default profile and both completed lessons before removing legacy keys", async () => {
+  it("preserves a legacy head start without fabricating hardware upload evidence", async () => {
     const storage = createStorage({
       [legacyKeys.displayName]: "Ada",
       [legacyKeys.email]: "builder@example.com",
@@ -84,22 +85,56 @@ describe("legacy progress migration", () => {
     await expect(migrateLegacyData(storage, bootstrap(), api)).resolves.toBe(true);
 
     expect(api.updateProfile).toHaveBeenCalledWith("Ada");
-    expect(api.saveProgress).toHaveBeenCalledTimes(2);
+    expect(api.saveProgress).toHaveBeenCalledOnce();
     expect(api.saveProgress).toHaveBeenNthCalledWith(
       1,
       "first-spark",
-      expect.objectContaining({ currentStep: "finish-lesson", percentage: 100 }),
-    );
-    expect(api.saveProgress).toHaveBeenNthCalledWith(
-      2,
-      "morse-name",
-      expect.objectContaining({ currentStep: "finish-lesson", percentage: 100 }),
+      {
+        lessonVersion: 1,
+        expectedRevision: null,
+        status: "in_progress",
+        currentStep: "compile-sketch",
+        percentage: 50,
+      },
     );
     expect(storage.values.has(legacyKeys.displayName)).toBe(false);
     expect(storage.values.has(legacyKeys.firstSparkComplete)).toBe(false);
+    expect(storage.values.has(legacyKeys.morseNameComplete)).toBe(true);
+    expect(storage.values.has(legacyKeys.email)).toBe(true);
+    expect(storage.values.has(legacyKeys.kitUnlocked)).toBe(true);
+  });
+
+  it("migrates the Morse checkpoint once First Spark is evidence-backed on the server", async () => {
+    const storage = createStorage({
+      [legacyKeys.email]: "builder@example.com",
+      [legacyKeys.morseNameComplete]: "true",
+    });
+    const api = {
+      updateProfile: vi.fn(async () => undefined),
+      saveProgress: vi.fn(async () => ({
+        ...savedProgress,
+        lessonId: "morse-name" as const,
+        status: "in_progress" as const,
+        currentStep: "compile-sketch",
+        percentage: 50,
+        completionEvidenceId: null,
+        completedAt: null,
+      })),
+    };
+
+    await expect(
+      migrateLegacyData(storage, bootstrap({ progress: [savedProgress] }), api),
+    ).resolves.toBe(true);
+
+    expect(api.saveProgress).toHaveBeenCalledWith("morse-name", {
+      lessonVersion: 1,
+      expectedRevision: null,
+      status: "in_progress",
+      currentStep: "compile-sketch",
+      percentage: 50,
+    });
     expect(storage.values.has(legacyKeys.morseNameComplete)).toBe(false);
     expect(storage.values.has(legacyKeys.email)).toBe(false);
-    expect(storage.values.has(legacyKeys.kitUnlocked)).toBe(false);
   });
 
   it("does not overwrite an established cross-device name or duplicate completion", async () => {

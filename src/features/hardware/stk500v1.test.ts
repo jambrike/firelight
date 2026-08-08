@@ -35,6 +35,7 @@ describe("STK500v1 uploader", () => {
     expect(port.commands.map((command) => command[0])).toEqual([
       0x30,
       0x50,
+      0x75,
       0x55,
       0x64,
       0x55,
@@ -89,6 +90,23 @@ describe("STK500v1 uploader", () => {
     expect(port.readableMock.released).toBe(true);
     expect(port.writableMock.released).toBe(true);
     expect(port.writableMock.abortCount).toBe(1);
+  });
+
+  it("rejects a STK500 target that is not an ATmega328P before writing flash", async () => {
+    const port = new MockSerialPort({ signature: [0x1e, 0x95, 0x14] });
+
+    await expect(
+      uploadStk500v1(
+        port,
+        Uint8Array.of(1, 2, 3, 4),
+        vi.fn(),
+        new AbortController().signal,
+        FAST_OPTIONS,
+      ),
+    ).rejects.toMatchObject({
+      code: "wrong-device" satisfies Stk500ProtocolError["code"],
+    });
+    expect(port.commands.some((command) => command[0] === 0x64)).toBe(false);
   });
 
   it("cancels pending reads and releases both locks on cancellation", async () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CompileArtifact, HardwareWorkflowPhase } from "./contracts";
-import { FIRELIGHT_BOARD_FQBN, FIRELIGHT_UPLOAD_BAUD } from "./contracts";
+import {
+  FIRELIGHT_BOARD_FQBN,
+  FIRELIGHT_SERIAL_BAUD,
+  FIRELIGHT_UPLOAD_BAUD,
+} from "./contracts";
 import type { HardwareTransportError } from "./errors";
 import {
   getHardwareCapabilityGuidance,
@@ -354,6 +358,111 @@ describe("WebSerialArduinoTransport upload lifecycle", () => {
     await transport.disconnect();
   });
 
+  it("switches to bounded 9600-baud serial reading and back to upload baud safely", async () => {
+    const port = new MockSerialPort();
+    const transport = transportFor(port);
+    await transport.connect();
+    await transport.upload(artifact(), vi.fn());
+    const onData = vi.fn();
+
+    const reading = transport.readSerial(
+      { baudRate: FIRELIGHT_SERIAL_BAUD, durationMs: 25, maxBytes: 64 },
+      onData,
+    );
+    port.enqueueSerialText("23.4\n24.1\n");
+    await vi.waitFor(() => {
+      expect(port.openCalls.some((call) => call.baudRate === FIRELIGHT_SERIAL_BAUD)).toBe(true);
+    });
+    expect(port.openCalls[1]?.baudRate).toBe(FIRELIGHT_SERIAL_BAUD);
+
+    await expect(reading).resolves.toEqual({
+      baudRate: FIRELIGHT_SERIAL_BAUD,
+      text: "23.4\n24.1\n",
+      bytesRead: 10,
+      truncated: false,
+    });
+    expect(onData).toHaveBeenCalledWith("23.4\n24.1\n");
+    expect(port.readableMock.released).toBe(true);
+    expect(port.readableMock.cancelCount).toBe(1);
+    expect(port.closeWhileLocked).toBe(false);
+    expect(port.openCalls.at(-1)?.baudRate).toBe(FIRELIGHT_SERIAL_BAUD);
+
+    await expect(transport.upload(artifact(), vi.fn())).resolves.toMatchObject({
+      bytesWritten: 4,
+    });
+    expect(port.openCalls.at(-1)?.baudRate).toBe(FIRELIGHT_UPLOAD_BAUD);
+    await transport.disconnect();
+  });
+
+  it("caps hostile serial output without leaking its reader", async () => {
+    const port = new MockSerialPort();
+    const transport = transportFor(port);
+    await transport.connect();
+    const reading = transport.readSerial(
+      { baudRate: FIRELIGHT_SERIAL_BAUD, durationMs: 500, maxBytes: 4 },
+      vi.fn(),
+    );
+    port.enqueueSerialText("abcdef");
+    await vi.waitFor(() => {
+      expect(port.openCalls.at(-1)?.baudRate).toBe(FIRELIGHT_SERIAL_BAUD);
+    });
+
+    await expect(reading).resolves.toEqual({
+      baudRate: FIRELIGHT_SERIAL_BAUD,
+      text: "abcd",
+      bytesRead: 4,
+      truncated: true,
+    });
+    expect(port.readableMock.locked).toBe(false);
+    expect(port.readableMock.released).toBe(true);
+    await transport.disconnect();
+  });
+
+  it("cancels a pending serial observation and closes only after releasing the reader", async () => {
+    const port = new MockSerialPort();
+    const transport = transportFor(port);
+    await transport.connect();
+    const reading = transport.readSerial(
+      { baudRate: FIRELIGHT_SERIAL_BAUD, durationMs: 10_000 },
+      vi.fn(),
+    );
+    const rejection = expect(reading).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => {
+      expect(port.readableMock.locked).toBe(true);
+    });
+
+    await transport.cancel();
+    await rejection;
+
+    expect(port.readableMock.cancelCount).toBe(1);
+    expect(port.readableMock.released).toBe(true);
+    expect(port.closeWhileLocked).toBe(false);
+    expect(transport.phase).toBe("idle");
+  });
+
+  it("retains a transient failed close so disconnect and reconnect can retry it", async () => {
+    const port = new MockSerialPort({ closeFailures: 1 });
+    const serial = new MockWebSerial(port);
+    const transport = new WebSerialArduinoTransport({
+      environment: { secureContext: true, userAgent: "Chrome", serial },
+    });
+    await transport.connect();
+
+    await expect(transport.disconnect()).rejects.toMatchObject({
+      code: "port-close-failed",
+    });
+    expect(port.closeCount).toBe(1);
+    expect(transport.phase).toBe("error");
+
+    await expect(transport.connect()).resolves.toMatchObject({
+      displayName: expect.stringContaining("Selected serial device"),
+    });
+    expect(port.closeCount).toBe(2);
+    expect(serial.requestCount).toBe(2);
+    expect(port.openCalls).toHaveLength(2);
+    await transport.disconnect();
+  });
+
   it("surfaces a close failure and clears the stale connection", async () => {
     const port = new MockSerialPort({ closeError: new Error("driver close failure") });
     const transport = transportFor(port);
@@ -366,5 +475,9 @@ describe("WebSerialArduinoTransport upload lifecycle", () => {
     await expect(transport.upload(artifact(), vi.fn())).rejects.toMatchObject({
       code: "device-not-connected",
     });
+    await expect(transport.disconnect()).rejects.toMatchObject({
+      code: "port-close-failed",
+    });
+    expect(port.closeCount).toBe(2);
   });
 });

@@ -142,6 +142,21 @@ describe("lesson catalog validation", () => {
     expect(codes.filter((code) => code === "ACCESSIBLE_LABEL_REQUIRED")).toHaveLength(2);
   });
 
+  it("rejects a serial-check baud that disagrees with the controlled sketches", () => {
+    const distance = lessonCatalog.find((lesson) => lesson.id === "distance-scout");
+    if (!distance) return;
+    const invalid = {
+      ...distance,
+      steps: distance.steps.map((step): LessonStep =>
+        step.type === "serial-check"
+          ? ({ ...step, baudRate: 115_200 } as unknown as LessonStep)
+          : step,
+      ),
+    };
+
+    expect(validationCodes([invalid])).toContain("INVALID_SERIAL_BAUD");
+  });
+
   it("throws a diagnostic error from the build/runtime assertion", () => {
     const first = lessonCatalog[0];
     if (!first) return;

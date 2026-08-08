@@ -52,6 +52,7 @@ function createLessonSteps(config: LessonShellConfig): readonly LessonStep[] {
           title: "Read the signal",
           ariaLabel: "Check the board's serial output",
           uploadStepId: "upload-sketch",
+          baudRate: 9_600,
           expectedObservation: config.serialObservation,
         },
       ]

@@ -29,6 +29,7 @@ function progress(
     currentStep: "intro",
     percentage: 10,
     codeSnapshot: null,
+    completionEvidenceId: null,
     completedAt: null,
     updatedAt: savedAt,
     ...overrides,
@@ -42,6 +43,7 @@ function resultFrom(input: ProgressUpdateInput, revision: number): LessonProgres
     currentStep: input.currentStep,
     percentage: input.percentage,
     codeSnapshot: input.codeSnapshot ?? null,
+    completionEvidenceId: input.uploadEvidenceId ?? null,
     completedAt: input.status === "completed" ? savedAt : null,
   });
 }
@@ -244,6 +246,7 @@ describe("ProgressAutosaveController", () => {
       currentStep: "finish",
       percentage: 100,
       codeSnapshot: "server final code",
+      completionEvidenceId: "55555555-5555-4555-8555-555555555555",
       completedAt: savedAt,
     });
     const saveProgress = vi
@@ -260,12 +263,33 @@ describe("ProgressAutosaveController", () => {
 
     await controller.flush();
 
-    expect(saveProgress.mock.calls[1]?.[1]).toEqual({
-      lessonVersion: 1,
-      expectedRevision: 8,
+    expect(saveProgress).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot()).toMatchObject({ phase: "saved", dirty: false });
+  });
+
+  it("durably sends terminal progress with its exact sketch and upload evidence", async () => {
+    const saveProgress = vi.fn(
+      async (_lessonId: LessonSlug, input: ProgressUpdateInput) => resultFrom(input, 2),
+    );
+    const { controller } = createController({ saveProgress });
+    controller.queue({
       status: "completed",
-      currentStep: "finish",
+      currentStep: "finish-lesson",
       percentage: 100,
+      codeSnapshot: "void setup() {}\nvoid loop() {}",
+      uploadEvidenceId: "55555555-5555-4555-8555-555555555555",
+    });
+
+    await controller.flush();
+
+    expect(saveProgress).toHaveBeenCalledWith("first-spark", {
+      lessonVersion: 1,
+      expectedRevision: null,
+      status: "completed",
+      currentStep: "finish-lesson",
+      percentage: 100,
+      codeSnapshot: "void setup() {}\nvoid loop() {}",
+      uploadEvidenceId: "55555555-5555-4555-8555-555555555555",
     });
   });
 

@@ -34,6 +34,7 @@ function saved(
     currentStep: status === "completed" ? "finish-lesson" : "edit-code",
     percentage,
     codeSnapshot: null,
+    completionEvidenceId: null,
     completedAt: status === "completed" ? timestamp : null,
     updatedAt: timestamp,
   };

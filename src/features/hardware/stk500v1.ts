@@ -16,7 +16,9 @@ const STK_LEAVE_PROGMODE = 0x51;
 const STK_LOAD_ADDRESS = 0x55;
 const STK_PROG_PAGE = 0x64;
 const STK_READ_PAGE = 0x74;
+const STK_READ_SIGN = 0x75;
 const STK_MEMORY_FLASH = 0x46;
+const ATMEGA328P_SIGNATURE = Uint8Array.of(0x1e, 0x95, 0x0f);
 
 export type Stk500ErrorCode =
   | "invalid-image"
@@ -25,6 +27,7 @@ export type Stk500ErrorCode =
   | "serial-disconnected"
   | "protocol-rejected"
   | "sync-failed"
+  | "wrong-device"
   | "verification-failed";
 
 export class Stk500ProtocolError extends Error {
@@ -352,6 +355,18 @@ export async function uploadStk500v1(
     }
 
     await client.transact([STK_ENTER_PROGMODE], 0, resolved.commandTimeoutMs, signal);
+    const signature = await client.transact(
+      [STK_READ_SIGN],
+      ATMEGA328P_SIGNATURE.length,
+      resolved.commandTimeoutMs,
+      signal,
+    );
+    if (signature.some((byte, index) => byte !== ATMEGA328P_SIGNATURE[index])) {
+      throw new Stk500ProtocolError(
+        "wrong-device",
+        "The selected bootloader is not an ATmega328P Nano.",
+      );
+    }
     onProgress({ phase: "writing", bytesWritten: 0, totalBytes });
 
     for (let offset = 0; offset < image.length; offset += resolved.pageSize) {

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +186,44 @@ class HandlerTests(unittest.TestCase):
                 )
                 self.assertEqual(response["statusCode"], 400)
 
+    def test_rejects_compiler_file_and_inline_assembly_features_before_compile(self):
+        rejected = (
+            'asm(".incbin \\"/proc/1/environ\\"");',
+            '#include "/etc/passwd"',
+            "#pragma GCC poison setup",
+            'const char *path = "../private";',
+            '__attribute__((section(".text"))) int value;',
+            "%:include <Servo.h>",
+            "??=include <Servo.h>",
+            'a\\\nsm(".inc\\\nbin \\"/pr\\\noc/1/environ\\"");',
+            'a\\\rsm(".incbin \\"/proc/1/environ\\"");',
+            "/**/ %:include <Servo.h>",
+            "/**/ #include </etc/passwd>",
+            'const char *fake = R"(asm(".incbin /proc/1/environ"))";',
+        )
+        compile_fn = mock.Mock(return_value=artifact_for())
+
+        for source in rejected:
+            with self.subTest(source=source):
+                response = self.handle(
+                    event_for({"fqbn": app.ALLOWED_FQBN, "source": source}),
+                    compile_fn=compile_fn,
+                )
+                self.assertEqual(response["statusCode"], 422)
+                self.assertEqual(
+                    response_json(response)["error"]["code"],
+                    "COMPILER_SOURCE_POLICY_REJECTED",
+                )
+        compile_fn.assert_not_called()
+
+    def test_allows_only_the_repository_servo_include(self):
+        source = "#include <Servo.h>\nvoid setup() {}\nvoid loop() {}\n"
+        response = self.handle(
+            event_for({"fqbn": app.ALLOWED_FQBN, "source": source}),
+            compile_fn=lambda candidate: artifact_for(candidate),
+        )
+        self.assertEqual(response["statusCode"], 200)
+
     def test_rejects_unpaired_unicode_surrogate(self):
         raw_body = (
             '{"fqbn":"arduino:avr:nano:cpu=atmega328old",'
@@ -231,6 +272,16 @@ class HandlerTests(unittest.TestCase):
         self.assertIn("[redacted-url]", body)
         self.assertEqual(len(response_json(response)["diagnostics"]), 2)
 
+    def test_diagnostics_reject_source_text_that_merely_contains_a_severity_word(self):
+        diagnostics = app._safe_diagnostics(
+            'const char *leaked = "error: learner source";\n'
+            "/tmp/firelight/x.ino:4:2: error: expected expression",
+            redactions=("/tmp/firelight",),
+        )
+
+        self.assertEqual(diagnostics, ("[redacted][path]:4:2: error: expected expression",))
+        self.assertNotIn("learner source", "\n".join(diagnostics))
+
     def test_unexpected_compiler_exception_never_leaks_details(self):
         def fail(_: str):
             raise RuntimeError(f"{TOKEN} https://private.invalid /tmp/private")
@@ -255,6 +306,227 @@ class HandlerTests(unittest.TestCase):
         )
 
 
+class IsolationBoundaryTests(unittest.TestCase):
+    def test_public_lambda_authenticates_before_forwarding(self):
+        forward = mock.Mock(return_value=artifact_for())
+        with (
+            mock.patch.object(app, "_load_service_token", return_value=TOKEN),
+            mock.patch.object(app, "_invoke_isolated_compiler", forward),
+        ):
+            accepted = app.gateway_lambda_handler(event_for(), None)
+            rejected = app.gateway_lambda_handler(event_for(token=None), None)
+
+        self.assertEqual(accepted["statusCode"], 200)
+        self.assertEqual(rejected["statusCode"], 401)
+        forward.assert_called_once_with(SOURCE)
+
+    def test_lambda_handler_alias_can_never_select_local_compile(self):
+        self.assertIs(app.lambda_handler, app.gateway_lambda_handler)
+
+    def test_internal_handler_has_no_application_auth_or_secret_dependency(self):
+        event = event_for(token=None)
+        response = app.isolated_handle_event(
+            event,
+            compile_fn=lambda source: artifact_for(source),
+        )
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertNotIn("unauthorized", str(response).lower())
+
+    def test_internal_alb_url_is_strictly_pinned(self):
+        valid = "http://internal-firelight-123.eu-west-1.elb.amazonaws.com/compile"
+        self.assertEqual(app._validate_internal_compiler_url(valid), valid)
+
+        invalid = (
+            "https://internal-firelight-123.eu-west-1.elb.amazonaws.com/compile",
+            "http://internal-firelight-123.eu-west-1.elb.amazonaws.com:8080/compile",
+            "http://internal-firelight-123.eu-west-1.elb.amazonaws.com/other",
+            "http://internal-firelight-123.eu-west-1.elb.amazonaws.com/compile?next=x",
+            "http://internal-firelight-123.us-east-1.elb.amazonaws.com/compile",
+            "http://example.com/compile",
+            "http://user@internal-firelight-123.eu-west-1.elb.amazonaws.com/compile",
+        )
+        for candidate in invalid:
+            with self.subTest(candidate=candidate), self.assertRaises(RuntimeError):
+                app._validate_internal_compiler_url(candidate)
+
+    def test_gateway_revalidates_internal_artifact_and_source_binding(self):
+        payload = {
+            "artifact": {
+                "artifactHash": hashlib.sha256(VALID_HEX.encode()).hexdigest(),
+                "format": app.ARTIFACT_FORMAT,
+                "fqbn": app.ALLOWED_FQBN,
+                "hex": VALID_HEX,
+                "sourceHash": hashlib.sha256(SOURCE.encode()).hexdigest(),
+            },
+            "diagnostics": [],
+            "ok": True,
+        }
+        raw = json.dumps(payload).encode()
+
+        artifact = app._artifact_from_internal_response(
+            200,
+            raw,
+            expected_source=SOURCE,
+        )
+        self.assertEqual(artifact.hex_text, VALID_HEX)
+
+        payload["artifact"]["sourceHash"] = "0" * 64
+        with self.assertRaises(app.CompilerError) as caught:
+            app._artifact_from_internal_response(
+                200,
+                json.dumps(payload).encode(),
+                expected_source=SOURCE,
+            )
+        self.assertEqual(caught.exception.code, "compiler_unavailable")
+
+    def test_gateway_rejects_oversized_or_status_inconsistent_internal_results(self):
+        with self.assertRaises(app.CompilerError) as oversized:
+            app._artifact_from_internal_response(
+                200,
+                b"x" * (app.MAX_RESULT_BYTES + 1),
+                expected_source=SOURCE,
+            )
+        self.assertEqual(oversized.exception.code, "compiler_unavailable")
+
+        body = json.dumps(
+            {
+                "diagnostics": [],
+                "error": {
+                    "code": "COMPILER_TIMEOUT",
+                    "message": "ignored",
+                },
+                "ok": False,
+            }
+        ).encode()
+        with self.assertRaises(app.CompilerError) as inconsistent:
+            app._artifact_from_internal_response(
+                422,
+                body,
+                expected_source=SOURCE,
+            )
+        self.assertEqual(inconsistent.exception.code, "compiler_unavailable")
+
+    def test_service_mode_must_be_explicit(self):
+        with self.assertRaises(SystemExit):
+            app.main([])
+
+    def test_internal_http_surface_bounds_requests_and_results(self):
+        server = app._BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), app._CompilerRequestHandler
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        host, port = server.server_address
+        response = app._json_response(
+            200,
+            {
+                "artifact": {
+                    "artifactHash": hashlib.sha256(VALID_HEX.encode()).hexdigest(),
+                    "format": app.ARTIFACT_FORMAT,
+                    "fqbn": app.ALLOWED_FQBN,
+                    "hex": VALID_HEX,
+                    "sourceHash": hashlib.sha256(SOURCE.encode()).hexdigest(),
+                },
+                "diagnostics": [],
+                "ok": True,
+            },
+        )
+        try:
+            with mock.patch.object(app, "isolated_handle_event", return_value=response):
+                connection = http.client.HTTPConnection(host, port, timeout=2)
+                connection.request(
+                    "POST",
+                    "/compile",
+                    body=json.dumps({"fqbn": app.ALLOWED_FQBN, "source": SOURCE}),
+                    headers={"content-type": "application/json"},
+                )
+                accepted = connection.getresponse()
+                accepted_body = accepted.read()
+                connection.close()
+
+                oversized = http.client.HTTPConnection(host, port, timeout=2)
+                oversized.putrequest("POST", "/compile")
+                oversized.putheader("content-type", "application/json")
+                oversized.putheader("content-length", str(app.MAX_REQUEST_BYTES + 1))
+                oversized.endheaders()
+                rejected = oversized.getresponse()
+                rejected_body = rejected.read()
+                oversized.close()
+
+            self.assertEqual(accepted.status, 200)
+            self.assertLessEqual(len(accepted_body), app.MAX_RESULT_BYTES)
+            self.assertEqual(rejected.status, 413)
+            self.assertEqual(
+                json.loads(rejected_body)["error"]["code"],
+                "COMPILER_REQUEST_TOO_LARGE",
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=2)
+
+    def test_each_task_allows_only_one_compile_at_a_time(self):
+        server = app._BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), app._CompilerRequestHandler
+        )
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        host, port = server.server_address
+        entered = threading.Event()
+        release = threading.Event()
+        first_status: list[int] = []
+
+        def hold_compile(_: object) -> dict[str, object]:
+            entered.set()
+            release.wait(timeout=2)
+            return app._error_response("compile_failed", 422)
+
+        def first_request() -> None:
+            connection = http.client.HTTPConnection(host, port, timeout=3)
+            connection.request(
+                "POST",
+                "/compile",
+                body=json.dumps({"fqbn": app.ALLOWED_FQBN, "source": SOURCE}),
+                headers={"content-type": "application/json"},
+            )
+            response = connection.getresponse()
+            first_status.append(response.status)
+            response.read()
+            connection.close()
+
+        request_thread = threading.Thread(target=first_request, daemon=True)
+        try:
+            with mock.patch.object(app, "isolated_handle_event", side_effect=hold_compile):
+                request_thread.start()
+                self.assertTrue(entered.wait(timeout=1))
+
+                second = http.client.HTTPConnection(host, port, timeout=2)
+                second.request(
+                    "POST",
+                    "/compile",
+                    body=json.dumps({"fqbn": app.ALLOWED_FQBN, "source": SOURCE}),
+                    headers={"content-type": "application/json"},
+                )
+                busy = second.getresponse()
+                busy_body = json.loads(busy.read())
+                second.close()
+
+                self.assertEqual(busy.status, 503)
+                self.assertEqual(
+                    busy_body["error"]["code"], "COMPILER_UNAVAILABLE"
+                )
+                release.set()
+                request_thread.join(timeout=2)
+                self.assertEqual(first_status, [422])
+        finally:
+            release.set()
+            request_thread.join(timeout=2)
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=2)
+
+
 class CompilerTests(unittest.TestCase):
     def test_compile_uses_pinned_target_deadline_scrubbed_env_and_plain_hex(self):
         observed = {}
@@ -274,8 +546,11 @@ class CompilerTests(unittest.TestCase):
         artifact = app.compile_sketch(SOURCE, runner=runner)
         command = observed["command"]
         self.assertEqual(command[command.index("--fqbn") + 1], app.ALLOWED_FQBN)
+        self.assertEqual(
+            command[command.index("--libraries") + 1], app.ARDUINO_LIBRARIES
+        )
         self.assertEqual(command[command.index("--jobs") + 1], "1")
-        self.assertEqual(observed["timeout_seconds"], 45.0)
+        self.assertEqual(observed["timeout_seconds"], 40.0)
         self.assertEqual(observed["max_output_bytes"], 64 * 1024)
         self.assertEqual(artifact.hex_text, VALID_HEX)
         self.assertEqual(artifact.source_hash, hashlib.sha256(SOURCE.encode()).hexdigest())

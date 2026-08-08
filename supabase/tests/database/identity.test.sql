@@ -133,6 +133,58 @@ set
   access_granted_at = '2026-08-06T00:00:00Z'
 where id = '11111111-1111-4111-8111-111111111111';
 
+insert into public.compile_jobs (
+  id,
+  user_id,
+  lesson_id,
+  lesson_version,
+  source_hash,
+  state,
+  artifact_hash,
+  duration_ms,
+  started_at,
+  finished_at
+)
+values (
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  '11111111-1111-4111-8111-111111111111',
+  'first-spark',
+  1,
+  pg_catalog.encode(
+    extensions.digest(pg_catalog.convert_to('void setup() {}', 'UTF8'), 'sha256'),
+    'hex'
+  ),
+  'succeeded',
+  repeat('b', 64),
+  100,
+  now(),
+  now()
+);
+
+insert into public.hardware_upload_evidence (
+  id,
+  user_id,
+  compile_job_id,
+  lesson_id,
+  lesson_version,
+  source_hash,
+  artifact_hash,
+  bytes_written
+)
+values (
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  '11111111-1111-4111-8111-111111111111',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  'first-spark',
+  1,
+  pg_catalog.encode(
+    extensions.digest(pg_catalog.convert_to('void setup() {}', 'UTF8'), 'sha256'),
+    'hex'
+  ),
+  repeat('b', 64),
+  128
+);
+
 insert into public.lesson_progress (
   user_id,
   lesson_id,
@@ -140,6 +192,8 @@ insert into public.lesson_progress (
   status,
   current_step,
   percentage,
+  code_snapshot,
+  completion_evidence_id,
   completed_at
 )
 values
@@ -150,6 +204,8 @@ values
     'completed',
     'complete',
     100,
+    'void setup() {}',
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     now()
   ),
   (
@@ -159,6 +215,8 @@ values
     'not_started',
     'intro',
     0,
+    null,
+    null,
     null
   );
 

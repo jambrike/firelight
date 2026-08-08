@@ -92,6 +92,9 @@ interface InFlightSave {
 const hasOwn = (value: object, property: PropertyKey): boolean =>
   Object.prototype.hasOwnProperty.call(value, property);
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function browserIsOnline(): boolean {
   return typeof navigator === "undefined" || navigator.onLine;
 }
@@ -227,6 +230,19 @@ function assertDraft(draft: ProgressDraft): void {
     (draft.status === "in_progress" && draft.percentage < 100) ||
     (draft.status === "completed" && draft.percentage === 100);
   if (!valid) throw new RangeError("Progress status and percentage do not agree.");
+  if (draft.status === "completed") {
+    if (
+      typeof draft.uploadEvidenceId !== "string" ||
+      !UUID_PATTERN.test(draft.uploadEvidenceId)
+    ) {
+      throw new RangeError("Completed progress requires valid upload evidence.");
+    }
+    if (typeof draft.codeSnapshot !== "string" || draft.codeSnapshot.length === 0) {
+      throw new RangeError("Completed progress requires the uploaded sketch.");
+    }
+  } else if (draft.uploadEvidenceId !== undefined) {
+    throw new RangeError("Upload evidence is only valid for completed progress.");
+  }
 }
 
 function furthestStatus(
@@ -249,6 +265,28 @@ function withDraftSnapshot(
 ): ProgressDraft {
   if (!hasOwn(source, "codeSnapshot") || source.codeSnapshot === undefined) return target;
   return { ...target, codeSnapshot: source.codeSnapshot };
+}
+
+function withDraftEvidence(
+  target: ProgressDraft,
+  source: ProgressDraft,
+): ProgressDraft {
+  if (!hasOwn(source, "uploadEvidenceId") || source.uploadEvidenceId === undefined) {
+    return target;
+  }
+  return { ...target, uploadEvidenceId: source.uploadEvidenceId };
+}
+
+function draftFromCompletedProgress(progress: LessonProgress): ProgressDraft {
+  return {
+    status: "completed",
+    currentStep: progress.currentStep,
+    percentage: 100,
+    ...(progress.codeSnapshot === null ? {} : { codeSnapshot: progress.codeSnapshot }),
+    ...(progress.completionEvidenceId === null
+      ? {}
+      : { uploadEvidenceId: progress.completionEvidenceId }),
+  };
 }
 
 function mergeQueuedDraft(
@@ -276,6 +314,15 @@ function mergeQueuedDraft(
   } else if (current && hasOwn(current, "codeSnapshot")) {
     merged = withDraftSnapshot(merged, current);
   }
+  if (status === "completed") {
+    if (persisted?.status === "completed") {
+      merged = draftFromCompletedProgress(persisted);
+    } else if (hasOwn(incoming, "uploadEvidenceId")) {
+      merged = withDraftEvidence(merged, incoming);
+    } else if (current && hasOwn(current, "uploadEvidenceId")) {
+      merged = withDraftEvidence(merged, current);
+    }
+  }
   return merged;
 }
 
@@ -289,11 +336,7 @@ export function mergeProgressConflict(
 ): ProgressDraft {
   if (!server) return local;
   if (server.status === "completed") {
-    return {
-      status: "completed",
-      currentStep: server.currentStep,
-      percentage: 100,
-    };
+    return draftFromCompletedProgress(server);
   }
   const percentage = Math.max(server.percentage, local.percentage);
   const serverCheckpointIsFurther = server.percentage > local.percentage;
@@ -308,14 +351,7 @@ export function mergeProgressConflict(
 
 function mergeAfterOwnSave(server: LessonProgress, local: ProgressDraft): ProgressDraft {
   if (server.status !== "completed") return mergeProgressConflict(server, local);
-  let merged: ProgressDraft = {
-    status: "completed",
-    currentStep: server.currentStep,
-    percentage: 100,
-  };
-  // A code edit made while this client's older request was in flight must not be lost.
-  if (hasOwn(local, "codeSnapshot")) merged = withDraftSnapshot(merged, local);
-  return merged;
+  return draftFromCompletedProgress(server);
 }
 
 function draftMatchesProgress(draft: ProgressDraft, progress: LessonProgress): boolean {
@@ -323,7 +359,9 @@ function draftMatchesProgress(draft: ProgressDraft, progress: LessonProgress): b
     draft.status === progress.status &&
     draft.currentStep === progress.currentStep &&
     draft.percentage === progress.percentage &&
-    (!hasOwn(draft, "codeSnapshot") || draft.codeSnapshot === progress.codeSnapshot)
+    (!hasOwn(draft, "codeSnapshot") || draft.codeSnapshot === progress.codeSnapshot) &&
+    (!hasOwn(draft, "uploadEvidenceId") ||
+      draft.uploadEvidenceId === progress.completionEvidenceId)
   );
 }
 
@@ -669,6 +707,9 @@ export class ProgressAutosaveController {
         currentStep: draft.currentStep,
         percentage: draft.percentage,
         ...(draft.codeSnapshot === undefined ? {} : { codeSnapshot: draft.codeSnapshot }),
+        ...(draft.uploadEvidenceId === undefined
+          ? {}
+          : { uploadEvidenceId: draft.uploadEvidenceId }),
       };
       this.#publish(
         createStatus(hasResolvedConflict ? "retrying" : "saving", {
@@ -705,6 +746,15 @@ export class ProgressAutosaveController {
             }
             this.#persisted = newest;
             this.#latestDraft = mergeProgressConflict(newest, latestDraft);
+            if (newest && draftMatchesProgress(this.#latestDraft, newest)) {
+              this.#dirty = false;
+              this.#latestDraft = null;
+              this.#clearPersistedDraft();
+              this.#publish(
+                createStatus("saved", { dirty: false, savedAt: newest.updatedAt }),
+              );
+              return;
+            }
             this.#persistDraft();
             continue;
           } catch (resolutionError) {

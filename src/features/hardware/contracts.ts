@@ -1,5 +1,6 @@
 export const FIRELIGHT_BOARD_FQBN = "arduino:avr:nano:cpu=atmega328old";
 export const FIRELIGHT_UPLOAD_BAUD = 57_600;
+export const FIRELIGHT_SERIAL_BAUD = 9_600;
 
 export type HardwareWorkflowPhase =
   | "idle"
@@ -58,6 +59,21 @@ export interface UploadResult {
   readonly completedAt: string;
 }
 
+export interface SerialReadOptions {
+  readonly baudRate: typeof FIRELIGHT_SERIAL_BAUD;
+  /** A bounded capture window. The transport applies its own hard ceiling. */
+  readonly durationMs?: number;
+  /** A bounded UTF-8 byte budget. The transport applies its own hard ceiling. */
+  readonly maxBytes?: number;
+}
+
+export interface SerialReadResult {
+  readonly baudRate: typeof FIRELIGHT_SERIAL_BAUD;
+  readonly text: string;
+  readonly bytesRead: number;
+  readonly truncated: boolean;
+}
+
 export interface ArduinoTransport {
   readonly phase: HardwareWorkflowPhase;
   detectCapability(): HardwareCapability;
@@ -70,6 +86,11 @@ export interface ArduinoTransport {
     onProgress: (progress: UploadProgress) => void,
     signal?: AbortSignal,
   ): Promise<UploadResult>;
+  readSerial(
+    options: SerialReadOptions,
+    onData: (text: string) => void,
+    signal?: AbortSignal,
+  ): Promise<SerialReadResult>;
   subscribe(listener: (phase: HardwareWorkflowPhase) => void): () => void;
 }
 

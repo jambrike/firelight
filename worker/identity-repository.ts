@@ -6,14 +6,23 @@ import type {
   ProgressUpdateInput,
 } from "../shared/identity";
 import { curriculumLessons, isLessonSlug } from "../shared/curriculum";
+import {
+  FIRELIGHT_BOARD_FQBN,
+  isRfc3339Timestamp,
+  MAX_NANO_UPLOAD_BYTES,
+  type UploadEvidence,
+} from "../shared/hardware";
 
 const MAX_UPSTREAM_JSON_BYTES = 3 * 1024 * 1024;
+const PROGRESS_SELECT =
+  "lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completion_evidence_id,completed_at,updated_at";
 
 export interface AuthenticatedUser {
   readonly id: string;
   readonly email: string;
   readonly emailConfirmed: boolean;
   readonly lastSignInAt: string | null;
+  readonly isAnonymous: boolean;
 }
 
 export interface ProfileRecord {
@@ -30,6 +39,31 @@ export interface BootstrapRecords {
   readonly profile: ProfileRecord;
   readonly activation: KitActivation | null;
   readonly progress: readonly LessonProgress[];
+}
+
+export type CompileJobGate =
+  | { readonly result: "started"; readonly jobId: string }
+  | { readonly result: "active" }
+  | {
+      readonly result: "rate_limited";
+      readonly scope: "hour" | "day";
+      readonly retryAfterSeconds: number;
+    }
+  | { readonly result: "not_entitled" };
+
+export interface BeginCompileJobInput {
+  readonly lessonId: string;
+  readonly lessonVersion: number;
+  readonly sourceHash: string;
+}
+
+export interface FinishCompileJobInput {
+  readonly jobId: string;
+  readonly state: "succeeded" | "failed";
+  readonly durationMs: number;
+  readonly safeErrorCode: string | null;
+  readonly artifactHash: string | null;
+  readonly diagnosticSummary: string;
 }
 
 export type RepositoryErrorKind =
@@ -58,6 +92,14 @@ export interface IdentityRepository {
   updateProfile(userId: string, displayName: string): Promise<ProfileRecord>;
   claimKit(userId: string, codeHash: string): Promise<KitActivation>;
   hasActivation(userId: string): Promise<boolean>;
+  beginCompileJob(userId: string, input: BeginCompileJobInput): Promise<CompileJobGate>;
+  finishCompileJob(userId: string, input: FinishCompileJobInput): Promise<void>;
+  recordUploadEvidence(
+    userId: string,
+    compileJobId: string,
+    artifactHash: string,
+    bytesWritten: number,
+  ): Promise<UploadEvidence>;
   upsertProgress(
     userId: string,
     lessonId: string,
@@ -89,6 +131,58 @@ function readConfiguredValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function configuredSupabaseUrl(value: string, environment: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new RepositoryError("unavailable", "Supabase is not configured.");
+  }
+  const isLoopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+  const isDevelopmentLoopback =
+    environment === "development" &&
+    isLoopback &&
+    parsed.protocol === "http:" &&
+    parsed.port.length > 0;
+  const isHostedProject =
+    parsed.protocol === "https:" &&
+    /^[a-z0-9]{20}\.supabase\.co$/.test(parsed.hostname) &&
+    parsed.port.length === 0;
+  if (
+    (!isDevelopmentLoopback && !isHostedProject) ||
+    parsed.username.length > 0 ||
+    parsed.password.length > 0 ||
+    (parsed.pathname !== "/" && parsed.pathname !== "") ||
+    parsed.search.length > 0 ||
+    parsed.hash.length > 0
+  ) {
+    throw new RepositoryError("unavailable", "Supabase is not configured.");
+  }
+  return new URL(parsed.origin);
+}
+
+function validateSupabaseTokenIssuer(accessToken: string, baseUrl: URL): void {
+  const segments = accessToken.split(".");
+  if (segments.length !== 3 || !segments[1]) {
+    throw new RepositoryError("unauthorized", "Session rejected.");
+  }
+  try {
+    const base64 = segments[1].replaceAll("-", "+").replaceAll("_", "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const payload: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (
+      !isRecord(payload) ||
+      payload.iss !== `${baseUrl.origin}/auth/v1`
+    ) {
+      throw new Error("issuer mismatch");
+    }
+  } catch {
+    throw new RepositoryError("unauthorized", "Session rejected.");
+  }
+}
+
 function readString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value !== "string") {
@@ -101,6 +195,54 @@ function readNullableString(record: Record<string, unknown>, key: string): strin
   const value = record[key];
   if (value === null) return null;
   if (typeof value !== "string") {
+    throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+function readUuid(record: Record<string, unknown>, key: string): string {
+  const value = readString(record, key);
+  if (!UUID_PATTERN.test(value)) {
+    throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+function readUuidV4(record: Record<string, unknown>, key: string): string {
+  const value = readString(record, key);
+  if (!UUID_V4_PATTERN.test(value)) {
+    throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+function readNullableUuid(record: Record<string, unknown>, key: string): string | null {
+  const value = readNullableString(record, key);
+  if (value !== null && !UUID_PATTERN.test(value)) {
+    throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+function readSha256(record: Record<string, unknown>, key: string): string {
+  const value = readString(record, key);
+  if (!SHA256_PATTERN.test(value)) {
+    throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
+  }
+  return value;
+}
+
+function readTimestamp(record: Record<string, unknown>, key: string): string {
+  const value = readString(record, key);
+  if (
+    !isRfc3339Timestamp(value)
+  ) {
     throw new RepositoryError("unavailable", `Supabase returned an invalid ${key}.`);
   }
   return value;
@@ -182,6 +324,7 @@ function parseProgress(value: unknown): LessonProgress {
     currentStep: readString(value, "current_step"),
     percentage: Number(percentage),
     codeSnapshot: readNullableString(value, "code_snapshot"),
+    completionEvidenceId: readNullableUuid(value, "completion_evidence_id"),
     completedAt: readNullableString(value, "completed_at"),
     updatedAt: readString(value, "updated_at"),
   };
@@ -192,6 +335,29 @@ function parseSavedProgress(value: unknown): LessonProgress | null {
     throw new RepositoryError("unavailable", "Supabase did not return valid saved progress.");
   }
   return value.length === 1 ? parseProgress(value[0]) : null;
+}
+
+function isExactProgressReplay(
+  progress: LessonProgress | null,
+  lessonId: string,
+  input: ProgressUpdateInput,
+): progress is LessonProgress {
+  if (!progress) return false;
+  const expectedRevision = (input.expectedRevision ?? 0) + 1;
+  const expectedEvidence = input.status === "completed"
+    ? input.uploadEvidenceId ?? null
+    : null;
+  const snapshotMatches = input.codeSnapshot === undefined
+    ? input.expectedRevision !== null || progress.codeSnapshot === null
+    : progress.codeSnapshot === input.codeSnapshot;
+  return progress.lessonId === lessonId &&
+    progress.lessonVersion === input.lessonVersion &&
+    progress.revision === expectedRevision &&
+    progress.status === input.status &&
+    progress.currentStep === input.currentStep &&
+    progress.percentage === input.percentage &&
+    progress.completionEvidenceId === expectedEvidence &&
+    snapshotMatches;
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
@@ -278,10 +444,10 @@ class SupabaseIdentityRepository implements IdentityRepository {
     if (!supabaseUrl || !publishableKey || !serviceRoleKey) {
       throw new RepositoryError("unavailable", "Supabase is not configured.");
     }
-    try {
-      this.#baseUrl = new URL(supabaseUrl);
-    } catch {
-      throw new RepositoryError("unavailable", "Supabase is not configured.");
+    const environment = readConfiguredValue(env.ENVIRONMENT) ?? "";
+    this.#baseUrl = configuredSupabaseUrl(supabaseUrl, environment);
+    if (environment !== "development") {
+      validateSupabaseTokenIssuer(accessToken, this.#baseUrl);
     }
     this.#publishableKey = publishableKey;
     this.#serviceRoleKey = serviceRoleKey;
@@ -330,6 +496,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
       email: readString(body, "email"),
       emailConfirmed: typeof body.email_confirmed_at === "string",
       lastSignInAt: typeof body.last_sign_in_at === "string" ? body.last_sign_in_at : null,
+      isAnonymous: body.is_anonymous === true,
     };
   }
 
@@ -348,12 +515,12 @@ class SupabaseIdentityRepository implements IdentityRepository {
         `/rest/v1/profiles?id=${idFilter}&select=id,display_name,role,access_source,access_granted_at,created_at,updated_at&limit=1`,
       ),
       this.#request(
-        `/rest/v1/kit_codes?claimed_by=${idFilter}&state=eq.claimed&select=id,batch,kind,claimed_at&limit=1`,
+        `/rest/v1/kit_codes?claimed_by=${idFilter}&kind=eq.code&state=eq.claimed&revoked_at=is.null&select=id,batch,kind,claimed_at&limit=1`,
         {},
         "service",
       ),
       this.#request(
-        `/rest/v1/lesson_progress?user_id=${idFilter}&or=${currentLessonFilter}&select=lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completed_at,updated_at&limit=${String(curriculumLessons.length)}`,
+        `/rest/v1/lesson_progress?user_id=${idFilter}&or=${currentLessonFilter}&select=lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completion_evidence_id,completed_at,updated_at&limit=${String(curriculumLessons.length)}`,
       ),
     ]);
 
@@ -374,10 +541,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
         claimedAt: profile.accessGrantedAt,
       };
     } else if (profile.accessSource === "code") {
-      if (kitBody.length !== 1) {
-        throw new RepositoryError("unavailable", "The kit activation is inconsistent.");
-      }
-      activation = parseActivation(kitBody[0]);
+      if (kitBody.length === 1) activation = parseActivation(kitBody[0]);
     }
 
     return {
@@ -439,14 +603,183 @@ class SupabaseIdentityRepository implements IdentityRepository {
 
   async hasActivation(userId: string): Promise<boolean> {
     const idFilter = encodeURIComponent(`eq.${userId}`);
-    const body = await this.#request(
+    const profileBody = await this.#request(
       `/rest/v1/profiles?id=${idFilter}&select=access_source&limit=1`,
     );
-    if (!Array.isArray(body) || body.length !== 1 || !isRecord(body[0])) {
+    if (!Array.isArray(profileBody) || profileBody.length !== 1 || !isRecord(profileBody[0])) {
       throw new RepositoryError("unavailable", "The learner profile is missing.");
     }
-    const source = body[0].access_source;
-    return source === "code" || source === "grandfathered";
+    const source = profileBody[0].access_source;
+    if (source === "grandfathered") return true;
+    if (source !== "code") return false;
+
+    const kitBody = await this.#request(
+      `/rest/v1/kit_codes?claimed_by=${idFilter}&kind=eq.code&state=eq.claimed&revoked_at=is.null&select=id&limit=1`,
+      {},
+      "service",
+    );
+    if (!Array.isArray(kitBody) || kitBody.length > 1) {
+      throw new RepositoryError("unavailable", "Supabase returned invalid kit access.");
+    }
+    return kitBody.length === 1;
+  }
+
+  async beginCompileJob(
+    userId: string,
+    input: BeginCompileJobInput,
+  ): Promise<CompileJobGate> {
+    const body = await this.#request(
+      "/rest/v1/rpc/firelight_begin_compile_job",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_lesson_id: input.lessonId,
+          p_lesson_version: input.lessonVersion,
+          p_source_hash: input.sourceHash,
+          p_board_target: FIRELIGHT_BOARD_FQBN,
+        }),
+      },
+      "service",
+    );
+    if (!isRecord(body) || typeof body.result !== "string") {
+      throw new RepositoryError("unavailable", "Supabase returned an invalid compile gate.");
+    }
+    if (body.result === "started") {
+      return { result: "started", jobId: readUuid(body, "jobId") };
+    }
+    if (body.result === "active") return { result: "active" };
+    if (body.result === "not_entitled") return { result: "not_entitled" };
+    if (body.result === "rate_limited") {
+      const scope = body.scope;
+      const retryAfterSeconds = body.retryAfterSeconds;
+      if (
+        (scope !== "hour" && scope !== "day") ||
+        !Number.isInteger(retryAfterSeconds) ||
+        Number(retryAfterSeconds) < 1 ||
+        Number(retryAfterSeconds) > 86_400
+      ) {
+        throw new RepositoryError("unavailable", "Supabase returned an invalid rate limit.");
+      }
+      return {
+        result: "rate_limited",
+        scope,
+        retryAfterSeconds: Number(retryAfterSeconds),
+      };
+    }
+    if (body.result === "invalid") {
+      throw new RepositoryError("invalid", "The compile job was rejected.");
+    }
+    throw new RepositoryError("unavailable", "Supabase returned an invalid compile gate.");
+  }
+
+  async finishCompileJob(userId: string, input: FinishCompileJobInput): Promise<void> {
+    const body = await this.#request(
+      "/rest/v1/rpc/firelight_finish_compile_job",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_job_id: input.jobId,
+          p_terminal_state: input.state,
+          p_duration_ms: input.durationMs,
+          p_safe_error_code: input.safeErrorCode,
+          p_artifact_hash: input.artifactHash,
+          p_diagnostic_summary: input.diagnosticSummary,
+        }),
+      },
+      "service",
+    );
+    if (!isRecord(body) || body.result !== "finished") {
+      if (isRecord(body) && body.result === "not_entitled") {
+        throw new RepositoryError("forbidden", "Kit access is no longer active.");
+      }
+      if (isRecord(body) && body.result === "conflict") {
+        throw new RepositoryError("conflict", "Compile job state changed.");
+      }
+      if (isRecord(body) && body.result === "invalid") {
+        throw new RepositoryError("invalid", "Compile job completion was rejected.");
+      }
+      throw new RepositoryError("unavailable", "Supabase returned an invalid compile result.");
+    }
+  }
+
+  async recordUploadEvidence(
+    userId: string,
+    compileJobId: string,
+    artifactHash: string,
+    bytesWritten: number,
+  ): Promise<UploadEvidence> {
+    const body = await this.#request(
+      "/rest/v1/rpc/firelight_record_upload_evidence",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          p_user_id: userId,
+          p_compile_job_id: compileJobId,
+          p_artifact_hash: artifactHash,
+          p_bytes_written: bytesWritten,
+        }),
+      },
+      "service",
+    );
+    if (!isRecord(body) || body.result !== "recorded" || !isRecord(body.evidence)) {
+      if (isRecord(body) && body.result === "not_entitled") {
+        throw new RepositoryError("forbidden", "Kit access is no longer active.");
+      }
+      if (isRecord(body) && body.result === "invalid") {
+        throw new RepositoryError("invalid", "Upload evidence did not match a compile job.");
+      }
+      throw new RepositoryError("unavailable", "Supabase returned invalid upload evidence.");
+    }
+    const evidence = body.evidence;
+    const lessonId = readString(evidence, "lessonId");
+    const lessonVersion = evidence.lessonVersion;
+    const bytes = evidence.bytesWritten;
+    const attestation = readString(evidence, "attestation");
+    const id = readUuidV4(evidence, "id");
+    const responseCompileJobId = readUuidV4(evidence, "compileJobId");
+    const sourceHash = readSha256(evidence, "sourceHash");
+    const responseArtifactHash = readSha256(evidence, "artifactHash");
+    const recordedAt = readTimestamp(evidence, "recordedAt");
+    if (
+      !isLessonSlug(lessonId) ||
+      !Number.isSafeInteger(lessonVersion) ||
+      Number(lessonVersion) < 1 ||
+      !Number.isInteger(bytes) ||
+      Number(bytes) < 1 ||
+      Number(bytes) > MAX_NANO_UPLOAD_BYTES ||
+      attestation !== "browser-web-serial-v1" ||
+      responseCompileJobId !== compileJobId ||
+      responseArtifactHash !== artifactHash ||
+      Number(bytes) !== bytesWritten
+    ) {
+      throw new RepositoryError("unavailable", "Supabase returned invalid upload evidence.");
+    }
+    return {
+      id,
+      compileJobId: responseCompileJobId,
+      lessonId,
+      lessonVersion: Number(lessonVersion),
+      sourceHash,
+      artifactHash: responseArtifactHash,
+      bytesWritten: Number(bytes),
+      recordedAt,
+      attestation,
+    };
+  }
+
+  async #readProgress(
+    userId: string,
+    lessonId: string,
+    lessonVersion: number,
+  ): Promise<LessonProgress | null> {
+    const resource =
+      `/rest/v1/lesson_progress?user_id=${encodeURIComponent(`eq.${userId}`)}` +
+      `&lesson_id=${encodeURIComponent(`eq.${lessonId}`)}` +
+      `&lesson_version=${encodeURIComponent(`eq.${String(lessonVersion)}`)}` +
+      `&select=${PROGRESS_SELECT}&limit=1`;
+    return parseSavedProgress(await this.#request(resource));
   }
 
   async upsertProgress(
@@ -460,6 +793,8 @@ class SupabaseIdentityRepository implements IdentityRepository {
       percentage: input.percentage,
       completed_at: null,
       revision: input.expectedRevision === null ? 1 : input.expectedRevision + 1,
+      completion_evidence_id:
+        input.status === "completed" ? input.uploadEvidenceId ?? null : null,
     };
     const progressRecord: Record<string, unknown> = {
       user_id: userId,
@@ -469,22 +804,34 @@ class SupabaseIdentityRepository implements IdentityRepository {
     };
     if (input.codeSnapshot !== undefined) progressRecord.code_snapshot = input.codeSnapshot;
 
-    const select =
-      "lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completed_at,updated_at";
-
     if (input.expectedRevision === null) {
-      const inserted = parseSavedProgress(
-        await this.#request(`/rest/v1/lesson_progress?select=${select}`, {
-          method: "POST",
-          headers: { Prefer: "return=representation,missing=default" },
-          body: JSON.stringify(progressRecord),
-        }),
-      );
+      let inserted: LessonProgress | null;
+      try {
+        inserted = parseSavedProgress(
+          await this.#request(`/rest/v1/lesson_progress?select=${PROGRESS_SELECT}`, {
+            method: "POST",
+            headers: { Prefer: "return=representation,missing=default" },
+            body: JSON.stringify(progressRecord),
+          }),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof RepositoryError) ||
+          (error.kind !== "conflict" && error.kind !== "unavailable")
+        ) {
+          throw error;
+        }
+        const replay = await this.#readProgress(userId, lessonId, input.lessonVersion);
+        if (isExactProgressReplay(replay, lessonId, input)) return replay;
+        throw error;
+      }
       if (inserted) return inserted;
+      const replay = await this.#readProgress(userId, lessonId, input.lessonVersion);
+      if (isExactProgressReplay(replay, lessonId, input)) return replay;
       throw new RepositoryError("unavailable", "Supabase did not return saved progress.");
     }
 
-    const resource = `/rest/v1/lesson_progress?user_id=${encodeURIComponent(`eq.${userId}`)}&lesson_id=${encodeURIComponent(`eq.${lessonId}`)}&lesson_version=${encodeURIComponent(`eq.${String(input.lessonVersion)}`)}&revision=${encodeURIComponent(`eq.${String(input.expectedRevision)}`)}&select=${select}`;
+    const resource = `/rest/v1/lesson_progress?user_id=${encodeURIComponent(`eq.${userId}`)}&lesson_id=${encodeURIComponent(`eq.${lessonId}`)}&lesson_version=${encodeURIComponent(`eq.${String(input.lessonVersion)}`)}&revision=${encodeURIComponent(`eq.${String(input.expectedRevision)}`)}&select=${PROGRESS_SELECT}`;
     const saved = parseSavedProgress(
       await this.#request(resource, {
         method: "PATCH",
@@ -497,6 +844,8 @@ class SupabaseIdentityRepository implements IdentityRepository {
       }),
     );
     if (saved) return saved;
+    const replay = await this.#readProgress(userId, lessonId, input.lessonVersion);
+    if (isExactProgressReplay(replay, lessonId, input)) return replay;
     throw new RepositoryError("conflict", "Lesson progress revision changed.");
   }
 

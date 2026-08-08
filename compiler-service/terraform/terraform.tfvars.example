@@ -1,11 +1,19 @@
-# This is an example shape only. Push the image first and paste its real digest.
+# Example shape only. Bootstrap the ECR repository, push the linux/amd64 image,
+# then replace this placeholder with the registry-reported immutable digest.
 image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
-# Create this outside Terraform so the token never enters configuration or state.
+# Create this outside Terraform so plaintext never enters configuration or state.
+# Only the Lambda gateway can read it; the Fargate task has no task role or secret.
 auth_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:firelight/compiler-auth-AbCdEf"
 
 # Set only when the secret uses a customer-managed KMS key.
 auth_secret_kms_key_arn = null
 
-reserved_concurrency = 5
-log_retention_days   = 14
+# Terraform derives two non-overlapping subnets from this dedicated VPC CIDR.
+# It creates no IGW, NAT gateway, public subnet, or default route.
+vpc_cidr = "10.42.0.0/20"
+
+gateway_reserved_concurrency = 5
+compiler_desired_count       = 2
+enable_deletion_protection   = true
+log_retention_days           = 14

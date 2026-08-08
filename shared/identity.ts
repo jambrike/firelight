@@ -44,6 +44,7 @@ export interface LessonProgress {
   readonly currentStep: string;
   readonly percentage: number;
   readonly codeSnapshot: string | null;
+  readonly completionEvidenceId: string | null;
   readonly completedAt: string | null;
   readonly updatedAt: string;
 }
@@ -75,6 +76,8 @@ export interface ProgressUpdateInput {
   readonly currentStep: string;
   readonly percentage: number;
   readonly codeSnapshot?: string | null;
+  /** Required only for a terminal save; references browser upload evidence. */
+  readonly uploadEvidenceId?: string;
 }
 
 export interface ApiErrorBody {

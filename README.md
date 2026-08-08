@@ -4,7 +4,7 @@ Firelight is a pixel-campfire robotics learning platform for a controlled Arduin
 Nano starter kit. The current foundation is a React 19 + TypeScript + Vite single
 page application backed by a Hono Cloudflare Worker and Workers Static Assets.
 
-## Milestone 3 status
+## Milestone 4 status
 
 Implemented:
 
@@ -17,14 +17,16 @@ Implemented:
 - Worker-authenticated APIs for bootstrap, profile updates, HMAC kit claims,
   lesson progress, and account deletion.
 - Owner-matched migration of only the legacy builder name and two completion
-  flags; the old plaintext password is deleted locally and never read or uploaded.
+  flags; legacy booleans resume at compile rather than fabricating upload proof,
+  and the old plaintext password is deleted locally without being read or uploaded.
 - Local Supabase config, a documented demo-code seed, branded email templates,
   pgTAP security tests, and browser/Worker tests.
 - A reusable, responsive, keyboard-friendly pixel design system with bundled
   fonts and reduced-motion support.
 - A reusable lesson workspace with step navigation, accessible code editing,
-  validation, quizzes, parts, pins, safety guidance, troubleshooting, and
-  honest deferred compile/connect/upload states.
+  validation, quizzes, parts, pins, safety guidance, troubleshooting, authenticated
+  compilation, Web Serial connection, verified upload, serial observation, and
+  evidence-backed completion.
 - Six versioned structured lesson shells targeting
   `arduino:avr:nano:cpu=atmega328old` at 57,600 baud, with fixed pin maps and
   every narrative, wiring, code, knowledge, hardware, observation, and
@@ -41,14 +43,28 @@ Implemented:
   enforcement for every progress write.
 - A Hono Worker with generated binding types, request IDs, structured errors,
   security headers, runtime config, SPA assets, and legacy URL redirects.
+- An authenticated `/api/compile` proxy with activation/prerequisite checks, exact
+  FQBN and 64 KiB bounds, one active job per learner, 20/hour and 100/day rolling
+  limits, a 45-second end-to-end deadline, strict artifact integrity checks, and
+  no browser-visible compiler credentials.
+- An authenticated Lambda gateway and private no-task-role Fargate compiler in a
+  no-NAT `eu-west-1` VPC, with pinned Arduino CLI/Servo dependencies, bounded
+  subprocesses, sanitized diagnostics, immutable images, and narrow IAM/SG rules.
+- A production-shaped Web Serial/STK500v1 transport with browser capability
+  guidance, ATmega328P signature verification, cancellation/disconnect cleanup,
+  128-byte page writes, full readback, bounded 9,600-baud serial observation,
+  and stale-operation protection.
+- PostgreSQL compile lifecycle and browser upload-evidence invariants. Terminal
+  progress binds the exact user, lesson/version, source, and artifact and cannot
+  be transplanted after completion.
 - Strict TypeScript, type-aware ESLint, browser unit tests, Workers-runtime tests,
   a production build, and a pull-request CI gate.
 
-Intentionally deferred to later milestones: the real Arduino compiler,
-Web Serial/STK500 uploading, final curriculum content and physical validation,
-admin mutations and kit batch tooling, and deployment automation. Hardware
-buttons stay disabled and `/api/compile` remains an authenticated, activated
-`COMPILER_NOT_READY` boundary until the hardware pipeline milestone.
+Intentionally deferred to later milestones: final curriculum content and diagrams,
+physical validation of all six builds across the acceptance matrix, admin mutations
+and kit-batch tooling, and deployment automation. Browser upload evidence is an
+honest authenticated browser assertion, not cryptographic telemetry signed by the
+board; see `docs/hardware-pipeline.md` before pilot rollout.
 
 ## Commands
 
@@ -63,12 +79,14 @@ npm run db:test        # Run pgTAP RLS/migration tests
 npm run db:lint        # Run Supabase database linting
 npm run check          # binding types, TypeScript, lint, tests, and build
 npm run deploy:dry-run # validate the Cloudflare bundle without deploying
+python3 -m unittest discover -s compiler-service/tests -p 'test_*.py'
 ```
 
 Before `npm run dev:worker`, copy `.dev.vars.example` to `.dev.vars`, run
 `supabase status -o env`, and fill in the local publishable and service-role
-keys. The local kit code is `ABCD-EFGH-JKMP-NRST`. Its seed hash matches the
-example-only pepper in `.dev.vars.example`; neither value is for hosted use.
+keys and add the loopback compiler URL/origin/token. The local kit code is
+`ABCD-EFGH-JKMP-NRST`. Its seed hash matches the example-only pepper in
+`.dev.vars.example`; none of those example values are for hosted use.
 
 `wrangler.jsonc` is the source of truth for binding names and non-secret runtime
 configuration. Run `npm run cf-typegen` after changing bindings. Put hosted
@@ -79,12 +97,16 @@ Worker secrets; never commit them or add them to `vars`.
 
 - `src/` — React application, design system, session provider, and learner UI.
 - `worker/` — authenticated Hono API, Supabase repository, and legacy redirects.
+- `compiler-service/` — authenticated gateway, isolated Fargate compiler image,
+  tests, and Terraform.
 - `supabase/` — local config, email templates, migrations, seed, and pgTAP tests.
 - `shared/` — curriculum and API types used at the browser/Worker boundary.
 - `scripts/validate-lessons.mjs` — build gate for typed curriculum content.
 - `public/_headers` — security and immutable asset caching policy.
 - `prototype-archive/` — exact checkpoint reference from commit `98ff7fc`.
 - `docs/architecture.md` — milestone boundaries and local workflow.
+- `docs/hardware-pipeline.md` — compile/upload trust model, operations, and gates.
 
-See `docs/identity.md` and `docs/lessons.md` before applying these migrations to staging. No deploy,
+See `docs/identity.md`, `docs/lessons.md`, `docs/hardware-pipeline.md`, and
+`docs/compiler-service.md` before applying these migrations to staging. No deploy,
 remote database mutation, or domain migration is performed by repository scripts.

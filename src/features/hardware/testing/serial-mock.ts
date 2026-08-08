@@ -86,6 +86,10 @@ class MockReadable implements SerialReadableLike {
     for (const waiter of this.pending.splice(0)) waiter.resolve({ value: undefined, done: true });
   }
 
+  reset(): void {
+    this.done = false;
+  }
+
   private read(): Promise<ReadableStreamReadResult<Uint8Array>> {
     const chunk = this.chunks.shift();
     if (chunk) return Promise.resolve({ value: chunk, done: false });
@@ -132,6 +136,8 @@ export interface MockSerialPortOptions {
   readonly ignoreCommand?: number;
   readonly openError?: unknown;
   readonly closeError?: unknown;
+  readonly closeFailures?: number;
+  readonly signature?: readonly number[];
 }
 
 export class MockSerialPort implements WebSerialPortLike {
@@ -154,6 +160,8 @@ export class MockSerialPort implements WebSerialPortLike {
   private readonly ignoreCommand: number | undefined;
   private readonly openError: unknown;
   private readonly closeError: unknown;
+  private remainingCloseFailures: number;
+  private readonly signature: readonly number[];
   private wordAddress = 0;
 
   constructor(options: MockSerialPortOptions = {}) {
@@ -164,11 +172,14 @@ export class MockSerialPort implements WebSerialPortLike {
     this.ignoreCommand = options.ignoreCommand;
     this.openError = options.openError;
     this.closeError = options.closeError;
+    this.remainingCloseFailures = options.closeFailures ?? 0;
+    this.signature = options.signature ?? [0x1e, 0x95, 0x0f];
   }
 
   open(options: SerialOpenOptionsLike): Promise<void> {
     this.openCalls.push(options);
     if (this.openError !== undefined) return Promise.reject(asError(this.openError));
+    this.readableMock.reset();
     this.opened = true;
     return Promise.resolve();
   }
@@ -178,6 +189,10 @@ export class MockSerialPort implements WebSerialPortLike {
     if (this.readableMock.locked || this.writableMock.locked) {
       this.closeWhileLocked = true;
       return Promise.reject(new Error("Streams must be unlocked before closing the serial port."));
+    }
+    if (this.remainingCloseFailures > 0) {
+      this.remainingCloseFailures -= 1;
+      return Promise.reject(new Error("Transient serial close failure."));
     }
     if (this.closeError !== undefined) return Promise.reject(asError(this.closeError));
     this.opened = false;
@@ -208,6 +223,10 @@ export class MockSerialPort implements WebSerialPortLike {
     for (const listener of this.listeners) listener(event);
   }
 
+  enqueueSerialText(text: string): void {
+    this.readableMock.enqueue(new TextEncoder().encode(text));
+  }
+
   private handleWrite(encodedCommand: Uint8Array): Promise<void> {
     const payload = encodedCommand.slice(0, -1);
     if (encodedCommand.at(-1) !== CRC_EOP || payload.length === 0) {
@@ -229,6 +248,9 @@ export class MockSerialPort implements WebSerialPortLike {
       case 0x50:
       case 0x51:
         this.respond([STK_INSYNC, STK_OK]);
+        break;
+      case 0x75:
+        this.respond([STK_INSYNC, ...this.signature, STK_OK]);
         break;
       case 0x55:
         this.wordAddress = (payload[1] ?? 0) | ((payload[2] ?? 0) << 8);

@@ -50,6 +50,37 @@ describe("WebStorageProgressDraftPersistence", () => {
     expect(window.localStorage).toHaveLength(0);
   });
 
+  it("retains a retryable completion only with its sketch and upload evidence", () => {
+    const persistence = new WebStorageProgressDraftPersistence(window.localStorage, () => now);
+    const completed = {
+      status: "completed",
+      currentStep: "finish-lesson",
+      percentage: 100,
+      codeSnapshot: "void setup() {}\nvoid loop() {}",
+      uploadEvidenceId: "55555555-5555-4555-8555-555555555555",
+    } as const;
+
+    persistence.save(firstScope, completed);
+
+    expect(persistence.load(firstScope)).toEqual(completed);
+    expect(
+      isValidPersistedDraft({
+        status: "completed",
+        currentStep: "finish-lesson",
+        percentage: 100,
+        codeSnapshot: completed.codeSnapshot,
+      }),
+    ).toBe(false);
+    expect(
+      isValidPersistedDraft({
+        status: "in_progress",
+        currentStep: "compile-sketch",
+        percentage: 50,
+        uploadEvidenceId: completed.uploadEvidenceId,
+      }),
+    ).toBe(false);
+  });
+
   it("removes expired drafts instead of restoring them", () => {
     let clock = now;
     const persistence = new WebStorageProgressDraftPersistence(

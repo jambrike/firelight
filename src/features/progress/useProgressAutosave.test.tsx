@@ -13,6 +13,7 @@ function savedResult(input: ProgressUpdateInput): LessonProgress {
     currentStep: input.currentStep,
     percentage: input.percentage,
     codeSnapshot: input.codeSnapshot ?? null,
+    completionEvidenceId: input.uploadEvidenceId ?? null,
     completedAt: input.status === "completed" ? "2026-08-07T10:00:00.000Z" : null,
     updatedAt: "2026-08-07T10:00:00.000Z",
   };
@@ -141,6 +142,7 @@ describe("useProgressAutosave", () => {
       currentStep: "validate-code",
       percentage: 60,
       codeSnapshot: null,
+      completionEvidenceId: null,
       completedAt: null,
       updatedAt: "2026-08-07T10:00:00.000Z",
     };

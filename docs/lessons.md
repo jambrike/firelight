@@ -1,8 +1,9 @@
 # Lesson engine and curriculum authoring
 
-Milestone 3 makes lessons executable UI data while deliberately leaving the real
-compiler and serial uploader for Milestone 4. All six builds are structured shells;
-Milestone 5 owns final instructional copy, diagrams, validators, and physical signoff.
+Milestone 4 connects the executable lesson UI to the authenticated compiler,
+Web Serial transport, upload verification, serial observation, and evidence-backed
+completion. All six builds remain structured shells; Milestone 5 owns final
+instructional copy, diagrams, validator depth, and physical signoff.
 
 ## Authoring contract
 
@@ -40,9 +41,12 @@ requires an explicit learner retry. The Worker independently checks step IDs,
 checkpoint-consistent percentages, lesson versions, activation, and current-version
 prerequisites.
 
-## Hardware handoff
+## Hardware pipeline
 
-Milestone 4 implements the existing `CompilerClient` and `ArduinoTransport` ports.
-Until then, compile, connect, upload, serial confirmation, and physical-observation
-controls remain disabled. The capability panel distinguishes mobile, insecure,
-non-Web-Serial, and implementation-pending states and never claims a board is connected.
+The shared workspace implements the `CompilerClient` and `ArduinoTransport` ports
+for the exact Nano old-bootloader target. Compile, connect, upload, bounded serial
+observation, and physical-observation gates share one explicit state machine. Editing
+invalidates compiled/uploaded state; compilation alone cannot complete a lesson.
+Unsupported browsers retain readable lesson content and receive specific mobile,
+insecure-context, or missing-Web-Serial guidance. See `hardware-pipeline.md` for
+trust boundaries, operational setup, evidence semantics, and unverified physical gates.

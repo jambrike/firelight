@@ -7,7 +7,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import type { ChangeEvent } from "react";
-import type { DeferredHardwareAvailability } from "../hardware/deferred";
+import type { HardwareWorkflowSnapshot } from "../hardware/workflow";
 import type { CodeValidationResult } from "./code-validation";
 import type { LessonCatalogEntry } from "./catalog";
 import type { LessonStep } from "./contracts";
@@ -21,30 +21,62 @@ interface LessonStepContentProps {
   readonly selectedChoice: string | null;
   readonly quizChecked: boolean;
   readonly validation: CodeValidationResult | null;
-  readonly hardware: DeferredHardwareAvailability;
+  readonly hardware: HardwareWorkflowSnapshot;
+  readonly hardwareMessage: string;
+  readonly observationConfirmed: boolean;
   readonly onCodeChange: (value: string) => void;
   readonly onChoiceChange: (value: string) => void;
   readonly onCheckQuiz: () => void;
   readonly onValidateCode: () => void;
+  readonly onCompile: () => void;
+  readonly onConnect: () => void;
+  readonly onUpload: () => void;
+  readonly onReadSerial: () => void;
+  readonly onConfirmObservation: () => void;
 }
 
-function DeferredAction({
+function HardwareAction({
   icon,
   label,
   hardware,
+  hardwareMessage,
+  disabled,
+  onAction,
 }: {
   readonly icon: "compile" | "connect" | "upload";
   readonly label: string;
-  readonly hardware: DeferredHardwareAvailability;
+  readonly hardware: HardwareWorkflowSnapshot;
+  readonly hardwareMessage: string;
+  readonly disabled: boolean;
+  readonly onAction: () => void;
 }) {
   const Icon = icon === "compile" ? CloudCog : icon === "connect" ? Cable : Send;
+  const busy = hardware.phase === "compiling" ||
+    hardware.phase === "connecting" ||
+    hardware.phase === "uploading";
   return (
     <div className="deferred-action">
       <Icon aria-hidden="true" />
-      <button className="pixel-button" type="button" disabled aria-describedby="hardware-note">
+      <button
+        className="pixel-button"
+        type="button"
+        disabled={disabled || busy}
+        aria-describedby="hardware-note hardware-action-status"
+        onClick={onAction}
+      >
         {label}
       </button>
-      <p>{hardware.message}</p>
+      <p id="hardware-action-status" role="status" aria-live="polite">
+        {hardware.error ?? hardwareMessage}
+      </p>
+      {hardware.progress ? (
+        <p>
+          Sending {hardware.progress.bytesWritten} of {hardware.progress.totalBytes} bytes…
+        </p>
+      ) : null}
+      {busy ? (
+        <small>The active action can be cancelled from the hardware state panel.</small>
+      ) : null}
     </div>
   );
 }
@@ -59,10 +91,17 @@ export function LessonStepContent({
   quizChecked,
   validation,
   hardware,
+  hardwareMessage,
+  observationConfirmed,
   onCodeChange,
   onChoiceChange,
   onCheckQuiz,
   onValidateCode,
+  onCompile,
+  onConnect,
+  onUpload,
+  onReadSerial,
+  onConfirmObservation,
 }: LessonStepContentProps) {
   switch (step.type) {
     case "narrative":
@@ -188,21 +227,91 @@ export function LessonStepContent({
       );
     }
     case "compile":
-      return <DeferredAction icon="compile" label="Compile sketch" hardware={hardware} />;
+      return (
+        <HardwareAction
+          icon="compile"
+          label={hardware.phase === "compiling" ? "Compiling…" : "Compile sketch"}
+          hardware={hardware}
+          hardwareMessage={hardwareMessage}
+          disabled={!canEdit || !hardware.capability.supported}
+          onAction={onCompile}
+        />
+      );
     case "connect":
-      return <DeferredAction icon="connect" label="Choose Nano" hardware={hardware} />;
+      return (
+        <HardwareAction
+          icon="connect"
+          label={hardware.phase === "connecting" ? "Connecting…" : "Choose Nano"}
+          hardware={hardware}
+          hardwareMessage={hardwareMessage}
+          disabled={!canEdit || !hardware.capability.supported || !hardware.artifact}
+          onAction={onConnect}
+        />
+      );
     case "upload":
-      return <DeferredAction icon="upload" label="Send to board" hardware={hardware} />;
+      return (
+        <HardwareAction
+          icon="upload"
+          label={hardware.phase === "uploading" ? "Sending…" : "Send to board"}
+          hardware={hardware}
+          hardwareMessage={hardwareMessage}
+          disabled={
+            !canEdit ||
+            !hardware.capability.supported ||
+            !hardware.artifact ||
+            !hardware.device
+          }
+          onAction={onUpload}
+        />
+      );
     case "serial-check":
       return (
         <div className="observation-step">
           <TerminalSquare aria-hidden="true" />
           <h3>Expected serial signal</h3>
           <p>{step.expectedObservation}</p>
-          <button className="pixel-button" type="button" disabled>
-            Open serial monitor
+          <button
+            className="pixel-button pixel-button--secondary"
+            type="button"
+            disabled={
+              !canEdit ||
+              !hardware.evidence ||
+              !hardware.device ||
+              hardware.serialReading
+            }
+            onClick={onReadSerial}
+          >
+            {hardware.serialReading ? "Listening at 9600 baud…" : "Read serial output"}
           </button>
-          <small>Serial reading becomes available with the hardware transport.</small>
+          <small>
+            Firelight listens at {step.baudRate} baud for up to 10 seconds and caps each capture at 8 KiB.
+          </small>
+          <pre
+            className="serial-output"
+            aria-label="Arduino serial output"
+            aria-live="polite"
+            aria-busy={hardware.serialReading}
+          >
+            {hardware.serial?.text ?? "No serial output captured yet."}
+          </pre>
+          {hardware.serial?.truncated ? (
+            <small role="status">Capture stopped at the safe output limit.</small>
+          ) : null}
+          <button
+            className="pixel-button"
+            type="button"
+            disabled={
+              !canEdit ||
+              !hardware.evidence ||
+              !hardware.serial?.text.trim()
+            }
+            onClick={onConfirmObservation}
+          >
+            {observationConfirmed ? "Serial signal confirmed" : "I observed this signal"}
+          </button>
+          <small>
+            Compare the captured values with the expected signal, then confirm what you observed.
+          </small>
         </div>
       );
     case "manual-observation":
@@ -211,10 +320,17 @@ export function LessonStepContent({
           <Eye aria-hidden="true" />
           <h3>Check the real build</h3>
           <p>{step.prompt}</p>
-          <button className="pixel-button" type="button" disabled>
-            I observed this
+          <button
+            className="pixel-button"
+            type="button"
+            disabled={!canEdit || !hardware.evidence}
+            onClick={onConfirmObservation}
+          >
+            {observationConfirmed ? "Observation confirmed" : "I observed this"}
           </button>
-          <small>Observation unlocks after a verified upload.</small>
+          <small>
+            Observation unlocks after upload success. It is a learner confirmation, not device telemetry.
+          </small>
         </div>
       );
     case "completion":

@@ -29,3 +29,23 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npx wrangler deploy --dry-run
+
+  compiler-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m unittest discover -s compiler-service/tests -p 'test_*.py'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - working-directory: compiler-service/terraform
+        run: terraform fmt -check -recursive
+      - working-directory: compiler-service/terraform
+        run: terraform init -backend=false -input=false
+      - working-directory: compiler-service/terraform
+        run: terraform validate
+      - run: docker build --tag firelight-compiler:ci compiler-service

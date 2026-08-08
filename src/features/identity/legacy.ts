@@ -57,6 +57,17 @@ function currentRevision(
   );
 }
 
+function currentProgress(
+  progress: readonly LessonProgress[],
+  lessonId: LessonSlug,
+): LessonProgress | null {
+  return (
+    progress.find(
+      (item) => item.lessonId === lessonId && item.lessonVersion === 1,
+    ) ?? null
+  );
+}
+
 export async function migrateLegacyData(
   storage: LegacyStorage,
   bootstrap: BootstrapData,
@@ -89,28 +100,47 @@ export async function migrateLegacyData(
   }
 
   const completionFlags = [
-    ["first-spark", snapshot.firstSparkValue],
-    ["morse-name", snapshot.morseNameValue],
+    ["first-spark", snapshot.firstSparkValue, legacyKeys.firstSparkComplete],
+    ["morse-name", snapshot.morseNameValue, legacyKeys.morseNameComplete],
   ] as const;
 
-  for (const [lessonId, value] of completionFlags) {
-    if (value === "true" && !currentCompletion(bootstrap.progress, lessonId)) {
+  let pendingLegacyCompletion = false;
+  for (const [lessonId, value, storageKey] of completionFlags) {
+    if (value === null) continue;
+    if (value !== "true" || currentCompletion(bootstrap.progress, lessonId)) {
+      storage.removeItem(storageKey);
+      continue;
+    }
+
+    // Legacy booleans cannot prove that the exact current sketch reached a board.
+    // Preserve the learner's head start at the compile checkpoint, then require the
+    // normal compile, Web Serial upload, observation, and evidence-backed completion.
+    const prerequisitesSatisfied =
+      lessonId === "first-spark" || currentCompletion(bootstrap.progress, "first-spark");
+    if (!prerequisitesSatisfied) {
+      pendingLegacyCompletion = true;
+      continue;
+    }
+
+    const existing = currentProgress(bootstrap.progress, lessonId);
+    if (!existing || existing.percentage < 50) {
       await api.saveProgress(lessonId, {
         lessonVersion: 1,
         expectedRevision: currentRevision(bootstrap.progress, lessonId),
-        status: "completed",
-        currentStep: "finish-lesson",
-        percentage: 100,
+        status: "in_progress",
+        currentStep: "compile-sketch",
+        percentage: 50,
       });
       changed = true;
     }
+    storage.removeItem(storageKey);
   }
 
   if (snapshot.displayName !== null) storage.removeItem(legacyKeys.displayName);
-  if (snapshot.firstSparkValue !== null) storage.removeItem(legacyKeys.firstSparkComplete);
-  if (snapshot.morseNameValue !== null) storage.removeItem(legacyKeys.morseNameComplete);
-  storage.removeItem(legacyKeys.email);
-  storage.removeItem(legacyKeys.kitUnlocked);
+  if (!pendingLegacyCompletion) {
+    storage.removeItem(legacyKeys.email);
+    storage.removeItem(legacyKeys.kitUnlocked);
+  }
 
   return changed;
 }

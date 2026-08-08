@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "firelight",
   "main": "./worker/index.ts",
-  "compatibility_date": "2026-08-06",
+  "compatibility_date": "2026-08-07",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "binding": "ASSETS",
@@ -17,7 +17,7 @@
     ]
   },
   "vars": {
-    "ENVIRONMENT": "development",
+    "ENVIRONMENT": "production",
     "BUILD_ID": "local"
   },
   "secrets": {
@@ -25,7 +25,10 @@
       "SUPABASE_URL",
       "SUPABASE_PUBLISHABLE_KEY",
       "SUPABASE_SERVICE_ROLE_KEY",
-      "KIT_CODE_PEPPER"
+      "KIT_CODE_PEPPER",
+      "COMPILER_SERVICE_URL",
+      "COMPILER_SERVICE_ORIGIN",
+      "COMPILER_SERVICE_TOKEN"
     ]
   },
   "observability": {

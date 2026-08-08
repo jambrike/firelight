@@ -1,11 +1,11 @@
 variable "service_name" {
-  description = "Stable name for compiler resources."
+  description = "Stable prefix for compiler resources. Kept short enough for ALB names."
   type        = string
   default     = "firelight-compiler"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{2,47}$", var.service_name))
-    error_message = "service_name must be 3-48 lowercase letters, numbers, or hyphens."
+    condition     = can(regex("^[a-z][a-z0-9-]{2,23}$", var.service_name))
+    error_message = "service_name must be 3-24 lowercase letters, numbers, or hyphens."
   }
 }
 
@@ -20,7 +20,7 @@ variable "image_digest" {
 }
 
 variable "auth_secret_arn" {
-  description = "ARN of an existing eu-west-1 Secrets Manager secret whose SecretString is the raw service token."
+  description = "ARN of an existing eu-west-1 Secrets Manager secret whose SecretString is the raw gateway service token."
   type        = string
 
   validation {
@@ -47,19 +47,47 @@ variable "auth_secret_kms_key_arn" {
   }
 }
 
-variable "reserved_concurrency" {
-  description = "Maximum concurrent compiler containers, limiting cost and abuse impact."
+variable "vpc_cidr" {
+  description = "Isolated compiler VPC CIDR. The VPC has no internet gateway or NAT route."
+  type        = string
+  default     = "10.42.0.0/20"
+
+  validation {
+    condition     = can(cidrnetmask(var.vpc_cidr)) && can(cidrsubnet(var.vpc_cidr, 4, 1))
+    error_message = "vpc_cidr must be a valid IPv4 CIDR with room for two derived subnets."
+  }
+}
+
+variable "gateway_reserved_concurrency" {
+  description = "Maximum concurrent authenticated gateway invocations, bounding cost and ALB pressure."
   type        = number
   default     = 5
 
   validation {
-    condition     = var.reserved_concurrency >= 1 && var.reserved_concurrency <= 20
-    error_message = "reserved_concurrency must be between 1 and 20."
+    condition     = var.gateway_reserved_concurrency >= 1 && var.gateway_reserved_concurrency <= 20
+    error_message = "gateway_reserved_concurrency must be between 1 and 20."
   }
 }
 
+variable "compiler_desired_count" {
+  description = "Number of isolated single-compile Fargate tasks across two availability zones."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.compiler_desired_count >= 2 && var.compiler_desired_count <= 10
+    error_message = "compiler_desired_count must be between 2 and 10."
+  }
+}
+
+variable "enable_deletion_protection" {
+  description = "Protect the internal ALB from accidental deletion in long-lived environments."
+  type        = bool
+  default     = true
+}
+
 variable "log_retention_days" {
-  description = "Retention for Lambda platform logs."
+  description = "Retention for Lambda gateway and ECS compiler logs."
   type        = number
   default     = 14
 

@@ -1,11 +1,14 @@
 import { validateCompileArtifact, type Sha256Digest } from "./artifact";
 import {
+  FIRELIGHT_SERIAL_BAUD,
   FIRELIGHT_UPLOAD_BAUD,
   type ArduinoDeviceMetadata,
   type ArduinoTransport,
   type CompileArtifact,
   type HardwareCapability,
   type HardwareWorkflowPhase,
+  type SerialReadOptions,
+  type SerialReadResult,
   type UploadProgress,
   type UploadResult,
 } from "./contracts";
@@ -52,6 +55,152 @@ interface OpenConnection {
   readonly port: WebSerialPortLike;
   readonly metadata: ArduinoDeviceMetadata;
   readonly detachDisconnectListeners: () => void;
+  baudRate: number;
+}
+
+interface CapturedSerialText {
+  readonly text: string;
+  readonly bytesRead: number;
+  readonly truncated: boolean;
+  readonly readerCancelled: boolean;
+}
+
+const DEFAULT_SERIAL_CAPTURE_DURATION_MS = 10_000;
+const MAX_SERIAL_CAPTURE_DURATION_MS = 30_000;
+const DEFAULT_SERIAL_CAPTURE_BYTES = 8_192;
+const MAX_SERIAL_CAPTURE_BYTES = 16_384;
+
+function serialOpenOptions(baudRate: number) {
+  return {
+    baudRate,
+    dataBits: 8 as const,
+    stopBits: 1 as const,
+    parity: "none" as const,
+    bufferSize: 255,
+    flowControl: "none" as const,
+  };
+}
+
+function boundedPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+  label: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved <= 0 || resolved > maximum) {
+    throw new TypeError(`${label} must be a positive integer no larger than ${String(maximum)}.`);
+  }
+  return resolved;
+}
+
+function isUint8Array(value: unknown): value is Uint8Array {
+  return value instanceof Uint8Array ||
+    Object.prototype.toString.call(value) === "[object Uint8Array]";
+}
+
+function isSupportedSerialBaud(value: unknown): value is typeof FIRELIGHT_SERIAL_BAUD {
+  return value === FIRELIGHT_SERIAL_BAUD;
+}
+
+async function captureSerialText(
+  port: WebSerialPortLike,
+  durationMs: number,
+  maxBytes: number,
+  onData: (text: string) => void,
+  signal: AbortSignal,
+): Promise<CapturedSerialText> {
+  const readable = port.readable;
+  if (!readable) {
+    throw new HardwareTransportError(
+      "serial-read-failed",
+      "The board's serial output stream is unavailable.",
+    );
+  }
+  const reader = readable.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let bytesRead = 0;
+  let truncated = false;
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  let readerCancelled = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
+  let captured: Omit<CapturedSerialText, "readerCancelled"> | undefined;
+
+  const stopped = new Promise<{ readonly kind: "timeout" }>((resolve, reject) => {
+    timeout = setTimeout(() => {
+      resolve({ kind: "timeout" });
+    }, durationMs);
+    abortListener = () => {
+      reject(abortReason(signal, "Serial reading was cancelled."));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+
+  try {
+    if (signal.aborted) throw abortReason(signal, "Serial reading was cancelled.");
+    while (bytesRead < maxBytes) {
+      pendingRead = reader.read();
+      const outcome = await Promise.race([
+        pendingRead.then((result) => ({ kind: "read" as const, result })),
+        stopped,
+      ]);
+      if (outcome.kind === "timeout") break;
+      pendingRead = undefined;
+      if (outcome.result.done) {
+        throw new HardwareTransportError(
+          "device-disconnected",
+          "The Arduino disconnected while Firelight was reading serial output.",
+        );
+      }
+      if (!isUint8Array(outcome.result.value)) {
+        throw new HardwareTransportError(
+          "serial-read-failed",
+          "The board returned invalid serial data.",
+        );
+      }
+      const remaining = maxBytes - bytesRead;
+      const accepted = outcome.result.value.subarray(0, remaining);
+      if (accepted.byteLength < outcome.result.value.byteLength) truncated = true;
+      bytesRead += accepted.byteLength;
+      const text = decoder.decode(accepted, { stream: true });
+      if (text.length > 0) {
+        chunks.push(text);
+        try {
+          onData(text);
+        } catch {
+          // A rendering callback must not retain the serial reader lock.
+        }
+      }
+      if (truncated || bytesRead >= maxBytes) {
+        truncated = true;
+        break;
+      }
+    }
+    const tail = decoder.decode();
+    if (tail.length > 0) {
+      chunks.push(tail);
+      try {
+        onData(tail);
+      } catch {
+        // A rendering callback must not retain the serial reader lock.
+      }
+    }
+    captured = { text: chunks.join(""), bytesRead, truncated };
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+    if (pendingRead) {
+      readerCancelled = true;
+      await Promise.allSettled([
+        reader.cancel("serial-capture-complete"),
+        pendingRead,
+      ]);
+    }
+    reader.releaseLock();
+  }
+  return { ...captured, readerCancelled };
 }
 
 const ALLOWED_TRANSITIONS: Readonly<Record<HardwareWorkflowPhase, ReadonlySet<HardwareWorkflowPhase>>> = {
@@ -167,9 +316,10 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
   private readonly uploaderOptions: Stk500UploadOptions | undefined;
   private readonly now: () => Date;
   private readonly listeners = new Set<(phase: HardwareWorkflowPhase) => void>();
-  private readonly intentionallyClosing = new WeakSet<WebSerialPortLike>();
   private readonly physicallyDisconnected = new WeakSet<WebSerialPortLike>();
+  private readonly closeOperations = new WeakMap<WebSerialPortLike, Promise<void>>();
   private currentConnection: OpenConnection | undefined;
+  private closeRetryPort: WebSerialPortLike | undefined;
   private operationAbort: AbortController | undefined;
   private activeOperation: Promise<unknown> | undefined;
   private currentPhase: HardwareWorkflowPhase = "idle";
@@ -275,6 +425,68 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     );
   }
 
+  readSerial(
+    options: SerialReadOptions,
+    onData: (text: string) => void,
+    signal?: AbortSignal,
+  ): Promise<SerialReadResult> {
+    if (this.activeOperation) {
+      return Promise.reject(
+        new HardwareTransportError(
+          "operation-in-progress",
+          "Another board operation is already in progress.",
+        ),
+      );
+    }
+    const connection = this.currentConnection;
+    if (!connection) {
+      this.transition("error");
+      return Promise.reject(
+        new HardwareTransportError(
+          "device-not-connected",
+          "Reconnect the Arduino before reading serial output.",
+        ),
+      );
+    }
+    if (!isSupportedSerialBaud(options.baudRate)) {
+      return Promise.reject(
+        new TypeError(`Firelight serial checks require ${String(FIRELIGHT_SERIAL_BAUD)} baud.`),
+      );
+    }
+
+    let durationMs: number;
+    let maxBytes: number;
+    try {
+      durationMs = boundedPositiveInteger(
+        options.durationMs,
+        DEFAULT_SERIAL_CAPTURE_DURATION_MS,
+        MAX_SERIAL_CAPTURE_DURATION_MS,
+        "Serial capture duration",
+      );
+      maxBytes = boundedPositiveInteger(
+        options.maxBytes,
+        DEFAULT_SERIAL_CAPTURE_BYTES,
+        MAX_SERIAL_CAPTURE_BYTES,
+        "Serial capture byte limit",
+      );
+    } catch (error) {
+      return Promise.reject(
+        error instanceof Error ? error : new TypeError("The serial capture limits are invalid."),
+      );
+    }
+
+    return this.runOperation(signal, (operationSignal) =>
+      this.readSerialInternal(
+        connection,
+        options.baudRate,
+        durationMs,
+        maxBytes,
+        onData,
+        operationSignal,
+      ),
+    );
+  }
+
   subscribe(listener: (phase: HardwareWorkflowPhase) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -314,7 +526,12 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     signal: AbortSignal,
   ): Promise<ArduinoDeviceMetadata> {
     let selectedPort: WebSerialPortLike | undefined;
+    let opened = false;
     try {
+      if (signalIsAborted(signal)) {
+        throw abortReason(signal, "Board connection was cancelled.");
+      }
+      await this.retryRetainedClose();
       if (signalIsAborted(signal)) {
         throw abortReason(signal, "Board connection was cancelled.");
       }
@@ -323,25 +540,25 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
         selectedPort = await abortable(request, signal, "Board connection was cancelled.");
       } catch (error) {
         if (signalIsAborted(signal)) {
-          void request.then((latePort) => this.closePortBestEffort(latePort), () => undefined);
+          void request.then(
+            (latePort) => this.closePortBestEffort(latePort, false),
+            () => undefined,
+          );
         }
         throw error;
       }
 
-      const open = selectedPort.open({
-        baudRate: FIRELIGHT_UPLOAD_BAUD,
-        dataBits: 8,
-        stopBits: 1,
-        parity: "none",
-        bufferSize: 255,
-        flowControl: "none",
-      });
+      const open = selectedPort.open(serialOpenOptions(FIRELIGHT_UPLOAD_BAUD));
       try {
         await abortable(open, signal, "Board connection was cancelled.");
+        opened = true;
       } catch (error) {
         if (signalIsAborted(signal)) {
           const latePort = selectedPort;
-          void open.then(() => this.closePortBestEffort(latePort), () => undefined);
+          void open.then(
+            () => this.closePortBestEffort(latePort, true),
+            () => undefined,
+          );
         }
         throw error;
       }
@@ -355,12 +572,13 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
         port: selectedPort,
         metadata,
         detachDisconnectListeners: this.attachDisconnectListeners(serial, selectedPort),
+        baudRate: FIRELIGHT_UPLOAD_BAUD,
       };
       this.currentConnection = connection;
       this.transition("connected");
       return metadata;
     } catch (error) {
-      if (selectedPort) await this.closePortBestEffort(selectedPort);
+      if (selectedPort) await this.closePortBestEffort(selectedPort, opened);
       if (signalIsAborted(signal) || isAbortError(error) || isPickerCancellation(error)) {
         this.transition("idle");
         if (isPickerCancellation(error) && !signalIsAborted(signal)) {
@@ -373,6 +591,7 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
         throw abortReason(signal, "Board connection was cancelled.");
       }
       this.transition("error");
+      if (error instanceof HardwareTransportError) throw error;
       throw new HardwareTransportError(
         "connection-failed",
         "The serial port could not be opened. Check the USB data cable and close other serial tools.",
@@ -392,6 +611,8 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
       const image = await validateCompileArtifact(artifact, {
         ...(this.digestHex ? { digestHex: this.digestHex } : {}),
       });
+      if (signalIsAborted(signal)) throw abortReason(signal, "Board upload was cancelled.");
+      await this.ensureConnectionBaud(connection, FIRELIGHT_UPLOAD_BAUD, signal);
       if (signalIsAborted(signal)) throw abortReason(signal, "Board upload was cancelled.");
       const result = await this.uploader(
         connection.port,
@@ -413,7 +634,7 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
       };
     } catch (error) {
       this.clearConnection(connection);
-      await this.closePortBestEffort(connection.port);
+      await this.closePortBestEffort(connection.port, true);
       if (this.physicallyDisconnected.has(connection.port)) {
         this.transition("error");
         throw new HardwareTransportError(
@@ -436,6 +657,124 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     }
   }
 
+  private async readSerialInternal(
+    connection: OpenConnection,
+    baudRate: typeof FIRELIGHT_SERIAL_BAUD,
+    durationMs: number,
+    maxBytes: number,
+    onData: (text: string) => void,
+    signal: AbortSignal,
+  ): Promise<SerialReadResult> {
+    try {
+      await this.ensureConnectionBaud(connection, baudRate, signal);
+      if (signalIsAborted(signal)) throw abortReason(signal, "Serial reading was cancelled.");
+      const captured = await captureSerialText(
+        connection.port,
+        durationMs,
+        maxBytes,
+        onData,
+        signal,
+      );
+      if (this.physicallyDisconnected.has(connection.port)) {
+        throw new HardwareTransportError(
+          "device-disconnected",
+          "The Arduino was unplugged while Firelight was reading serial output.",
+        );
+      }
+      // Cancelling a pending Web Serial read closes that readable stream. A
+      // close/reopen cycle restores a fresh stream while retaining permission
+      // for the same selected port.
+      if (captured.readerCancelled) {
+        await this.ensureConnectionBaud(connection, baudRate, signal, true);
+      }
+      return {
+        baudRate,
+        text: captured.text,
+        bytesRead: captured.bytesRead,
+        truncated: captured.truncated,
+      };
+    } catch (error) {
+      if (this.physicallyDisconnected.has(connection.port)) {
+        this.transition("error");
+        throw new HardwareTransportError(
+          "device-disconnected",
+          "The Arduino was unplugged while Firelight was reading serial output.",
+          error,
+        );
+      }
+      if (signalIsAborted(signal) || isAbortError(error)) {
+        throw abortReason(signal, "Serial reading was cancelled.");
+      }
+      this.clearConnection(connection);
+      await this.closePortBestEffort(connection.port, true);
+      this.transition("error");
+      if (error instanceof HardwareTransportError) throw error;
+      throw new HardwareTransportError(
+        "serial-read-failed",
+        "Firelight could not read the board's serial output. Reconnect it and try again.",
+        error,
+      );
+    }
+  }
+
+  private async ensureConnectionBaud(
+    connection: OpenConnection,
+    baudRate: number,
+    signal: AbortSignal,
+    force = false,
+  ): Promise<void> {
+    if (!force && connection.baudRate === baudRate) return;
+    if (this.currentConnection !== connection) {
+      throw new HardwareTransportError(
+        "device-not-connected",
+        "Reconnect the Arduino before continuing.",
+      );
+    }
+
+    try {
+      await this.closePort(connection.port, true);
+    } catch (error) {
+      this.clearConnection(connection);
+      throw new HardwareTransportError(
+        "port-close-failed",
+        "The serial port could not switch to the required baud rate.",
+        error,
+      );
+    }
+    if (signalIsAborted(signal)) {
+      this.clearConnection(connection);
+      throw abortReason(signal, "The serial baud change was cancelled.");
+    }
+
+    const open = connection.port.open(serialOpenOptions(baudRate));
+    try {
+      await abortable(open, signal, "The serial baud change was cancelled.");
+    } catch (error) {
+      this.clearConnection(connection);
+      if (signalIsAborted(signal)) {
+        void open.then(
+          () => this.closePortBestEffort(connection.port, true),
+          () => undefined,
+        );
+        throw abortReason(signal, "The serial baud change was cancelled.");
+      }
+      await this.closePortBestEffort(connection.port, false);
+      throw new HardwareTransportError(
+        "connection-failed",
+        `The serial port could not reopen at ${String(baudRate)} baud.`,
+        error,
+      );
+    }
+    if (this.currentConnection !== connection || this.physicallyDisconnected.has(connection.port)) {
+      await this.closePortBestEffort(connection.port, false);
+      throw new HardwareTransportError(
+        "device-disconnected",
+        "The Arduino disconnected while changing serial speed.",
+      );
+    }
+    connection.baudRate = baudRate;
+  }
+
   private async stopAndClose(message: string): Promise<void> {
     this.operationAbort?.abort(createAbortError(message));
     const active = this.activeOperation;
@@ -448,14 +787,14 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     }
 
     const connection = this.currentConnection;
-    if (!connection) {
+    const port = connection?.port ?? this.closeRetryPort;
+    if (!port) {
       if (this.currentPhase !== "idle") this.transition("idle");
       return;
     }
-    this.clearConnection(connection);
-    this.intentionallyClosing.add(connection.port);
+    if (connection) this.clearConnection(connection);
     try {
-      await connection.port.close();
+      await this.closePort(port, true);
       this.transition("idle");
     } catch (error) {
       this.transition("error");
@@ -464,8 +803,6 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
         "The serial port could not be closed cleanly.",
         error,
       );
-    } finally {
-      this.intentionallyClosing.delete(connection.port);
     }
   }
 
@@ -490,9 +827,14 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
   }
 
   private handlePhysicalDisconnect(port: WebSerialPortLike): void {
-    if (this.intentionallyClosing.has(port)) return;
     const connection = this.currentConnection;
-    if (connection?.port !== port) return;
+    if (connection?.port !== port) {
+      if (this.closeRetryPort === port) {
+        this.physicallyDisconnected.add(port);
+        this.closeRetryPort = undefined;
+      }
+      return;
+    }
     this.physicallyDisconnected.add(port);
     this.clearConnection(connection);
     const error = new HardwareTransportError(
@@ -501,7 +843,7 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     );
     this.operationAbort?.abort(error);
     this.transition("error");
-    if (!this.activeOperation) void this.closePortBestEffort(port);
+    if (!this.activeOperation) void this.closePortBestEffort(port, false);
   }
 
   private clearConnection(connection: OpenConnection): void {
@@ -509,14 +851,54 @@ export class WebSerialArduinoTransport implements ArduinoTransport {
     if (this.currentConnection === connection) this.currentConnection = undefined;
   }
 
-  private async closePortBestEffort(port: WebSerialPortLike): Promise<void> {
-    this.intentionallyClosing.add(port);
+  private async retryRetainedClose(): Promise<void> {
+    const port = this.closeRetryPort;
+    if (!port) return;
     try {
-      await port.close();
+      await this.closePort(port, true);
+    } catch (error) {
+      throw new HardwareTransportError(
+        "port-close-failed",
+        "Firelight could not finish closing the previous serial connection.",
+        error,
+      );
+    }
+  }
+
+  private closePort(port: WebSerialPortLike, retainOnFailure: boolean): Promise<void> {
+    const active = this.closeOperations.get(port);
+    if (active) return active;
+    if (retainOnFailure && !this.physicallyDisconnected.has(port)) {
+      this.closeRetryPort = port;
+    }
+    const closing = Promise.resolve().then(() => port.close()).then(
+      () => {
+        if (this.closeRetryPort === port) this.closeRetryPort = undefined;
+      },
+      (error: unknown) => {
+        if (this.physicallyDisconnected.has(port) || !retainOnFailure) {
+          if (this.closeRetryPort === port) this.closeRetryPort = undefined;
+        } else {
+          this.closeRetryPort = port;
+        }
+        throw error;
+      },
+    ).finally(() => {
+      this.closeOperations.delete(port);
+    });
+    this.closeOperations.set(port, closing);
+    return closing;
+  }
+
+  private async closePortBestEffort(
+    port: WebSerialPortLike,
+    retainOnFailure: boolean,
+  ): Promise<void> {
+    try {
+      await this.closePort(port, retainOnFailure);
     } catch {
-      // Preserve the operation failure; close() also rejects after physical removal.
-    } finally {
-      this.intentionallyClosing.delete(port);
+      // Preserve the operation failure. A non-physical failed close retains the
+      // port so disconnect(), dispose(), or the next connect() can retry it.
     }
   }
 

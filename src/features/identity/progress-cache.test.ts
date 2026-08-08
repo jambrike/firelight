@@ -16,6 +16,7 @@ function progress(revision: number, lessonVersion = 1): LessonProgress {
     currentStep: `step-${String(revision)}`,
     percentage: revision * 10,
     codeSnapshot: null,
+    completionEvidenceId: null,
     completedAt: null,
     updatedAt: timestamp,
   };
