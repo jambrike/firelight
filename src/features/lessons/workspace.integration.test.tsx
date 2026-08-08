@@ -151,6 +151,10 @@ function renderLesson(
 function successfulHardwareFactory(
   lessonId: LessonSlug = "first-spark",
   serialText = "128\n",
+  serialBehavior: {
+    readonly gate?: Promise<void>;
+    readonly error?: Error;
+  } = {},
 ): HardwareWorkflowFactory {
   const artifact: CompileArtifact = {
     compileJobId: "33333333-3333-4333-8333-333333333333",
@@ -199,6 +203,8 @@ function successfulHardwareFactory(
       },
       readSerial: async (options, onData) => {
         onData(serialText);
+        if (serialBehavior.gate) await serialBehavior.gate;
+        if (serialBehavior.error) throw serialBehavior.error;
         return {
           baudRate: options.baudRate,
           text: serialText,
@@ -243,6 +249,67 @@ async function waitForCurrentStepToAdvance(): Promise<void> {
   });
 }
 
+async function reachSerialCheck(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Compile sketch" }));
+  await waitForCurrentStepToAdvance();
+  fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Choose Nano" }));
+  await waitForCurrentStepToAdvance();
+  fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send to board" }));
+  await waitForCurrentStepToAdvance();
+  fireEvent.click(screen.getByRole("button", { name: "Next step" }));
+}
+
+function installMatchMedia(matches: boolean): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(window, "matchMedia");
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => true,
+    }) as MediaQueryList,
+  });
+  return () => {
+    if (descriptor) {
+      Object.defineProperty(window, "matchMedia", descriptor);
+    } else {
+      Reflect.deleteProperty(window, "matchMedia");
+    }
+  };
+}
+
+function installScrollIntoView(): {
+  readonly mock: ReturnType<typeof vi.fn>;
+  readonly restore: () => void;
+} {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollIntoView",
+  );
+  const mock = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: mock,
+  });
+  return {
+    mock,
+    restore: () => {
+      if (descriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", descriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      }
+    },
+  };
+}
+
 describe("lesson workspace integration", () => {
   it("allows anonymous preview navigation while gating editing and advancement", async () => {
     const user = userEvent.setup();
@@ -264,6 +331,17 @@ describe("lesson workspace integration", () => {
     const signalMap = screen.getByRole("table", {
       name: "Verified signal connection map",
     });
+    const scrollableMap = screen.getByRole("region", {
+      name: "Scrollable signal connection map",
+    });
+    expect(scrollableMap).toHaveAttribute("tabindex", "0");
+    expect(scrollableMap).toHaveAttribute(
+      "aria-describedby",
+      "signal-map-scroll-help",
+    );
+    expect(
+      screen.getByText(/On a narrow screen, swipe the map sideways/),
+    ).toBeInTheDocument();
     expect(screen.getByText(firstSparkWiring?.diagramAlt ?? "missing wiring description"))
       .toBeVisible();
     expect(within(signalMap).getByRole("columnheader", { name: "Nano pin" }))
@@ -281,6 +359,56 @@ describe("lesson workspace integration", () => {
 
     await user.click(stepButton("Compile the validated Arduino sketch"));
     expect(screen.getByRole("button", { name: "Compile sketch" })).toBeDisabled();
+  });
+
+  it("focuses and scrolls the announced lesson stage after narrow step selection", async () => {
+    const restoreMatchMedia = installMatchMedia(true);
+    const scrollIntoView = installScrollIntoView();
+    const user = userEvent.setup();
+    const view = renderLesson("first-spark");
+
+    try {
+      const wiringStep = stepButton("Follow the wiring instructions");
+      expect(wiringStep).toHaveAttribute("aria-controls", "lesson-stage");
+      await user.click(wiringStep);
+
+      const stage = screen.getByRole("region", { name: "Wire the build" });
+      const stageHeading = within(stage).getByRole("heading", {
+        name: "Wire the build",
+      });
+      await vi.waitFor(() => {
+        expect(stageHeading).toHaveFocus();
+      });
+      expect(within(stage).getByText("Wire the build. Step 2 of 10."))
+        .toHaveAttribute("aria-live", "polite");
+      expect(scrollIntoView.mock).toHaveBeenCalledWith({
+        behavior: "auto",
+        block: "start",
+      });
+    } finally {
+      view.unmount();
+      scrollIntoView.restore();
+      restoreMatchMedia();
+    }
+  });
+
+  it("keeps focus on the selected step at desktop widths", async () => {
+    const restoreMatchMedia = installMatchMedia(false);
+    const scrollIntoView = installScrollIntoView();
+    const user = userEvent.setup();
+    const view = renderLesson("first-spark");
+
+    try {
+      const wiringStep = stepButton("Follow the wiring instructions");
+      await user.click(wiringStep);
+
+      expect(wiringStep).toHaveFocus();
+      expect(scrollIntoView.mock).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      scrollIntoView.restore();
+      restoreMatchMedia();
+    }
   });
 
   it("shows an activation CTA to an authenticated learner without a claimed kit", async () => {
@@ -497,7 +625,65 @@ describe("lesson workspace integration", () => {
     }
   });
 
-  it("shows real 9600-baud output before a serial-check can be confirmed", async () => {
+  it("announces serial start and completion without making the transcript live", async () => {
+    const prerequisites = ["first-spark", "morse-name", "button-reaction"].map(
+      (lessonId) => progressRecord(lessonId as LessonSlug, "finish-lesson", {
+        status: "completed",
+        percentage: 100,
+      }),
+    );
+    const saved = progressRecord("distance-scout", "compile-sketch", {
+      percentage: 45,
+      revision: 3,
+      codeSnapshot: "// distance sketch",
+    });
+    const identity = authenticatedIdentity(bootstrap([...prerequisites, saved]));
+    let releaseSerial: (() => void) | undefined;
+    const serialGate = new Promise<void>((resolve) => {
+      releaseSerial = resolve;
+    });
+    renderLesson(
+      "distance-scout",
+      identity,
+      successfulHardwareFactory(
+        "distance-scout",
+        "23.4\n24.1\n",
+        { gate: serialGate },
+      ),
+    );
+
+    await reachSerialCheck();
+
+    const confirm = screen.getByRole("button", { name: "I observed this signal" });
+    expect(confirm).toBeDisabled();
+    const transcript = screen.getByLabelText("Arduino serial output");
+    expect(transcript).not.toHaveAttribute("aria-live");
+    expect(transcript).toHaveAttribute("aria-describedby", "serial-capture-status");
+    expect(transcript).toHaveTextContent(
+      "No serial output captured yet.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Read serial output" }));
+    await vi.waitFor(() => {
+      expect(screen.getByText("Serial capture started at 9,600 baud."))
+        .toHaveAttribute("role", "status");
+    });
+    expect(transcript).toHaveTextContent("23.4 24.1");
+
+    await act(async () => {
+      releaseSerial?.();
+      await serialGate;
+    });
+
+    await vi.waitFor(() => {
+      const status = screen.getByText("Serial capture complete. 10 bytes received.");
+      expect(status).toHaveAttribute("aria-live", "polite");
+      expect(status).not.toHaveTextContent("23.4");
+    });
+    expect(confirm).toBeEnabled();
+  });
+
+  it("announces a concise serial capture error separately from the transcript", async () => {
     const prerequisites = ["first-spark", "morse-name", "button-reaction"].map(
       (lessonId) => progressRecord(lessonId as LessonSlug, "finish-lesson", {
         status: "completed",
@@ -513,32 +699,23 @@ describe("lesson workspace integration", () => {
     renderLesson(
       "distance-scout",
       identity,
-      successfulHardwareFactory("distance-scout", "23.4\n24.1\n"),
+      successfulHardwareFactory(
+        "distance-scout",
+        "23.4\n",
+        { error: new Error("Serial cable was unplugged.") },
+      ),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Compile sketch" }));
-    await waitForCurrentStepToAdvance();
-    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
-    fireEvent.click(screen.getByRole("button", { name: "Choose Nano" }));
-    await waitForCurrentStepToAdvance();
-    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
-    fireEvent.click(screen.getByRole("button", { name: "Send to board" }));
-    await waitForCurrentStepToAdvance();
-    fireEvent.click(screen.getByRole("button", { name: "Next step" }));
-
-    const confirm = screen.getByRole("button", { name: "I observed this signal" });
-    expect(confirm).toBeDisabled();
-    expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent(
-      "No serial output captured yet.",
-    );
-
+    await reachSerialCheck();
     fireEvent.click(screen.getByRole("button", { name: "Read serial output" }));
-    await vi.waitFor(() => {
-      expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent("23.4");
-    });
 
-    expect(screen.getByLabelText("Arduino serial output")).toHaveTextContent("23.4 24.1");
-    expect(confirm).toBeEnabled();
+    await vi.waitFor(() => {
+      expect(
+        screen.getByText("Serial capture error: Serial cable was unplugged."),
+      ).toHaveAttribute("aria-live", "polite");
+    });
+    expect(screen.getByLabelText("Arduino serial output"))
+      .not.toHaveAttribute("aria-live");
   });
 
   it("does not treat an authenticated identity without bootstrap data as activated", () => {

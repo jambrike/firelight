@@ -81,6 +81,26 @@ function HardwareAction({
   );
 }
 
+function serialCaptureAnnouncement(
+  hardware: HardwareWorkflowSnapshot,
+  baudRate: 9_600,
+): string {
+  if (!hardware.serial) return "";
+  if (hardware.error) return `Serial capture error: ${hardware.error}`;
+  if (hardware.serialReading) {
+    return `Serial capture started at ${baudRate.toLocaleString("en-IE")} baud.`;
+  }
+  if (!hardware.device) return "Serial capture stopped before completion.";
+  if (!hardware.serial.text.trim()) {
+    return "Serial capture complete. No output was received.";
+  }
+  const unit = hardware.serial.bytesRead === 1 ? "byte" : "bytes";
+  const limitMessage = hardware.serial.truncated
+    ? " The capture reached the safe output limit."
+    : "";
+  return `Serial capture complete. ${hardware.serial.bytesRead.toLocaleString("en-IE")} ${unit} received.${limitMessage}`;
+}
+
 export function LessonStepContent({
   lesson,
   step,
@@ -116,34 +136,46 @@ export function LessonStepContent({
           </ul>
         </div>
       );
+    /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Keyboard users need to focus and horizontally scroll the bounded table region. */
     case "wiring":
       return (
         <div className="wiring-step">
           <div className="wiring-map">
             <p className="wiring-map__description">{step.diagramAlt}</p>
-            <table>
-              <caption>Verified signal connection map</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Component</th>
-                  <th scope="col">Signal</th>
-                  <th scope="col">Nano pin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lesson.pinAssignments.map((assignment) => (
-                  <tr key={`${assignment.component}-${assignment.signal}-${assignment.pin}`}>
-                    <th scope="row">
-                      {assignment.component}
-                      {assignment.note ? <small>{assignment.note}</small> : null}
-                    </th>
-                    <td>{assignment.signal}</td>
-                    <td><code>{assignment.pin}</code></td>
+            <div
+              className="wiring-map__table-scroll"
+              role="region"
+              aria-label="Scrollable signal connection map"
+              aria-describedby="signal-map-scroll-help"
+              tabIndex={0}
+            >
+              <table>
+                <caption>Verified signal connection map</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Component</th>
+                    <th scope="col">Signal</th>
+                    <th scope="col">Nano pin</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            <small>
+                </thead>
+                <tbody>
+                  {lesson.pinAssignments.map((assignment) => (
+                    <tr key={`${assignment.component}-${assignment.signal}-${assignment.pin}`}>
+                      <th scope="row">
+                        {assignment.component}
+                        {assignment.note ? <small>{assignment.note}</small> : null}
+                      </th>
+                      <td>{assignment.signal}</td>
+                      <td><code>{assignment.pin}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <small id="signal-map-scroll-help">
+              <span className="wiring-map__mobile-hint">
+                On a narrow screen, swipe the map sideways or focus it and use the arrow keys. {" "}
+              </span>
               This map covers controlled signal pins. Follow every ordered step below for
               power, ground, and disconnect instructions.
             </small>
@@ -155,6 +187,7 @@ export function LessonStepContent({
           </ol>
         </div>
       );
+    /* eslint-enable jsx-a11y/no-noninteractive-tabindex */
     case "code-edit":
       return (
         <div className="code-workbench">
@@ -310,16 +343,25 @@ export function LessonStepContent({
           <small>
             Firelight listens at {step.baudRate} baud for up to 10 seconds and caps each capture at 8 KiB.
           </small>
+          <p
+            className="sr-only"
+            id="serial-capture-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {serialCaptureAnnouncement(hardware, step.baudRate)}
+          </p>
           <pre
             className="serial-output"
             aria-label="Arduino serial output"
-            aria-live="polite"
+            aria-describedby="serial-capture-status"
             aria-busy={hardware.serialReading}
           >
             {hardware.serial?.text ?? "No serial output captured yet."}
           </pre>
           {hardware.serial?.truncated ? (
-            <small role="status">Capture stopped at the safe output limit.</small>
+            <small>Capture stopped at the safe output limit.</small>
           ) : null}
           <button
             className="pixel-button"

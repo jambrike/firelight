@@ -30,6 +30,8 @@ import {
 import { LessonStepContent } from "./LessonStepContent";
 import { createMorseNameStarterCode } from "./morse";
 
+const NARROW_LESSON_VIEWPORT = "(max-width: 48rem)";
+
 function findSavedStepIndex(
   lesson: LessonCatalogEntry,
   progress: LessonProgress | null,
@@ -74,6 +76,8 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
   const [validation, setValidation] = useState<CodeValidationResult | null>(null);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [quizChecked, setQuizChecked] = useState(false);
+  const [stageFocusRequest, setStageFocusRequest] = useState(0);
+  const stageHeadingRef = useRef<HTMLHeadingElement>(null);
   const [completedStepIds, setCompletedStepIds] = useState<ReadonlySet<string>>(() => {
     const completed = new Set(
       lesson.steps.slice(0, initialStepIndex).map((step) => step.id),
@@ -104,6 +108,14 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
   useEffect(() => () => {
     void hardwareWorkflow.dispose();
   }, [hardwareWorkflow]);
+
+  useEffect(() => {
+    if (stageFocusRequest === 0) return;
+    const heading = stageHeadingRef.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [stageFocusRequest]);
 
   const resolveConflict = async () => {
     const bootstrap = await identity.refresh();
@@ -386,6 +398,7 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
                 >
                   <button
                     type="button"
+                    aria-controls="lesson-stage"
                     aria-current={displayed ? "step" : undefined}
                     aria-label={`${item.ariaLabel}${checkpoint ? ", saved checkpoint" : ""}`}
                     onClick={() => {
@@ -393,6 +406,12 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
                       setValidation(null);
                       setQuizChecked(false);
                       setSelectedChoice(null);
+                      if (
+                        typeof window.matchMedia === "function" &&
+                        window.matchMedia(NARROW_LESSON_VIEWPORT).matches
+                      ) {
+                        setStageFocusRequest((request) => request + 1);
+                      }
                     }}
                   >
                     {complete ? <Check aria-hidden="true" /> : checkpoint ? <Circle aria-hidden="true" /> : <span>{index + 1}</span>}
@@ -404,7 +423,11 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
           </ol>
         </aside>
 
-        <section className="lesson-stage" aria-labelledby="lesson-step-title">
+        <section
+          className="lesson-stage"
+          id="lesson-stage"
+          aria-labelledby="lesson-step-title"
+        >
           <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
             {step.title}. Step {displayStepIndex + 1} of {lesson.steps.length}.
           </p>
@@ -413,7 +436,9 @@ export function LessonWorkspace({ lesson }: { readonly lesson: LessonCatalogEntr
               <p className="eyebrow">
                 Step {displayStepIndex + 1} of {lesson.steps.length}
               </p>
-              <h2 id="lesson-step-title">{step.title}</h2>
+              <h2 id="lesson-step-title" ref={stageHeadingRef} tabIndex={-1}>
+                {step.title}
+              </h2>
             </div>
             {displayStepIndex !== checkpointStepIndex ? (
               <span className="status-chip">Previewing · checkpoint {checkpointStepIndex + 1}</span>

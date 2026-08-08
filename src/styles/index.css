@@ -1282,6 +1282,14 @@ code,
   color: var(--cream-100);
 }
 
+.wiring-map__table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .wiring-map table {
   width: 100%;
   border-collapse: collapse;
@@ -1328,6 +1336,10 @@ code,
   color: var(--cream-muted);
   font-size: 0.95rem;
   font-weight: 400;
+}
+
+.wiring-map__mobile-hint {
+  display: none;
 }
 
 .wiring-map code {
@@ -1958,6 +1970,25 @@ label.identity-form input {
 
   .kit-gallery__thumbs {
     gap: 0.45rem;
+  }
+
+  .wiring-map table {
+    min-width: 32rem;
+    table-layout: auto;
+  }
+
+  .wiring-map th,
+  .wiring-map td {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .wiring-map__mobile-hint {
+    display: inline;
+  }
+
+  .wiring-map code {
+    white-space: nowrap;
   }
 }
 
