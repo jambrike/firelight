@@ -14,11 +14,11 @@ before dispatching **Deploy staging** or **Deploy production**.
 The repository and hosted control plane are prepared up to the remaining
 human/provider boundaries:
 
-- All ten protected GitHub environments exist, accept only `main`, require a
-  named reviewer, and prevent self-review. `main` also has strict required
-  checks and review protection. Because the repository currently has only one
-  collaborator, every deploy remains intentionally unapprovable until a second
-  reviewer is added.
+- All ten protected GitHub environments exist, accept only `main`, require the
+  named repository owner to approve deployments, and permit that owner to
+  approve their own dispatch. `main` retains strict required checks and review
+  protections but requires zero approving PR reviews for this single-operator
+  pilot.
 - The active Cloudflare account/zone, retained `firelight` Pages fallback, and
   pinned fallback deployment were verified. Both target Workers remain absent.
   A dedicated account-owned release token with only Pages read, Worker scripts
@@ -33,12 +33,12 @@ human/provider boundaries:
   operations checks, compiler tests, and the strict project-anchor verifier.
 
 The release stays fail-closed until an operator supplies the items that cannot
-be inferred or safely created from the current sessions: a second GitHub
-reviewer; custom SMTP identities and passwords; the retained production
-database password; non-root AWS OIDC/state/KMS/compiler infrastructure and its
-token; the resulting compiler URL/origin/host/build/digest bindings; hosted
-backup/alert ownership; and physical six-build hardware acceptance. Never use
-the currently configured AWS root credentials to bootstrap the compiler.
+be inferred or safely created from the current sessions: custom SMTP identities
+and passwords; the retained production database password; non-root AWS
+OIDC/state/KMS/compiler infrastructure and its token; the resulting compiler
+URL/origin/host/build/digest bindings; hosted backup/alert ownership; and
+physical six-build hardware acceptance. Never use the currently configured AWS
+root credentials to bootstrap the compiler.
 
 ## Cloudflare
 
@@ -71,9 +71,10 @@ the currently configured AWS root credentials to bootstrap the compiler.
 
 ## Protected GitHub environments
 
-Create every environment below, restrict deployment branches to `main`, require
-named reviewers, and prevent self-review where supported. Never expose these
-secrets to pull-request jobs.
+Create every environment below, restrict deployment branches to `main`, and
+require the named repository owner to approve protected jobs. The current
+single-operator pilot permits that owner to approve their own dispatch. Never
+expose these secrets to pull-request jobs.
 
 | Environment | Purpose |
 | --- | --- |
