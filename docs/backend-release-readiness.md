@@ -75,15 +75,14 @@ The logical staging/production mapping is anchored outside protected environment
 secrets in `.github/supabase-project-anchors.json`. Its exact-schema canonical
 JSON pins one organization hash and one distinct ref-only hash per logical
 environment. A no-environment job validates it before any protected project is
-opened. The checked-in `PENDING_*` organization/staging values deliberately
-block hosted mutation until the second project is provisioned and the reviewed
-anchors are committed.
+opened. The checked-in organization, staging, and production hashes are
+provider-verified and distinct; placeholders remain forbidden.
 
-Generate that reviewed candidate with
-`scripts/generate-supabase-project-anchors.mjs` after two operators independently
-confirm the raw staging ref, production ref, and organization ID. It emits only
-the canonical domain-separated hashes and rejects equal refs; the raw
-identifiers remain outside repository files and workflow artifacts.
+Regenerate a reviewed candidate with
+`scripts/generate-supabase-project-anchors.mjs` only after two operators
+independently confirm the raw staging ref, production ref, and organization ID.
+It emits only the canonical domain-separated hashes and rejects equal refs; the
+raw identifiers remain outside repository files and workflow artifacts.
 
 Project proofs use three versioned, domain-separated SHA-256 identities: the
 composite snapshot binds the project ref, organization ID, exact name,

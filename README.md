@@ -93,10 +93,12 @@ Implemented:
 
 All six repository starter sketches compile for the exact Nano old-bootloader
 target with the pinned Arduino CLI 1.5.1, AVR core 1.8.6, and Servo 1.3.0
-toolchain. Still gated outside this repository: hosted account/project/secret creation,
-environment approvals, DNS cutover, SMTP, alert-recipient subscription and alarm
-drills, backup/PITR restore drills, AWS Terraform apply and compiler-image
-build/scan, physical
+toolchain. The Cloudflare release principal, protected GitHub environments, and
+distinct Supabase staging/production projects are provisioned. Still gated
+outside this repository: adding an independent environment reviewer, completing
+SMTP and the remaining provider secrets, DNS cutover, alert-recipient
+subscription and alarm drills, backup/PITR restore drills, non-root AWS
+Terraform apply and compiler-image build/scan, physical
 validation of all six builds across the documented browser/OS/kit matrix, and
 procurement/electrical signoff of the exact servo supply, rover motor pack, TT
 motors, and TB6612FNG carrier. The servo and rover must not be powered until that

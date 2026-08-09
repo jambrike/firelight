@@ -19,7 +19,9 @@ export default defineConfig({
       animations: "disabled",
       caret: "hide",
       maxDiffPixels: 0,
-      threshold: 0,
+      // Absorb 1-2 channel-value rasterization noise between pinned Chromium
+      // runs while still failing on the first perceptibly changed pixel.
+      threshold: 0.01,
     },
   },
   reporter: [

@@ -326,6 +326,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a fabricated checkpoint cannot bypass the Worker'
 );
 select throws_ok(
@@ -342,6 +343,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a fabricated percentage cannot bypass the Worker'
 );
 select throws_ok(
@@ -358,6 +360,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a fabricated lesson version cannot bypass the Worker'
 );
 select throws_ok(
@@ -374,6 +377,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'locked-lesson progress cannot bypass prerequisite validation'
 );
 select throws_ok(
@@ -383,6 +387,7 @@ select throws_ok(
     where user_id = '11111111-1111-4111-8111-111111111111'
   $$,
   '42501',
+  null,
   'authenticated learners cannot update progress directly'
 );
 select throws_ok(
@@ -391,6 +396,7 @@ select throws_ok(
     where user_id = '11111111-1111-4111-8111-111111111111'
   $$,
   '42501',
+  null,
   'authenticated learners cannot delete progress directly'
 );
 
@@ -481,6 +487,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'the entitlement trigger denies a service insert after kit revocation'
 );
 select throws_ok(
@@ -495,6 +502,7 @@ select throws_ok(
       and lesson_version = 1
   $$,
   '42501',
+  null,
   'the entitlement trigger denies a service update after kit revocation'
 );
 reset role;

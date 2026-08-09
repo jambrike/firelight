@@ -487,6 +487,7 @@ select throws_ok(
     where id = '64444444-4444-4444-8444-444444444444'
   $$,
   '42501',
+  null,
   'a learner cannot self-promote even though the row is their own'
 );
 select throws_ok(
@@ -496,6 +497,7 @@ select throws_ok(
     where id = '64444444-4444-4444-8444-444444444444'
   $$,
   '23514',
+  null,
   'profile updates reject tabs in alignment with the API parser'
 );
 select throws_ok(
@@ -505,6 +507,7 @@ select throws_ok(
     where id = '64444444-4444-4444-8444-444444444444'
   $$,
   '23514',
+  null,
   'profile updates reject unsupported C0 control characters'
 );
 select throws_ok(
@@ -514,6 +517,7 @@ select throws_ok(
     where id = '64444444-4444-4444-8444-444444444444'
   $$,
   '23514',
+  null,
   'profile updates reject the DEL control character'
 );
 reset role;
@@ -608,6 +612,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'duplicate hashes inside one batch are rejected'
 );
 select throws_ok(
@@ -620,6 +625,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'non-canonical hashes are rejected before storage'
 );
 select throws_ok(
@@ -638,6 +644,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'kit batches are capped at one hundred hashes'
 );
 select throws_ok(
@@ -653,6 +660,7 @@ select throws_ok(
     )
   $$,
   '23505',
+  null,
   'an already stored hash aborts the whole batch'
 );
 select is(
@@ -670,6 +678,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'every generated kit id must have exactly one HMAC'
 );
 select throws_ok(
@@ -685,6 +694,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'one batch cannot alias two plaintext codes to the same revocation id'
 );
 select throws_ok(
@@ -697,6 +707,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a service call cannot substitute a non-admin actor for batch creation'
 );
 select throws_ok(
@@ -709,6 +720,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a service call cannot substitute a non-admin actor for support lookup'
 );
 
@@ -899,6 +911,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'revocation accepts only the bounded reason categories'
 );
 select is(
@@ -1045,6 +1058,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'invalid kit states are rejected'
 );
 select throws_ok(
@@ -1058,6 +1072,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'admin pages cannot exceed fifty records'
 );
 select throws_ok(
@@ -1071,6 +1086,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'admin offsets are capped to avoid unbounded scans'
 );
 
@@ -1184,6 +1200,7 @@ select throws_ok(
     )
   $$,
   '22023',
+  null,
   'compile diagnostic filters accept only safe error codes'
 );
 
@@ -1228,6 +1245,7 @@ select throws_ok(
     )
   $$,
   '23514',
+  null,
   'oversized audit metadata is rejected for every writer'
 );
 select throws_ok(
@@ -1246,6 +1264,7 @@ select throws_ok(
     )
   $$,
   '23514',
+  null,
   'audit writers cannot add raw source payload fields'
 );
 
@@ -1265,6 +1284,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'even an authenticated admin must use the Worker service boundary'
 );
 select is(
@@ -1287,6 +1307,7 @@ select throws_ok(
     select count(*) from public.admin_audit_log
   $$,
   '42501',
+  null,
   'authenticated admins cannot read the audit table outside the bounded RPC'
 );
 reset role;
@@ -1384,6 +1405,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'a browser cannot call the deletion freshness guard directly'
 );
 reset role;

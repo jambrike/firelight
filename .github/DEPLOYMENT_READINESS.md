@@ -9,21 +9,52 @@ This checklist contains names and identifiers, never secret values. Complete it
 in the provider consoles, record the responsible owner and timestamp, and stop
 before dispatching **Deploy staging** or **Deploy production**.
 
+## Hosted handoff snapshot — 09 August 2026
+
+The repository and hosted control plane are prepared up to the remaining
+human/provider boundaries:
+
+- All ten protected GitHub environments exist, accept only `main`, require a
+  named reviewer, and prevent self-review. `main` also has strict required
+  checks and review protection. Because the repository currently has only one
+  collaborator, every deploy remains intentionally unapprovable until a second
+  reviewer is added.
+- The active Cloudflare account/zone, retained `firelight` Pages fallback, and
+  pinned fallback deployment were verified. Both target Workers remain absent.
+  A dedicated account-owned release token with only Pages read, Worker scripts
+  write, Worker routes write, and zone read is sealed in every web-release
+  environment that needs it.
+- Distinct `firelight-staging` and `firelight` Supabase projects are healthy in
+  `eu-west-1`; their organization/project anchors, runtime credentials,
+  independent release principals, and kit-code peppers are sealed in the
+  appropriate environments. Dedicated staging and production Management API
+  tokens expire on 08 September 2026 and must be rotated before then.
+- Local acceptance is green: application checks, 19 browser journeys, 155
+  operations checks, compiler tests, and the strict project-anchor verifier.
+
+The release stays fail-closed until an operator supplies the items that cannot
+be inferred or safely created from the current sessions: a second GitHub
+reviewer; custom SMTP identities and passwords; the retained production
+database password; non-root AWS OIDC/state/KMS/compiler infrastructure and its
+token; the resulting compiler URL/origin/host/build/digest bindings; hosted
+backup/alert ownership; and physical six-build hardware acceptance. Never use
+the currently configured AWS root credentials to bootstrap the compiler.
+
 ## Cloudflare
 
-- [ ] Confirm the active `firelight.ie` zone is in the intended account. Store
+- [x] Confirm the active `firelight.ie` zone is in the intended account. Store
   its 32-character account and zone identifiers as `CLOUDFLARE_ACCOUNT_ID` and
   `CLOUDFLARE_ZONE_ID` in the protected environments that need them.
-- [ ] Create a non-personal token scoped to that account/zone with **Workers
+- [x] Create a non-personal token scoped to that account/zone with **Workers
   Scripts Write**, **Workers Routes Write**, **Zone Read**, and **Pages Read**.
   Store it as `CLOUDFLARE_API_TOKEN`; do not grant DNS write or Pages write.
-- [ ] Leave `firelight-staging` and `firelight-production` absent before their
+- [x] Leave `firelight-staging` and `firelight-production` absent before their
   one-time bootstrap releases. The workflows prove absence, provision all nine
   secrets atomically with the first version, and then verify the remote secret
   inventory. A manually pre-created, partial Worker intentionally fails closed.
 - [ ] Confirm `staging.firelight.ie` has no conflicting DNS record or Custom
   Domain. The first approved staging Worker release creates it.
-- [ ] Keep the existing direct-upload Pages project `firelight`, its
+- [x] Keep the existing direct-upload Pages project `firelight`, its
   `firelight.ie` custom domain, and proxied DNS record. The reviewed retained
   production tuple is deployment
   `06b4410d-37ff-4526-ac71-5fc4e65bee91` at commit
@@ -31,9 +62,9 @@ before dispatching **Deploy staging** or **Deploy production**.
   `02b573aae8d9cfa71312a4e968d0e1f0cab049341519cc782128f5a68e989b4e`.
   These values are source-pinned and rechecked on every production release.
   Replacing the fallback requires a reviewed code change, not a dispatch input.
-- [ ] Do not attach a Worker Custom Domain to `firelight.ie`. Production uses
+- [x] Do not attach a Worker Custom Domain to `firelight.ie`. Production uses
   the exact `firelight.ie/*` zone route over the retained Pages origin.
-- [ ] Keep the Pages project until the pilot rollback window closes. The manual
+- [x] Keep the Pages project until the pilot rollback window closes. The manual
   **Restore production Pages** workflow verifies the current Worker version,
   deletes only that one route, and proves the retained Pages deployment owns
   traffic afterward.
@@ -60,21 +91,20 @@ secrets to pull-request jobs.
 The logical Supabase mapping is source-pinned in
 `.github/supabase-project-anchors.json`, outside every protected environment.
 It contains only domain-separated organization and project-ref SHA-256 values,
-never raw refs. The organization and production entries are provider-verified;
-the staging entry intentionally remains `PENDING_*` until the second hosted
-project exists, so every web or Auth mutation fails before entering a protected
-target. Replace that placeholder only in a reviewed change after two operators
-confirm both provider projects;
-the strict verifier rejects placeholders, extra fields, noncanonical bytes,
-zero values, and equal staging/production refs.
+never raw refs. The organization, staging, and production entries are
+provider-verified and distinct. Every web or Auth mutation verifies them before
+entering a protected target. Future changes require two operators to confirm
+both provider projects; the strict verifier rejects placeholders, extra fields,
+noncanonical bytes, zero values, and equal staging/production refs.
 
-After both projects exist, generate the candidate canonical file locally with
+Regenerate a candidate canonical file locally after any intentional mapping
+change with
 `scripts/generate-supabase-project-anchors.mjs`, using the two exact project
 refs and organization ID as process environment values. The helper writes only
 domain-separated hashes to stdout and rejects a same-project mapping. Compare
-the candidate with both provider consoles, replace the checked-in placeholder
-through a reviewed change, and rerun the strict verifier; do not paste raw refs
-or the organization ID into an issue, artifact, or run summary.
+the candidate with both provider consoles, replace the checked-in file through
+a reviewed change, and rerun the strict verifier; do not paste raw refs or the
+organization ID into an issue, artifact, or run summary.
 
 ```sh
 SUPABASE_ORGANIZATION_ID='<reviewed-organization-id>' \
@@ -172,7 +202,7 @@ immediately before each Terraform apply.
   rename-stable project-ref fingerprints, then rechecks the selected snapshot
   immediately before mutation. Confirm email verification, password recovery,
   exact redirect URL, SMTP, and branded templates by readback.
-- [ ] Create and email-confirm the dedicated canary and support-admin Auth users
+- [x] Create and email-confirm the dedicated canary and support-admin Auth users
   in each project. Record their UUIDs in the protected environment; do not reuse
   credentials across environments.
 - [ ] On the first migration only, the release workflow may run the explicitly
@@ -183,11 +213,10 @@ immediately before each Terraform apply.
   identity has only the intended admin role.
 - [ ] Confirm hosted backups, recovery ownership, alerts, and Management API
   token scope for both projects.
-- [ ] Replace the pending source-pinned staging project-ref fingerprint,
-  reverify the organization fingerprint and that both canonical project labels
-  are distinct, and require review for every future anchor change. Do not copy
-  these anchors into environment-scoped variables, where they could be swapped
-  with the secrets.
+- [x] Source-pin and verify the organization and distinct staging/production
+  project-ref fingerprints. Require review for every future anchor change. Do
+  not copy these anchors into environment-scoped variables, where they could be
+  swapped with the secrets.
 
 ## Compiler and application evidence
 

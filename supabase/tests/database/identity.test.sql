@@ -131,7 +131,10 @@ update public.profiles
 set
   access_source = 'grandfathered',
   access_granted_at = '2026-08-06T00:00:00Z'
-where id = '11111111-1111-4111-8111-111111111111';
+where id in (
+  '11111111-1111-4111-8111-111111111111',
+  '22222222-2222-4222-8222-222222222222'
+);
 
 insert into public.compile_jobs (
   id,
@@ -257,6 +260,7 @@ select throws_ok(
     where id = '11111111-1111-4111-8111-111111111111'
   $$,
   '42501',
+  null,
   'role column cannot be self-promoted'
 );
 select throws_ok(
@@ -274,10 +278,17 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'learner cannot insert progress for another user'
 );
 
 reset role;
+update public.profiles
+set
+  access_source = null,
+  access_granted_at = null
+where id = '22222222-2222-4222-8222-222222222222';
+
 select set_config(
   'request.jwt.claims',
   '{"sub":"22222222-2222-4222-8222-222222222222","role":"authenticated"}',
@@ -299,6 +310,7 @@ select throws_ok(
     )
   $$,
   '42501',
+  null,
   'an unactivated learner cannot create progress'
 );
 
@@ -451,6 +463,7 @@ select throws_ok(
     select count(*) from public.admin_audit_log
   $$,
   '42501',
+  null,
   'learner has no direct audit-table access'
 );
 
@@ -465,6 +478,7 @@ select throws_ok(
     select count(*) from public.admin_audit_log
   $$,
   '42501',
+  null,
   'admin must use the bounded service-only audit RPC'
 );
 

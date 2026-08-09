@@ -21,8 +21,10 @@ select has_column(
   'completion_evidence_id',
   'lesson completion references upload evidence'
 );
-select ok(
-  not has_column('public', 'compile_jobs', 'source'),
+select hasnt_column(
+  'public',
+  'compile_jobs',
+  'source',
   'compile jobs never store raw learner source'
 );
 select ok(
@@ -320,6 +322,7 @@ select throws_ok(
       and lesson_id = 'first-spark'
   $$,
   '42501',
+  null,
   'revoked learners cannot update progress through RLS or the entitlement trigger'
 );
 reset role;
@@ -688,6 +691,7 @@ select throws_ok(
     )
   $$,
   '23514',
+  null,
   'bounded diagnostic summaries reject oversized data'
 );
 select is(
@@ -736,6 +740,7 @@ select throws_ok(
     where user_id = '31111111-1111-4111-8111-111111111111'
   $$,
   '42501',
+  null,
   'browser role cannot write upload evidence directly'
 );
 select throws_ok(
@@ -746,6 +751,7 @@ select throws_ok(
       and status = 'completed'
   $$,
   '42501',
+  null,
   'an authenticated learner cannot delete evidenced terminal progress'
 );
 

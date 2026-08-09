@@ -107,10 +107,10 @@ the ref-only identity is the rename-stable peer-collision key.
 
 The authoritative logical labels live in the reviewed canonical
 `.github/supabase-project-anchors.json`, not in any environment-scoped value.
-Its organization and staging placeholders intentionally make the strict
-no-environment anchor job fail until a second project exists and the real safe
-fingerprints are committed. Staging opens `production-preview` read-only and
-proves that peer against the production anchor before any staging mutation;
+Its provider-verified organization, staging, and production hashes are distinct,
+and the strict no-environment anchor job rejects placeholders or mapping drift.
+Staging opens `production-preview` read-only and proves that peer against the
+production anchor before any staging mutation;
 production binds accepted staging evidence back to the staging anchor before
 opening a link. A complete staging/production secret swap therefore fails even
 though the two raw projects remain distinct.

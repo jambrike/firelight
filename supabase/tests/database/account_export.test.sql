@@ -136,6 +136,7 @@ select is(
 select throws_ok(
   $$select code_hash from public.kit_codes$$,
   '42501',
+  null,
   'learner cannot select the kit HMAC even for their own activation'
 );
 
