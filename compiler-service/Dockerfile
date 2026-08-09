@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# Multi-architecture manifest digest resolved 2026-08-07. Deployments build linux/amd64.
-FROM public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37 AS toolchain
+# Multi-architecture manifest digest resolved 2026-08-09. Deployments build linux/amd64.
+FROM public.ecr.aws/lambda/python:3.12@sha256:e0143f8ba81973bb5fb5235115f74750589b1888421b4ff2f8733f91011a8c0a AS toolchain
 
 ARG TARGETARCH
 RUN test "${TARGETARCH}" = "amd64"
@@ -22,7 +22,7 @@ RUN mkdir -p /opt/arduino/data /opt/arduino/libraries /tmp/arduino-downloads /tm
     && rm -rf /tmp/arduino-downloads /tmp/arduino-user /opt/arduino/data/staging \
     && chmod -R a=rX /opt/arduino
 
-FROM public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37
+FROM public.ecr.aws/lambda/python:3.12@sha256:e0143f8ba81973bb5fb5235115f74750589b1888421b4ff2f8733f91011a8c0a
 
 LABEL org.opencontainers.image.title="Firelight Arduino compiler" \
       org.opencontainers.image.description="Authenticated Lambda gateway and isolated Fargate Arduino compiler" \
