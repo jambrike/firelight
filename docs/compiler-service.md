@@ -212,7 +212,7 @@ The container definitions contain empty `environment` and `secrets` collections.
 
 | Component              | Pin                                                                                                         |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Lambda Python base     | `public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37` |
+| Lambda Python base     | `public.ecr.aws/lambda/python:3.12@sha256:e0143f8ba81973bb5fb5235115f74750589b1888421b4ff2f8733f91011a8c0a` |
 | Arduino CLI            | `1.5.1`, Linux 64-bit archive SHA-256 `28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b`    |
 | Arduino AVR core       | `arduino:avr@1.8.6`, archive SHA-256 `ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6`     |
 | Arduino Servo library  | `1.3.0`, registry archive SHA-256 `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38`        |
