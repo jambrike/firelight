@@ -1759,7 +1759,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
 export function createSupabaseIdentityRepository(
   env: Env,
   accessToken: string,
-  fetcher: RepositoryFetcher = fetch,
+  fetcher: RepositoryFetcher = (input, init) => fetch(input, init),
   requestTimeoutMs = SUPABASE_REQUEST_TIMEOUT_MS,
 ): IdentityRepository {
   return new SupabaseIdentityRepository(

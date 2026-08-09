@@ -309,6 +309,38 @@ describe("Supabase request deadline", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(requestSignal?.aborted).toBe(false);
   });
+
+  it("does not rebind the default global fetch receiver", async () => {
+    let calledWithoutReceiver = false;
+    vi.stubGlobal(
+      "fetch",
+      async function receiverSensitiveFetch(
+        this: unknown,
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> {
+        if (this !== undefined) throw new TypeError("Illegal invocation");
+        calledWithoutReceiver = true;
+        expect(input).toBeInstanceOf(URL);
+        expect(init).toBeDefined();
+        return Response.json(authenticatedUser);
+      },
+    );
+
+    try {
+      const repository = createSupabaseIdentityRepository(
+        repositoryEnv,
+        "learner-token",
+      );
+
+      await expect(repository.authenticate()).resolves.toMatchObject({
+        id: userId,
+      });
+      expect(calledWithoutReceiver).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("Supabase hardware lifecycle repository", () => {
