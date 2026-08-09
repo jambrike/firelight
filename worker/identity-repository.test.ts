@@ -91,17 +91,20 @@ describe("Supabase progress repository", () => {
     const headers = new Headers(requests[0]?.init.headers);
     expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
     expect(headers.get("apikey")).toBe("test-service-role-key");
-    expect(requests[0]?.init.redirect).toBe("error");
+    expect(requests[0]?.init.redirect).toBe("manual");
   });
 
   it("fails closed before credentials can follow an upstream redirect", async () => {
     const fetcher: RepositoryFetcher = vi.fn(
       async (_url: URL, init: RequestInit) => {
-        expect(init.redirect).toBe("error");
+        expect(init.redirect).toBe("manual");
         const headers = new Headers(init.headers);
         expect(headers.get("authorization")).toBe("Bearer learner-token");
         expect(headers.get("apikey")).toBe("test-publishable-key");
-        throw new TypeError("Redirect mode is error");
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://attacker.test/collect" },
+        });
       },
     );
     const repository = createSupabaseIdentityRepository(
@@ -738,7 +741,7 @@ describe("Supabase account export repository", () => {
       const headers = new Headers(request.init.headers);
       expect(headers.get("authorization")).toBe("Bearer learner-token");
       expect(headers.get("apikey")).toBe("test-publishable-key");
-      expect(request.init.redirect).toBe("error");
+      expect(request.init.redirect).toBe("manual");
     }
     const kitRequest = requests.find(
       (request) => request.url.pathname === "/rest/v1/kit_codes",

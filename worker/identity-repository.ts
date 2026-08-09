@@ -1026,7 +1026,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
           response = await this.#fetcher(new URL(path, this.#baseUrl), {
             ...init,
             headers,
-            redirect: "error",
+            redirect: "manual",
             signal: controller.signal,
           });
         } catch {
