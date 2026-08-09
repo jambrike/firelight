@@ -33,7 +33,7 @@ for staging and production:
 | `SUPABASE_DB_PASSWORD`                | secret               | password for only that project's database                      |
 | `FIRELIGHT_EXPECTED_SMTP_HOST`        | protected variable   | exact custom SMTP hostname, never Supabase's shared SMTP       |
 | `FIRELIGHT_EXPECTED_SMTP_PORT`        | protected variable   | `465` or `587`                                                 |
-| `FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL` | protected variable   | approved sender ending in `@auth.firelight.ie`                 |
+| `FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL` | protected variable   | approved sender at `auth.firelight.ie` or pilot `heronlabs.ie` |
 | `FIRELIGHT_EXPECTED_SMTP_USER`        | protected variable   | exact environment SMTP username                                |
 | `SUPABASE_SMTP_PASSWORD`              | secret               | SMTP password, used only by the explicit Auth-config apply job |
 
