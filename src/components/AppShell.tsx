@@ -14,7 +14,6 @@ const navigation = [
 
 export function AppShell({ children }: { readonly children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [routeAnnouncement, setRouteAnnouncement] = useState("");
   const [location] = useLocation();
   const identity = useIdentity();
   const mainRef = useRef<HTMLElement>(null);
@@ -29,7 +28,6 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
 
     if (previousLocationRef.current !== location) {
       previousLocationRef.current = location;
-      setRouteAnnouncement(`${metadata.announcement} loaded.`);
       mainRef.current?.focus();
     }
   }, [location]);
@@ -87,9 +85,6 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
           </nav>
         </div>
       </header>
-      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {routeAnnouncement}
-      </p>
       <main id="main-content" ref={mainRef} tabIndex={-1}>
         {children}
       </main>

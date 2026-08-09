@@ -10,6 +10,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Firelight could not complete the request.";
 }
 
+function clearRecoveryParameters(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("mode");
+  url.searchParams.delete("code");
+  url.searchParams.delete("sb_flow_id");
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}
+
 export function AuthPage() {
   const identity = useIdentity();
   const [mode, setMode] = useState<AuthMode>(() =>
@@ -38,6 +50,7 @@ export function AuthPage() {
         setFeedback("Check your email for a secure reset link.");
       } else {
         await identity.updatePassword(password);
+        clearRecoveryParameters();
         setFeedback("Password updated. Your camp is ready.");
         setMode("login");
         setPassword("");

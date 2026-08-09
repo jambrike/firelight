@@ -10,7 +10,7 @@ import type {
 import { FirelightApi } from "./api";
 import { IdentityContext } from "./identity-context";
 import type { IdentityStatus } from "./identity-context";
-import { legacyKeys, migrateLegacyData } from "./legacy";
+import { migrateLegacyData, purgeLegacyPlaintextPassword } from "./legacy";
 import {
   mergeProgressCache,
   mergeProgressCollections,
@@ -19,6 +19,14 @@ import { purgeBrowserProgressDraftsForOwner } from "../progress/draft-persistenc
 
 function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Firelight could not complete the request.";
+}
+
+function purgeBrowserLegacyPlaintextPassword(): void {
+  try {
+    purgeLegacyPlaintextPassword(window.localStorage);
+  } catch {
+    // Accessing localStorage itself can fail in privacy-restricted browser contexts.
+  }
 }
 
 interface IdentityMutationScope {
@@ -86,6 +94,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
   );
 
   useEffect(() => {
+    purgeBrowserLegacyPlaintextPassword();
     let active = true;
     const loadConfig = async () => {
       try {
@@ -124,7 +133,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
     const api = new FirelightApi(() => activeSession.access_token);
     const bootstrap = await api.getBootstrap();
     if (!isCurrentSession()) return null;
-    window.localStorage.removeItem(legacyKeys.plaintextPassword);
+    purgeBrowserLegacyPlaintextPassword();
 
     let migrated = false;
     if (bootstrap.activation) {

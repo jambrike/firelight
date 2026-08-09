@@ -15,6 +15,8 @@ interface LegacyStorage {
   removeItem(key: string): void;
 }
 
+type LegacyStorageRemoval = Pick<LegacyStorage, "removeItem">;
+
 interface LegacyMigrationApi {
   updateProfile(displayName: string): Promise<unknown>;
   saveProgress(lessonId: LessonSlug, input: ProgressUpdateInput): Promise<LessonProgress>;
@@ -25,6 +27,14 @@ interface LegacySnapshot {
   readonly ownerEmail: string | null;
   readonly firstSparkValue: string | null;
   readonly morseNameValue: string | null;
+}
+
+export function purgeLegacyPlaintextPassword(storage: LegacyStorageRemoval): void {
+  try {
+    storage.removeItem(legacyKeys.plaintextPassword);
+  } catch {
+    // Web Storage can be unavailable or reject writes in restricted browser contexts.
+  }
 }
 
 export function readLegacySnapshot(storage: LegacyStorage): LegacySnapshot {

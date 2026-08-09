@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BootstrapData, LessonProgress } from "../../../shared/identity";
-import { legacyKeys, migrateLegacyData, readLegacySnapshot } from "./legacy";
+import {
+  legacyKeys,
+  migrateLegacyData,
+  purgeLegacyPlaintextPassword,
+  readLegacySnapshot,
+} from "./legacy";
 
 function bootstrap(overrides: Partial<BootstrapData> = {}): BootstrapData {
   return {
@@ -64,6 +69,30 @@ describe("legacy progress migration", () => {
       morseNameValue: null,
     });
     expect(storage.getItem).not.toHaveBeenCalledWith(legacyKeys.plaintextPassword);
+  });
+
+  it("never reads or transmits the legacy password during migration", async () => {
+    const plaintextPassword = "do-not-read-or-send";
+    const storage = createStorage({
+      [legacyKeys.displayName]: "Ada",
+      [legacyKeys.email]: "builder@example.com",
+      [legacyKeys.firstSparkComplete]: "true",
+      [legacyKeys.plaintextPassword]: plaintextPassword,
+    });
+    const api = {
+      updateProfile: vi.fn(async () => undefined),
+      saveProgress: vi.fn(async () => savedProgress),
+    };
+
+    await migrateLegacyData(storage, bootstrap(), api);
+
+    expect(storage.getItem).not.toHaveBeenCalledWith(legacyKeys.plaintextPassword);
+    expect(
+      JSON.stringify({
+        updateProfile: api.updateProfile.mock.calls,
+        saveProgress: api.saveProgress.mock.calls,
+      }),
+    ).not.toContain(plaintextPassword);
   });
 
   it("preserves a legacy head start without fabricating hardware upload evidence", async () => {
@@ -209,5 +238,32 @@ describe("legacy progress migration", () => {
     ).resolves.toBe(false);
     expect(api.saveProgress).not.toHaveBeenCalled();
     expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("legacy plaintext password purge", () => {
+  it("removes exactly the obsolete password key", () => {
+    const storage = createStorage({
+      [legacyKeys.plaintextPassword]: "obsolete-secret",
+      [legacyKeys.displayName]: "Ada",
+    });
+
+    purgeLegacyPlaintextPassword(storage);
+
+    expect(storage.removeItem).toHaveBeenCalledOnce();
+    expect(storage.removeItem).toHaveBeenCalledWith(legacyKeys.plaintextPassword);
+    expect(storage.values.has(legacyKeys.plaintextPassword)).toBe(false);
+    expect(storage.values.get(legacyKeys.displayName)).toBe("Ada");
+  });
+
+  it("does not fail startup when storage rejects the removal", () => {
+    const removeItem = vi.fn(() => {
+      throw new DOMException("Storage is unavailable.", "SecurityError");
+    });
+
+    expect(() => {
+      purgeLegacyPlaintextPassword({ removeItem });
+    }).not.toThrow();
+    expect(removeItem).toHaveBeenCalledWith(legacyKeys.plaintextPassword);
   });
 });

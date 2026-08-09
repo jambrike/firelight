@@ -30,9 +30,11 @@ schema. It reads strict owner-marked projections through PostgREST/RLS, verifies
 every returned owner ID, and includes every stored progress version, compile-job
 record, and browser-upload attestation within explicit bounds. Activation uses a
 separate owner-only RLS policy with column grants limited to ID, batch, kind, and
-claim time. The export excludes kit plaintext/HMACs, service credentials, raw
-source, and HEX artifacts. If any category exceeds its maximum or the response
-would exceed 4 MiB, the Worker fails the whole request instead of truncating it.
+claim time. Large owner datasets are read sequentially with field-specific page
+sizes, and every validated row is charged to one UTF-8 JSON budget before it is
+retained. The export excludes kit plaintext/HMACs, service credentials, raw source,
+and HEX artifacts. If any category exceeds its maximum or the response would exceed
+4 MiB, the Worker fails the whole request instead of truncating it.
 
 Admin requests pass two authorization gates: the Worker reads the caller's own
 profile role through their JWT, then a service-only database RPC rechecks the
@@ -46,6 +48,10 @@ compile job.
 Hosted configuration fails closed unless the Supabase URL matches the separately
 bound project reference, the compiler URL matches its separately bound origin and
 `eu-west-1` Function URL hostname, and `BUILD_ID` is a full lowercase commit SHA.
+Every credentialed Supabase request also rejects redirects so bearer, publishable,
+and service-role credentials cannot be forwarded to a second origin. The browser
+removes the obsolete local plaintext-password key before starting configuration or
+authentication work; later legacy synchronization repeats that best-effort purge.
 Cloudflare automatic invocation logs and traces are disabled; the Worker emits a
 small redacted completion event. Release workflows use a dedicated activated
 canary account to prove config, authentication, bootstrap, and compilation after
@@ -88,6 +94,8 @@ after every environment is revision-aware.
 - `npm run db:start`, `db:reset`, `db:test`, and `db:lint` manage the local
   Supabase stack; they require Docker.
 - `npm run check` runs generated-binding checks, types, lint, tests, and build.
+- Every production build enforces raw/gzip limits on the initial browser module
+  graph and verifies that the lesson workspace and admin console remain deferred chunks.
 - `npm run deploy:dry-run` validates the Worker bundle without deploying it.
 - `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py'`
   verifies compiler-service bounds, protocol, redaction, and supply-chain pins.

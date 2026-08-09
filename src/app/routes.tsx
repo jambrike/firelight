@@ -1,20 +1,88 @@
-import { Route, Router, Switch } from "wouter";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Route, Router, Switch, useLocation } from "wouter";
 import { AppShell } from "../components/AppShell";
+import { Panel } from "../components/ui";
 import { SessionBoundary } from "../features/identity/SessionBoundary";
-import { AccountPage } from "../pages/AccountPage";
-import { ActivatePage } from "../pages/ActivatePage";
-import { AdminPage } from "../pages/AdminPage";
-import { AuthPage } from "../pages/AuthPage";
-import { CampPage } from "../pages/CampPage";
 import { HomePage } from "../pages/HomePage";
-import { KitPage } from "../pages/KitPage";
-import { LearnPage } from "../pages/LearnPage";
-import { LessonPage } from "../pages/LessonPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
+import { getRouteMetadata } from "./route-metadata";
 
-export function AppRoutes() {
+const KitPage = lazy(async () => {
+  const module = await import("../pages/KitPage");
+  return { default: module.KitPage };
+});
+
+const AuthPage = lazy(async () => {
+  const module = await import("../pages/AuthPage");
+  return { default: module.AuthPage };
+});
+
+const ActivatePage = lazy(async () => {
+  const module = await import("../pages/ActivatePage");
+  return { default: module.ActivatePage };
+});
+
+const CampPage = lazy(async () => {
+  const module = await import("../pages/CampPage");
+  return { default: module.CampPage };
+});
+
+const LearnPage = lazy(async () => {
+  const module = await import("../pages/LearnPage");
+  return { default: module.LearnPage };
+});
+
+const LessonPage = lazy(async () => {
+  const module = await import("../pages/LessonPage");
+  return { default: module.LessonPage };
+});
+
+const AccountPage = lazy(async () => {
+  const module = await import("../pages/AccountPage");
+  return { default: module.AccountPage };
+});
+
+const AdminPage = lazy(async () => {
+  const module = await import("../pages/AdminPage");
+  return { default: module.AdminPage };
+});
+
+function RoutePending() {
   return (
-    <AppShell>
+    <div className="page-section narrow-page page-stack route-pending">
+      <div role="status" aria-live="polite" aria-atomic="true">
+        <Panel>
+          <p className="eyebrow">Following the trail</p>
+          <p>Loading this part of camp…</p>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function RouteSwitch() {
+  const [location] = useLocation();
+  const previousLocationRef = useRef(location);
+  const [announcement, setAnnouncement] = useState({ location, message: "" });
+
+  useEffect(() => {
+    if (previousLocationRef.current !== location) {
+      setAnnouncement({
+        location,
+        message: `${getRouteMetadata(location).announcement} loaded.`,
+      });
+    }
+    previousLocationRef.current = location;
+  }, [location]);
+
+  const currentAnnouncement = announcement.location === location ? announcement.message : "";
+
+  return (
+    <>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {currentAnnouncement}
+      </p>
       <Switch>
         <Route path="/" component={HomePage} />
         <Route path="/kit" component={KitPage} />
@@ -43,6 +111,20 @@ export function AppRoutes() {
         </Route>
         <Route component={NotFoundPage} />
       </Switch>
+    </>
+  );
+}
+
+export function AppRoutes() {
+  const [location] = useLocation();
+
+  return (
+    <AppShell>
+      <RouteErrorBoundary resetKey={location}>
+        <Suspense fallback={<RoutePending />}>
+          <RouteSwitch />
+        </Suspense>
+      </RouteErrorBoundary>
     </AppShell>
   );
 }

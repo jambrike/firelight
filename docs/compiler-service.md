@@ -353,7 +353,7 @@ compiler-specific recovery actions.
 - `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v`:
   63 tests passed, including manifest/toolchain verification and 11-alarm static
   infrastructure coverage.
-- `npm run test:operations`: 64 tests passed; 11 cover the real typed six-lesson
+- `npm run test:operations`: 69 tests passed; 11 cover the real typed six-lesson
   catalog export, strict public envelopes, request/response bounds, fixed
   timeout, and one retry.
 - `npm run lint -- --no-cache`: passed with zero warnings.

@@ -1,5 +1,10 @@
 import { exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
+import {
+  ACCOUNT_EXPORT_MAX_RESPONSE_BYTES,
+  ACCOUNT_EXPORT_SCHEMA,
+  ACCOUNT_EXPORT_SCHEMA_VERSION,
+} from "../shared/account-export";
 import type { ProgressUpdateInput } from "../shared/identity";
 import { createSupabaseIdentityRepository } from "./identity-repository";
 import type { RepositoryError, RepositoryFetcher } from "./identity-repository";
@@ -83,6 +88,27 @@ describe("Supabase progress repository", () => {
     const headers = new Headers(requests[0]?.init.headers);
     expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
     expect(headers.get("apikey")).toBe("test-service-role-key");
+    expect(requests[0]?.init.redirect).toBe("error");
+  });
+
+  it("fails closed before credentials can follow an upstream redirect", async () => {
+    const fetcher: RepositoryFetcher = vi.fn(async (_url: URL, init: RequestInit) => {
+      expect(init.redirect).toBe("error");
+      const headers = new Headers(init.headers);
+      expect(headers.get("authorization")).toBe("Bearer learner-token");
+      expect(headers.get("apikey")).toBe("test-publishable-key");
+      throw new TypeError("Redirect mode is error");
+    });
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      fetcher,
+    );
+
+    await expect(repository.authenticate()).rejects.toMatchObject({
+      kind: "unavailable",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("filters a later update by the expected revision and advances exactly once", async () => {
@@ -505,17 +531,73 @@ describe("Supabase account export repository", () => {
     };
   }
 
+  function exportCompileRow(
+    diagnosticSummary = "Compilation completed.",
+    owner = userId,
+  ) {
+    return {
+      user_id: owner,
+      id: compileJobId,
+      lesson_id: "first-spark",
+      lesson_version: 2,
+      board_target: "arduino:avr:nano:cpu=atmega328old",
+      source_hash: "a".repeat(64),
+      state: "succeeded",
+      duration_ms: 500,
+      safe_error_code: null,
+      artifact_hash: "b".repeat(64),
+      diagnostic_summary: diagnosticSummary,
+      created_at: now,
+      started_at: now,
+      finished_at: now,
+      source: "must-not-cross-the-projection",
+    };
+  }
+
+  function exportUploadRow(owner = userId) {
+    return {
+      user_id: owner,
+      id: evidenceId,
+      compile_job_id: compileJobId,
+      lesson_id: "first-spark",
+      lesson_version: 2,
+      source_hash: "a".repeat(64),
+      artifact_hash: "b".repeat(64),
+      bytes_written: 256,
+      attestation_kind: "browser-web-serial-v1",
+      recorded_at: now,
+      hex: "must-not-cross-the-projection",
+    };
+  }
+
+  function requestedPage(url: URL, rows: readonly unknown[]): readonly unknown[] {
+    const limit = Number(url.searchParams.get("limit"));
+    const offset = Number(url.searchParams.get("offset"));
+    if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(offset) || offset < 0) {
+      throw new TypeError("Expected valid export pagination.");
+    }
+    return rows.slice(offset, offset + limit);
+  }
+
   function exportFetcher(
     requests: { url: URL; init: RequestInit }[],
-    progressRows: readonly unknown[] = [exportProgressRow(1), exportProgressRow(2)],
-    activationRows: readonly unknown[] = [{
+    rows: {
+      readonly progress?: readonly unknown[];
+      readonly compile?: readonly unknown[];
+      readonly upload?: readonly unknown[];
+      readonly activation?: readonly unknown[];
+    } = {},
+  ): RepositoryFetcher {
+    const progressRows = rows.progress ?? [exportProgressRow(1), exportProgressRow(2)];
+    const compileRows = rows.compile ?? [exportCompileRow()];
+    const uploadRows = rows.upload ?? [exportUploadRow()];
+    const activationRows = rows.activation ?? [{
       id: activationId,
       batch: "pilot-a",
       kind: "code",
       claimed_at: now,
       code_hash: "must-not-cross-the-projection",
-    }],
-  ): RepositoryFetcher {
+    }];
     return vi.fn(async (url: URL, init: RequestInit) => {
       requests.push({ url, init });
       if (url.pathname === "/rest/v1/profiles") return Response.json([profileRow()]);
@@ -523,41 +605,13 @@ describe("Supabase account export repository", () => {
         return Response.json(activationRows);
       }
       if (url.pathname === "/rest/v1/lesson_progress") {
-        return Response.json(progressRows);
+        return Response.json(requestedPage(url, progressRows));
       }
       if (url.pathname === "/rest/v1/compile_jobs") {
-        return Response.json([{
-          user_id: userId,
-          id: compileJobId,
-          lesson_id: "first-spark",
-          lesson_version: 2,
-          board_target: "arduino:avr:nano:cpu=atmega328old",
-          source_hash: "a".repeat(64),
-          state: "succeeded",
-          duration_ms: 500,
-          safe_error_code: null,
-          artifact_hash: "b".repeat(64),
-          diagnostic_summary: "Compilation completed.",
-          created_at: now,
-          started_at: now,
-          finished_at: now,
-          source: "must-not-cross-the-projection",
-        }]);
+        return Response.json(requestedPage(url, compileRows));
       }
       if (url.pathname === "/rest/v1/hardware_upload_evidence") {
-        return Response.json([{
-          user_id: userId,
-          id: evidenceId,
-          compile_job_id: compileJobId,
-          lesson_id: "first-spark",
-          lesson_version: 2,
-          source_hash: "a".repeat(64),
-          artifact_hash: "b".repeat(64),
-          bytes_written: 256,
-          attestation_kind: "browser-web-serial-v1",
-          recorded_at: now,
-          hex: "must-not-cross-the-projection",
-        }]);
+        return Response.json(requestedPage(url, uploadRows));
       }
       throw new Error(`Unexpected export request ${url.pathname}`);
     });
@@ -592,6 +646,7 @@ describe("Supabase account export repository", () => {
       const headers = new Headers(request.init.headers);
       expect(headers.get("authorization")).toBe("Bearer learner-token");
       expect(headers.get("apikey")).toBe("test-publishable-key");
+      expect(request.init.redirect).toBe("error");
     }
     const kitRequest = requests.find((request) =>
       request.url.pathname === "/rest/v1/kit_codes"
@@ -604,28 +659,258 @@ describe("Supabase account export repository", () => {
     }
   });
 
-  it("fails rather than truncating a complete export above its record bound", async () => {
-    const rows = Array.from({ length: 257 }, (_, index) =>
-      exportProgressRow((index % 1_000_000) + 1)
-    );
+  it("uses bounded dataset-specific pages with stable offsets", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
       "learner-token",
-      exportFetcher([], rows),
+      exportFetcher(requests, {
+        progress: Array.from({ length: 17 }, (_, index) =>
+          exportProgressRow(index + 1)
+        ),
+        compile: Array.from({ length: 129 }, () => exportCompileRow()),
+        upload: Array.from({ length: 1_001 }, () => exportUploadRow()),
+      }),
+    );
+
+    const result = await repository.getAccountExport(userId);
+
+    expect(result.progress).toHaveLength(17);
+    expect(result.compileJobs).toHaveLength(129);
+    expect(result.uploadEvidence).toHaveLength(1_001);
+    const pagesFor = (pathname: string) => requests
+      .filter((request) => request.url.pathname === pathname)
+      .map((request) => ({
+        limit: request.url.searchParams.get("limit"),
+        offset: request.url.searchParams.get("offset"),
+      }));
+    expect(pagesFor("/rest/v1/lesson_progress")).toEqual([
+      { limit: "4", offset: "0" },
+      { limit: "4", offset: "4" },
+      { limit: "4", offset: "8" },
+      { limit: "4", offset: "12" },
+      { limit: "4", offset: "16" },
+    ]);
+    expect(pagesFor("/rest/v1/compile_jobs")).toEqual([
+      { limit: "128", offset: "0" },
+      { limit: "128", offset: "128" },
+    ]);
+    expect(pagesFor("/rest/v1/hardware_upload_evidence")).toEqual([
+      { limit: "1000", offset: "0" },
+      { limit: "1000", offset: "1000" },
+    ]);
+  });
+
+  it("exports 380 maximum-diagnostic compile rows below the final 4 MiB contract", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, {
+        compile: Array.from({ length: 380 }, () =>
+          exportCompileRow("D".repeat(8_192))
+        ),
+      }),
+    );
+
+    const result = await repository.getAccountExport(userId);
+
+    expect(result.compileJobs).toHaveLength(380);
+    expect(
+      new TextEncoder().encode(JSON.stringify(result)).byteLength,
+    ).toBeLessThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    expect(
+      requests
+        .filter((request) => request.url.pathname === "/rest/v1/compile_jobs")
+        .map((request) => ({
+          limit: request.url.searchParams.get("limit"),
+          offset: request.url.searchParams.get("offset"),
+        })),
+    ).toEqual([
+      { limit: "128", offset: "0" },
+      { limit: "128", offset: "128" },
+      { limit: "128", offset: "256" },
+    ]);
+  });
+
+  it("pages JSON-escaped maximum snapshots below the upstream reader cap", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, {
+        progress: Array.from({ length: 8 }, (_, index) => ({
+          ...exportProgressRow(index + 1),
+          code_snapshot: "\u0001".repeat(65_536),
+        })),
+      }),
+    );
+
+    const result = await repository.getAccountExport(userId);
+
+    expect(result.progress).toHaveLength(8);
+    expect(
+      new TextEncoder().encode(JSON.stringify(result)).byteLength,
+    ).toBeLessThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    expect(
+      requests
+        .filter((request) => request.url.pathname === "/rest/v1/lesson_progress")
+        .map((request) => request.url.searchParams.get("offset")),
+    ).toEqual(["0", "4", "8"]);
+  });
+
+  it("checks trailing empty datasets when the final-envelope lower bound exactly fills", async () => {
+    const normalizedProgress = (row: ReturnType<typeof exportProgressRow>) => ({
+      lessonId: row.lesson_id,
+      lessonVersion: row.lesson_version,
+      revision: row.revision,
+      status: row.status,
+      currentStep: row.current_step,
+      percentage: row.percentage,
+      codeSnapshot: row.code_snapshot,
+      completionEvidenceId: row.completion_evidence_id,
+      completedAt: row.completed_at,
+      updatedAt: row.updated_at,
+    });
+    const progress = Array.from({ length: 63 }, (_, index) => ({
+      ...exportProgressRow(index + 1),
+      code_snapshot: "P".repeat(65_536),
+    }));
+    const finalRow = { ...exportProgressRow(64), code_snapshot: "" };
+    const lowerBoundEnvelope = (progressRows: readonly unknown[]) => ({
+      data: {
+        schema: ACCOUNT_EXPORT_SCHEMA,
+        version: ACCOUNT_EXPORT_SCHEMA_VERSION,
+        exportedAt: "",
+        data: {
+          profile: {
+            id: userId,
+            displayName: "Ada",
+            role: "learner",
+            email: "",
+            emailConfirmed: true,
+            createdAt: now,
+            updatedAt: now,
+          },
+          activation: {
+            id: activationId,
+            batch: "pilot-a",
+            kind: "code",
+            claimedAt: now,
+          },
+          progress: progressRows,
+          compileJobs: [],
+          uploadEvidence: [],
+        },
+      },
+    });
+    const emptyFinalSize = new TextEncoder().encode(JSON.stringify(
+      lowerBoundEnvelope([...progress, finalRow].map(normalizedProgress)),
+    )).byteLength;
+    const finalSnapshotBytes = ACCOUNT_EXPORT_MAX_RESPONSE_BYTES - emptyFinalSize;
+    expect(finalSnapshotBytes).toBeGreaterThan(0);
+    expect(finalSnapshotBytes).toBeLessThanOrEqual(65_536);
+    finalRow.code_snapshot = "P".repeat(finalSnapshotBytes);
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, {
+        progress: [...progress, finalRow],
+        compile: [],
+        upload: [],
+      }),
+    );
+
+    const result = await repository.getAccountExport(userId);
+
+    const retainedLowerBound = lowerBoundEnvelope(result.progress);
+    expect(new TextEncoder().encode(JSON.stringify(retainedLowerBound)).byteLength)
+      .toBe(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    const exactFinalEnvelope = {
+      data: {
+        ...retainedLowerBound.data,
+        exportedAt: now,
+        data: {
+          ...retainedLowerBound.data.data,
+          profile: {
+            ...retainedLowerBound.data.data.profile,
+            email: "ada@example.com",
+            emailConfirmed: false,
+          },
+        },
+      },
+    };
+    expect(new TextEncoder().encode(JSON.stringify(exactFinalEnvelope)).byteLength)
+      .toBeGreaterThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    expect(
+      requests
+        .filter((request) => request.url.pathname === "/rest/v1/lesson_progress")
+        .at(-1)?.url.searchParams.get("offset"),
+    ).toBe("64");
+    expect(
+      requests.some((request) =>
+        request.url.pathname === "/rest/v1/hardware_upload_evidence"
+      ),
+    ).toBe(true);
+  });
+
+  it("maps a cumulative export above 4 MiB to export_too_large before fetching uploads", async () => {
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, {
+        progress: Array.from({ length: 32 }, (_, index) => ({
+          ...exportProgressRow(index + 1),
+          code_snapshot: "P".repeat(65_536),
+        })),
+        compile: Array.from({ length: 128 }, () =>
+          exportCompileRow("\\".repeat(8_192))
+        ),
+      }),
     );
 
     await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
       kind: "export_too_large",
     });
+    expect(
+      requests.some((request) =>
+        request.url.pathname === "/rest/v1/hardware_upload_evidence"
+      ),
+    ).toBe(false);
+  });
+
+  it("fails rather than truncating a complete export above its record bound", async () => {
+    const rows = Array.from({ length: 257 }, (_, index) =>
+      exportProgressRow((index % 1_000_000) + 1)
+    );
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, { progress: rows }),
+    );
+
+    await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+      kind: "export_too_large",
+    });
+    const progressRequests = requests.filter((request) =>
+      request.url.pathname === "/rest/v1/lesson_progress"
+    );
+    expect(progressRequests.at(-1)?.url.searchParams.get("limit")).toBe("1");
+    expect(progressRequests.at(-1)?.url.searchParams.get("offset")).toBe("256");
   });
 
   it("rejects any projected row whose owner does not match the authenticated request", async () => {
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
       "learner-token",
-      exportFetcher([], [
-        exportProgressRow(1, "99999999-9999-4999-8999-999999999999"),
-      ]),
+      exportFetcher([], {
+        progress: [
+          exportProgressRow(1, "99999999-9999-4999-8999-999999999999"),
+        ],
+      }),
     );
 
     await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
@@ -633,11 +918,55 @@ describe("Supabase account export repository", () => {
     });
   });
 
+  it.each(["compile", "upload"] as const)(
+    "rejects a projected %s row owned by another account",
+    async (dataset) => {
+      const foreignOwner = "99999999-9999-4999-8999-999999999999";
+      const rows = dataset === "compile"
+        ? { compile: [exportCompileRow("Compilation completed.", foreignOwner)] }
+        : { upload: [exportUploadRow(foreignOwner)] };
+      const repository = createSupabaseIdentityRepository(
+        repositoryEnv,
+        "learner-token",
+        exportFetcher([], rows),
+      );
+
+      await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+        kind: "unavailable",
+        message: "Supabase returned another owner's data.",
+      });
+    },
+  );
+
+  it("owner-validates a row before classifying its serialized-byte overflow", async () => {
+    const progress = Array.from({ length: 64 }, (_, index) => ({
+      ...exportProgressRow(index + 1),
+      user_id: index === 63
+        ? "99999999-9999-4999-8999-999999999999"
+        : userId,
+      code_snapshot: "P".repeat(65_536),
+    }));
+    const requests: { url: URL; init: RequestInit }[] = [];
+    const repository = createSupabaseIdentityRepository(
+      repositoryEnv,
+      "learner-token",
+      exportFetcher(requests, { progress }),
+    );
+
+    await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
+      kind: "unavailable",
+      message: "Supabase returned another owner's data.",
+    });
+    expect(
+      requests.some((request) => request.url.pathname === "/rest/v1/compile_jobs"),
+    ).toBe(false);
+  });
+
   it("fails instead of silently omitting a code activation that the owner cannot read", async () => {
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
       "learner-token",
-      exportFetcher([], [], []),
+      exportFetcher([], { progress: [], activation: [] }),
     );
 
     await expect(repository.getAccountExport(userId)).rejects.toMatchObject({

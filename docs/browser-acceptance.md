@@ -13,7 +13,8 @@ network traffic at the browser boundary:
 
 - `/api/config` returns a deterministic local Supabase origin and build ID.
 - Authenticated scenarios seed Supabase's normal `sb-127-auth-token` persisted
-  session shape with obviously fake, far-future credentials.
+  session shape with obviously fake, far-future credentials. The recovery journey
+  starts anonymous and becomes authenticated only after its PKCE token exchange.
 - `/api/bootstrap` and allowed learner/admin APIs require the exact fake bearer
   token for that scenario before returning typed deterministic envelopes.
 - The normal local Supabase Auth protocol is handled explicitly. Unexpected
@@ -28,7 +29,8 @@ authorization checks covered by Worker and database tests.
 
 ## Automated coverage
 
-`e2e/accessibility-visual.spec.ts` contains fourteen scenarios:
+`e2e/accessibility-visual.spec.ts` and `e2e/high-risk-flows.spec.ts` contain
+nineteen scenarios:
 
 1. Public home at 1440 × 1000.
 2. Anonymous auth entry at 390 × 844.
@@ -48,6 +50,18 @@ authorization checks covered by Worker and database tests.
     stays disabled until `DELETE` is entered exactly.
 14. A structured compiler error envelope reaching the enabled First Spark compile action
     and its accessible hardware error state.
+15. One continuous anonymous password-recovery journey: the configured PKCE callback,
+    stored verifier and SHA-256 challenge binding, authorization-code exchange, verifier
+    cleanup, authenticated password update, recovery-query cleanup, and authenticated reload.
+16. An aborted production `KitPage` route chunk reaching the accessible route-error alert
+    while the header and footer remain available, with reload and campfire recovery controls
+    and no uncaught page error.
+17. Legacy completion remaining in local storage until its server checkpoint succeeds,
+    while the legacy plaintext password is deleted immediately and never transmitted.
+18. Confirmed account deletion calling the application API, signing out locally, removing
+    the persisted session, and closing the protected route.
+19. Morse Name remaining read-only with no autosave until the current First Spark
+    prerequisite is complete, then enabling builder autosave after a reload.
 
 Every key visual state runs axe against WCAG 2 A/AA, WCAG 2.1 A/AA, and WCAG
 2.2 AA tags with no rule or element exclusions. The six key states also assert no

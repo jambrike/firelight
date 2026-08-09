@@ -21,7 +21,10 @@ import { ADMIN_PAGE_MAX_OFFSET } from "../shared/admin";
 import {
   ACCOUNT_EXPORT_MAX_COMPILE_JOBS,
   ACCOUNT_EXPORT_MAX_PROGRESS_RECORDS,
+  ACCOUNT_EXPORT_MAX_RESPONSE_BYTES,
   ACCOUNT_EXPORT_MAX_UPLOAD_EVIDENCE,
+  ACCOUNT_EXPORT_SCHEMA,
+  ACCOUNT_EXPORT_SCHEMA_VERSION,
   type AccountExportCompileJob,
 } from "../shared/account-export";
 import { curriculumLessons, isLessonSlug } from "../shared/curriculum";
@@ -34,7 +37,11 @@ import {
 
 const MAX_UPSTREAM_JSON_BYTES = 3 * 1024 * 1024;
 const SUPABASE_REQUEST_TIMEOUT_MS = 15_000;
-const ACCOUNT_EXPORT_PAGE_SIZE = 1_000;
+// JSON escaping can expand snapshots sixfold and diagnostics twofold. These
+// page sizes keep every maximum-sized projection below the 3 MiB reader cap.
+const ACCOUNT_EXPORT_PROGRESS_PAGE_SIZE = 4;
+const ACCOUNT_EXPORT_COMPILE_PAGE_SIZE = 128;
+const ACCOUNT_EXPORT_UPLOAD_PAGE_SIZE = 1_000;
 const PROGRESS_SELECT =
   "lesson_id,lesson_version,revision,status,current_step,percentage,code_snapshot,completion_evidence_id,completed_at,updated_at";
 const ACCOUNT_EXPORT_PROGRESS_SELECT = `user_id,${PROGRESS_SELECT}`;
@@ -605,6 +612,64 @@ function parseAccountExportUploadEvidence(
   };
 }
 
+interface AccountExportSerializedBudget {
+  serializedBytes: number;
+}
+
+function serializedJsonByteLength(value: object): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function createAccountExportSerializedBudget(
+  profile: ProfileRecord,
+  activation: KitActivation | null,
+): AccountExportSerializedBudget {
+  return {
+    // This is a mechanical lower bound for the final versioned API envelope:
+    // every real email/export timestamp adds bytes, and `true` is the shorter
+    // possible confirmation value. The endpoint performs the exact final check.
+    serializedBytes: serializedJsonByteLength({
+      data: {
+        schema: ACCOUNT_EXPORT_SCHEMA,
+        version: ACCOUNT_EXPORT_SCHEMA_VERSION,
+        exportedAt: "",
+        data: {
+          profile: {
+            id: profile.id,
+            displayName: profile.displayName,
+            role: profile.role,
+            email: "",
+            emailConfirmed: true,
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt,
+          },
+          activation,
+          progress: [],
+          compileJobs: [],
+          uploadEvidence: [],
+        },
+      },
+    }),
+  };
+}
+
+function retainAccountExportRow<T extends object>(
+  rows: T[],
+  row: T,
+  budget: AccountExportSerializedBudget,
+): void {
+  const separatorBytes = rows.length === 0 ? 0 : 1;
+  const nextBytes = serializedJsonByteLength(row) + separatorBytes;
+  if (budget.serializedBytes + nextBytes > ACCOUNT_EXPORT_MAX_RESPONSE_BYTES) {
+    throw new RepositoryError(
+      "export_too_large",
+      "The complete account export exceeds the supported response size.",
+    );
+  }
+  budget.serializedBytes += nextBytes;
+  rows.push(row);
+}
+
 function parseAdminPage<T>(
   value: unknown,
   page: AdminPageInput,
@@ -961,6 +1026,7 @@ class SupabaseIdentityRepository implements IdentityRepository {
           response = await this.#fetcher(new URL(path, this.#baseUrl), {
             ...init,
             headers,
+            redirect: "error",
             signal: controller.signal,
           });
         } catch {
@@ -988,14 +1054,17 @@ class SupabaseIdentityRepository implements IdentityRepository {
     }
   }
 
-  async #readCompleteExportRows(
+  async #readCompleteExportRows<T extends object>(
     resource: string,
     maximumRecords: number,
-  ): Promise<readonly unknown[]> {
-    const rows: unknown[] = [];
+    pageSize: number,
+    budget: AccountExportSerializedBudget,
+    parseRow: (value: unknown) => T,
+  ): Promise<readonly T[]> {
+    const rows: T[] = [];
     for (;;) {
       const remaining = maximumRecords + 1 - rows.length;
-      const limit = Math.min(ACCOUNT_EXPORT_PAGE_SIZE, remaining);
+      const limit = Math.min(pageSize, remaining);
       const separator = resource.includes("?") ? "&" : "?";
       const body = await this.#request(
         `${resource}${separator}limit=${String(limit)}&offset=${String(rows.length)}`,
@@ -1003,12 +1072,15 @@ class SupabaseIdentityRepository implements IdentityRepository {
       if (!isUnknownArray(body) || body.length > limit) {
         throw new RepositoryError("unavailable", "Supabase returned an invalid export page.");
       }
-      rows.push(...body);
-      if (rows.length > maximumRecords) {
-        throw new RepositoryError(
-          "export_too_large",
-          "The complete account export exceeds the supported record limit.",
-        );
+      for (const value of body) {
+        const row = parseRow(value);
+        if (rows.length >= maximumRecords) {
+          throw new RepositoryError(
+            "export_too_large",
+            "The complete account export exceeds the supported record limit.",
+          );
+        }
+        retainAccountExportRow(rows, row, budget);
       }
       if (body.length < limit) return rows;
     }
@@ -1088,27 +1160,14 @@ class SupabaseIdentityRepository implements IdentityRepository {
 
   async getAccountExport(userId: string): Promise<AccountExportRecords> {
     const idFilter = encodeURIComponent(`eq.${userId}`);
-    const [profileBody, activationBody, progressBody, compileBody, uploadBody] =
-      await Promise.all([
-        this.#request(
-          `/rest/v1/profiles?id=${idFilter}&select=id,display_name,role,access_source,access_granted_at,created_at,updated_at&limit=2`,
-        ),
-        this.#request(
-          "/rest/v1/kit_codes?select=id,batch,kind,claimed_at&order=claimed_at.desc,id.desc&limit=2",
-        ),
-        this.#readCompleteExportRows(
-          `/rest/v1/lesson_progress?user_id=${idFilter}&select=${ACCOUNT_EXPORT_PROGRESS_SELECT}&order=lesson_id.asc,lesson_version.asc`,
-          ACCOUNT_EXPORT_MAX_PROGRESS_RECORDS,
-        ),
-        this.#readCompleteExportRows(
-          `/rest/v1/compile_jobs?user_id=${idFilter}&select=${ACCOUNT_EXPORT_COMPILE_SELECT}&order=created_at.asc,id.asc`,
-          ACCOUNT_EXPORT_MAX_COMPILE_JOBS,
-        ),
-        this.#readCompleteExportRows(
-          `/rest/v1/hardware_upload_evidence?user_id=${idFilter}&select=${ACCOUNT_EXPORT_UPLOAD_SELECT}&order=recorded_at.asc,id.asc`,
-          ACCOUNT_EXPORT_MAX_UPLOAD_EVIDENCE,
-        ),
-      ]);
+    const [profileBody, activationBody] = await Promise.all([
+      this.#request(
+        `/rest/v1/profiles?id=${idFilter}&select=id,display_name,role,access_source,access_granted_at,created_at,updated_at&limit=2`,
+      ),
+      this.#request(
+        "/rest/v1/kit_codes?select=id,batch,kind,claimed_at&order=claimed_at.desc,id.desc&limit=2",
+      ),
+    ]);
 
     if (!Array.isArray(profileBody) || profileBody.length !== 1) {
       throw new RepositoryError("unavailable", "The learner profile is missing.");
@@ -1141,14 +1200,35 @@ class SupabaseIdentityRepository implements IdentityRepository {
       throw new RepositoryError("unavailable", "Supabase returned inconsistent activation data.");
     }
 
+    const budget = createAccountExportSerializedBudget(profile, activation);
+    const progress = await this.#readCompleteExportRows(
+      `/rest/v1/lesson_progress?user_id=${idFilter}&select=${ACCOUNT_EXPORT_PROGRESS_SELECT}&order=lesson_id.asc,lesson_version.asc`,
+      ACCOUNT_EXPORT_MAX_PROGRESS_RECORDS,
+      ACCOUNT_EXPORT_PROGRESS_PAGE_SIZE,
+      budget,
+      (row) => parseAccountExportProgress(row, userId),
+    );
+    const compileJobs = await this.#readCompleteExportRows(
+      `/rest/v1/compile_jobs?user_id=${idFilter}&select=${ACCOUNT_EXPORT_COMPILE_SELECT}&order=created_at.asc,id.asc`,
+      ACCOUNT_EXPORT_MAX_COMPILE_JOBS,
+      ACCOUNT_EXPORT_COMPILE_PAGE_SIZE,
+      budget,
+      (row) => parseAccountExportCompileJob(row, userId),
+    );
+    const uploadEvidence = await this.#readCompleteExportRows(
+      `/rest/v1/hardware_upload_evidence?user_id=${idFilter}&select=${ACCOUNT_EXPORT_UPLOAD_SELECT}&order=recorded_at.asc,id.asc`,
+      ACCOUNT_EXPORT_MAX_UPLOAD_EVIDENCE,
+      ACCOUNT_EXPORT_UPLOAD_PAGE_SIZE,
+      budget,
+      (row) => parseAccountExportUploadEvidence(row, userId),
+    );
+
     return {
       profile,
       activation,
-      progress: progressBody.map((row) => parseAccountExportProgress(row, userId)),
-      compileJobs: compileBody.map((row) => parseAccountExportCompileJob(row, userId)),
-      uploadEvidence: uploadBody.map((row) =>
-        parseAccountExportUploadEvidence(row, userId)
-      ),
+      progress,
+      compileJobs,
+      uploadEvidence,
     };
   }
 

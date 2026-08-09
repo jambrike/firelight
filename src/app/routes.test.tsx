@@ -65,10 +65,29 @@ describe("Firelight routes", () => {
     ]);
   });
 
-  it.each(routeCases)("renders %s", (path, heading) => {
+  it("shows one visible, announced loading state while a route chunk resolves", async () => {
+    renderPath("/kit");
+
+    const loadingStatus = screen.getByRole("status");
+    expect(loadingStatus).toHaveTextContent("Loading this part of camp…");
+    expect(loadingStatus).not.toHaveAttribute("aria-busy");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Everything needed for the first six builds.",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading this part of camp…")).not.toBeInTheDocument();
+  });
+
+  it.each(routeCases)("renders %s", async (path, heading) => {
     renderPath(path);
 
-    expect(screen.getByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: heading }),
+    ).toBeInTheDocument();
   });
 
   it("renders a safe not-found page", () => {
@@ -86,10 +105,15 @@ describe("Firelight routes", () => {
     await user.click(screen.getByRole("link", { name: "Preview the trail" }));
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "Where the real building lives." }),
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Where the real building lives.",
+      }),
     ).toBeInTheDocument();
     expect(document.title).toBe("Learn — Firelight");
     expect(screen.getByRole("main")).toHaveFocus();
     expect(screen.getByRole("status")).toHaveTextContent("Build path loaded.");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.queryByText("Loading this part of camp…")).not.toBeInTheDocument();
   });
 });

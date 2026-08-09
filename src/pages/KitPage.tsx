@@ -34,11 +34,35 @@ export function KitPage() {
             className="kit-gallery__main"
             src={kitOpenTwo}
             alt="Open Firelight kit box with the Arduino board and learning parts arranged inside"
+            width={724}
+            height={480}
+            fetchPriority="high"
           />
           <div className="kit-gallery__thumbs">
-            <img src={kitOpenOne} alt="Firelight kit opened to its first parts layer" />
-            <img src={kitTop} alt="Top view of the printed Firelight kit box" />
-            <img src={kitClosed} alt="Closed Firelight kit box" />
+            <img
+              src={kitOpenOne}
+              alt="Firelight kit opened to its first parts layer"
+              width={726}
+              height={484}
+              loading="lazy"
+              decoding="async"
+            />
+            <img
+              src={kitTop}
+              alt="Top view of the printed Firelight kit box"
+              width={712}
+              height={476}
+              loading="lazy"
+              decoding="async"
+            />
+            <img
+              src={kitClosed}
+              alt="Closed Firelight kit box"
+              width={722}
+              height={484}
+              loading="lazy"
+              decoding="async"
+            />
           </div>
         </div>
         <Panel className="kit-inventory">

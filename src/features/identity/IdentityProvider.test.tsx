@@ -8,6 +8,7 @@ import { WebStorageProgressDraftPersistence } from "../progress/draft-persistenc
 import { IdentityProvider } from "./IdentityProvider";
 import { SessionBoundary } from "./SessionBoundary";
 import { useIdentity } from "./identity-context";
+import { legacyKeys } from "./legacy";
 
 const ownerId = "11111111-1111-4111-8111-111111111111";
 const otherOwnerId = "22222222-2222-4222-8222-222222222222";
@@ -105,6 +106,11 @@ function OneTimeCodeProbe() {
   );
 }
 
+function IdentityStatusProbe() {
+  const identity = useIdentity();
+  return <span data-testid="identity-status">{identity.status}</span>;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete) => {
@@ -119,6 +125,37 @@ function inputPath(input: RequestInfo | URL): string {
     : input instanceof URL
       ? input.href
       : input.url;
+}
+
+function successfulConfigResponse(): Response {
+  return Response.json({
+    data: {
+      apiVersion: "v1",
+      environment: "test",
+      buildId: "test-build",
+      supabase: {
+        url: "https://example.supabase.co",
+        publishableKey: "publishable-key",
+      },
+      hardware: {
+        fqbn: "arduino:avr:nano:cpu=atmega328old",
+        uploadBaud: 57_600,
+      },
+    },
+  });
+}
+
+function failedApiResponse(message: string): Response {
+  return Response.json(
+    {
+      error: {
+        code: "TEST_FAILURE",
+        message,
+        requestId: "test-request-id",
+      },
+    },
+    { status: 500 },
+  );
 }
 
 beforeEach(() => {
@@ -146,21 +183,7 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = inputPath(input);
       if (path === "/api/config") {
-        return Response.json({
-          data: {
-            apiVersion: "v1",
-            environment: "test",
-            buildId: "test-build",
-            supabase: {
-              url: "https://example.supabase.co",
-              publishableKey: "publishable-key",
-            },
-            hardware: {
-              fqbn: "arduino:avr:nano:cpu=atmega328old",
-              uploadBaud: 57_600,
-            },
-          },
-        });
+        return successfulConfigResponse();
       }
       if (path === "/api/bootstrap") {
         return Response.json({
@@ -187,6 +210,140 @@ beforeEach(() => {
       return Response.json({ error: "Unexpected request" }, { status: 500 });
     }),
   );
+});
+
+describe("IdentityProvider legacy plaintext password purge", () => {
+  it("removes only the obsolete password key while config is still unresolved", () => {
+    const configResponse = deferred<Response>();
+    const requestedPaths: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = inputPath(input);
+        requestedPaths.push(path);
+        if (path === "/api/config") return configResponse.promise;
+        return failedApiResponse("Unexpected protected request.");
+      }),
+    );
+    window.localStorage.setItem(legacyKeys.plaintextPassword, "obsolete-secret");
+    window.localStorage.setItem(legacyKeys.displayName, "Ada");
+
+    const { unmount } = render(
+      <IdentityProvider>
+        <IdentityStatusProbe />
+      </IdentityProvider>,
+    );
+
+    expect(screen.getByTestId("identity-status")).toHaveTextContent("loading");
+    expect(window.localStorage.getItem(legacyKeys.plaintextPassword)).toBeNull();
+    expect(window.localStorage.getItem(legacyKeys.displayName)).toBe("Ada");
+    expect(requestedPaths).toEqual(["/api/config"]);
+    expect(supabaseMocks.createClient).not.toHaveBeenCalled();
+    expect(supabaseMocks.auth.getSession).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("removes the obsolete password for an anonymous session without a bootstrap request", async () => {
+    supabaseMocks.auth.getSession.mockResolvedValue({
+      data: { session: null },
+      error: null,
+    });
+    window.localStorage.setItem(legacyKeys.plaintextPassword, "obsolete-secret");
+
+    render(
+      <IdentityProvider>
+        <IdentityStatusProbe />
+      </IdentityProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("identity-status")).toHaveTextContent("anonymous");
+    });
+    expect(window.localStorage.getItem(legacyKeys.plaintextPassword)).toBeNull();
+    expect(
+      vi.mocked(fetch).mock.calls.map(([input]) => inputPath(input)),
+    ).toEqual(["/api/config"]);
+  });
+
+  it("removes the obsolete password when config loading fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => failedApiResponse("Config unavailable.")),
+    );
+    window.localStorage.setItem(legacyKeys.plaintextPassword, "obsolete-secret");
+
+    render(
+      <IdentityProvider>
+        <IdentityStatusProbe />
+      </IdentityProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("identity-status")).toHaveTextContent("error");
+    });
+    expect(window.localStorage.getItem(legacyKeys.plaintextPassword)).toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(supabaseMocks.createClient).not.toHaveBeenCalled();
+    expect(supabaseMocks.auth.getSession).not.toHaveBeenCalled();
+  });
+
+  it("removes the obsolete password when authenticated bootstrap fails", async () => {
+    const requestedPaths: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = inputPath(input);
+        requestedPaths.push(path);
+        if (path === "/api/config") return successfulConfigResponse();
+        if (path === "/api/bootstrap") return failedApiResponse("Bootstrap unavailable.");
+        return failedApiResponse("Unexpected request.");
+      }),
+    );
+    window.localStorage.setItem(legacyKeys.plaintextPassword, "obsolete-secret");
+
+    render(
+      <IdentityProvider>
+        <IdentityStatusProbe />
+      </IdentityProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("identity-status")).toHaveTextContent("error");
+    });
+    expect(window.localStorage.getItem(legacyKeys.plaintextPassword)).toBeNull();
+    expect(requestedPaths).toEqual(["/api/config", "/api/bootstrap"]);
+  });
+
+  it("retries the purge after bootstrap when the startup storage write is rejected", async () => {
+    const originalRemoveItem = Storage.prototype.removeItem;
+    const removeItem = vi
+      .spyOn(Storage.prototype, "removeItem")
+      .mockImplementation(function (this: Storage, key: string) {
+        originalRemoveItem.call(this, key);
+      });
+    removeItem.mockImplementationOnce(() => {
+      throw new DOMException("Storage is unavailable.", "SecurityError");
+    });
+    window.localStorage.setItem(legacyKeys.plaintextPassword, "obsolete-secret");
+
+    try {
+      render(
+        <IdentityProvider>
+          <IdentityStatusProbe />
+        </IdentityProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("identity-status")).toHaveTextContent("authenticated");
+      });
+      expect(window.localStorage.getItem(legacyKeys.plaintextPassword)).toBeNull();
+      expect(
+        removeItem.mock.calls.filter(([key]) => key === legacyKeys.plaintextPassword),
+      ).toHaveLength(2);
+    } finally {
+      removeItem.mockRestore();
+    }
+  });
 });
 
 describe("IdentityProvider account deletion", () => {

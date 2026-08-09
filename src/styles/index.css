@@ -293,6 +293,10 @@ code,
   padding-block: clamp(3rem, 7vw, 6rem);
 }
 
+.route-pending {
+  min-height: calc(100dvh - 5.5rem);
+}
+
 .page-stack {
   display: grid;
   gap: clamp(1.25rem, 3vw, 2.25rem);
@@ -1870,6 +1874,10 @@ label.identity-form input {
 
   .page-section {
     padding-block: 3rem;
+  }
+
+  .route-pending {
+    min-height: calc(100dvh - 4.75rem);
   }
 
   .home-hero {
