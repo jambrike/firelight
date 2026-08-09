@@ -16,12 +16,16 @@ const MAX_MIGRATIONS = 10_000;
 const PROJECT_REF = /^[a-z0-9]{20}$/u;
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/u;
 const MIGRATION_VERSION = /^[0-9]{1,64}$/u;
+const DATABASE_BOOTSTRAP_CONFIRMATION = "BOOTSTRAP_PRODUCTION_DATABASE";
 
 export const MIGRATION_HISTORY_QUERY = `select
   version::text as version,
   coalesce(name, '')::text as name
 from supabase_migrations.schema_migrations
 order by version asc, name asc`;
+
+export const MIGRATION_HISTORY_EXISTS_QUERY = `select
+  to_regclass('supabase_migrations.schema_migrations') is not null as exists`;
 
 function fail(code) {
   throw new CanaryError(code);
@@ -67,7 +71,22 @@ export function parseMigrationStateEnvironment(environment) {
   ) {
     fail("INVALID_FIRELIGHT_EXPECTED_MIGRATION_STATE_HASH");
   }
-  return { projectRef, accessToken, expectedHash };
+  const bootstrapConfirmation =
+    environment.FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION;
+  if (
+    bootstrapConfirmation !== undefined &&
+    bootstrapConfirmation !== "" &&
+    bootstrapConfirmation !== DATABASE_BOOTSTRAP_CONFIRMATION
+  ) {
+    fail("INVALID_FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION");
+  }
+  return {
+    projectRef,
+    accessToken,
+    expectedHash,
+    allowMissingHistory:
+      bootstrapConfirmation === DATABASE_BOOTSTRAP_CONFIRMATION,
+  };
 }
 
 export function buildMigrationQueryUrl(configuration) {
@@ -104,7 +123,7 @@ function managementErrorCode(status) {
   return "SUPABASE_MIGRATION_STATE_UNAVAILABLE";
 }
 
-export async function verifyMigrationState(configuration, fetchImpl) {
+async function queryManagementApi(configuration, fetchImpl, query) {
   const { response, bytes } = await fetchBounded(
     fetchImpl,
     buildMigrationQueryUrl(configuration),
@@ -116,12 +135,43 @@ export async function verifyMigrationState(configuration, fetchImpl) {
         "Content-Type": "application/json",
         "User-Agent": "firelight-release-migration-verifier",
       },
-      body: JSON.stringify({ query: MIGRATION_HISTORY_QUERY, read_only: true }),
+      body: JSON.stringify({ query, read_only: true }),
     },
     { timeoutMs: REQUEST_TIMEOUT_MS, maximumBytes: MAX_RESPONSE_BYTES },
   );
   if (!response.ok) fail(managementErrorCode(response.status));
-  const rows = parseMigrationHistory(parseJsonBytes(bytes));
+  return parseJsonBytes(bytes);
+}
+
+function parseMigrationHistoryExists(value) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !isRecord(value[0]) ||
+    Object.keys(value[0]).join(",") !== "exists" ||
+    typeof value[0].exists !== "boolean"
+  ) {
+    fail("INVALID_MIGRATION_HISTORY_EXISTENCE");
+  }
+  return value[0].exists;
+}
+
+export async function verifyMigrationState(configuration, fetchImpl) {
+  const historyExists = parseMigrationHistoryExists(
+    await queryManagementApi(
+      configuration,
+      fetchImpl,
+      MIGRATION_HISTORY_EXISTS_QUERY,
+    ),
+  );
+  if (!historyExists && configuration.allowMissingHistory !== true) {
+    fail("MIGRATION_HISTORY_MISSING");
+  }
+  const rows = historyExists
+    ? parseMigrationHistory(
+        await queryManagementApi(configuration, fetchImpl, MIGRATION_HISTORY_QUERY),
+      )
+    : [];
   const stateHash = migrationStateHash(rows);
   if (configuration.expectedHash !== undefined && stateHash !== configuration.expectedHash) {
     fail("REMOTE_MIGRATION_STATE_CHANGED");
