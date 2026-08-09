@@ -1937,6 +1937,7 @@ jobs:
           apply_status=$?
           set -e
           if [[ $apply_status -ne 0 ]]; then
+            python3 ../scripts/report_terraform_failure.py "$apply_stderr_path"
             echo "The reviewed complete compiler Terraform apply failed." >&2
             exit "$apply_status"
           fi
