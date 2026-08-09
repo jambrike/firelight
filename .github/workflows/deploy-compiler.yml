@@ -1964,11 +1964,10 @@ jobs:
             $policy.Version == "2012-10-17" and
             ($policy.Statement | type) == "array" and
             ($policy.Statement | length) == 1 and
-            ($policy.Statement[0] | keys) == ["Action","Condition","Effect","Principal","Resource","Sid"] and
+            ($policy.Statement[0] | keys) == ["Action","Condition","Effect","Principal","Sid"] and
             $policy.Statement[0].Sid == "LambdaECRImageRetrievalPolicy" and
             $policy.Statement[0].Effect == "Allow" and
             ($policy.Statement[0].Action | sort) == ["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"] and
-            $policy.Statement[0].Resource == "*" and
             $policy.Statement[0].Principal == {"Service":"lambda.amazonaws.com"} and
             ($policy.Statement[0].Condition | keys) == ["ArnEquals","StringEquals"] and
             $policy.Statement[0].Condition.ArnEquals == {"aws:SourceArn":$gatewayArn} and
