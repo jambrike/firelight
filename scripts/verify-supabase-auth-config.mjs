@@ -13,6 +13,10 @@ import {
 const MANAGEMENT_API = "https://api.supabase.com";
 const PROJECT_REF = /^[a-z0-9]{20}$/u;
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/u;
+const APPROVED_SMTP_ADMIN_DOMAINS = new Set([
+  "auth.firelight.ie",
+  "heronlabs.ie",
+]);
 const HOSTNAME = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u;
 const EMAIL = /^[^\s@]+@[^\s@]+$/u;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -85,7 +89,12 @@ export function parseSupabaseAuthEnvironment(environment) {
     "FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL",
     320,
   );
-  if (!EMAIL.test(smtpAdminEmail) || !smtpAdminEmail.toLowerCase().endsWith("@auth.firelight.ie")) {
+  const smtpAdminDomain = smtpAdminEmail.toLowerCase().split("@").at(-1);
+  if (
+    !EMAIL.test(smtpAdminEmail) ||
+    !smtpAdminDomain ||
+    !APPROVED_SMTP_ADMIN_DOMAINS.has(smtpAdminDomain)
+  ) {
     fail("INVALID_FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL");
   }
   const smtpUser = requiredString(environment, "FIRELIGHT_EXPECTED_SMTP_USER", 320);

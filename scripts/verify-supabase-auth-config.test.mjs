@@ -75,6 +75,13 @@ test("environment binds exact hosted origin, project, and custom SMTP identity",
   const parsed = parseSupabaseAuthEnvironment(environment);
   assert.equal(parsed.siteUrl, "https://staging.firelight.ie");
   assert.equal(parsed.smtpPort, 587);
+  assert.equal(
+    parseSupabaseAuthEnvironment({
+      ...environment,
+      FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: "no-reply@heronlabs.ie",
+    }).smtpAdminEmail,
+    "no-reply@heronlabs.ie",
+  );
   for (const [override, code] of [
     [{ FIRELIGHT_EXPECTED_ENVIRONMENT: "development" }, "INVALID_FIRELIGHT_EXPECTED_ENVIRONMENT"],
     [{ SUPABASE_PROJECT_REF: "short" }, "INVALID_SUPABASE_PROJECT_REF"],

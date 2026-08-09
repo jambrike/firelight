@@ -127,7 +127,8 @@ source of truth; use these groups to audit completeness:
   `SUPABASE_DB_PASSWORD`.
 - Hosted Auth expectation: `FIRELIGHT_EXPECTED_SMTP_HOST`,
   `FIRELIGHT_EXPECTED_SMTP_PORT` (`465` or `587`),
-  `FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL` (under `auth.firelight.ie`), and
+  `FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL` (under `auth.firelight.ie`, or the
+  verified `heronlabs.ie` pilot sender), and
   `FIRELIGHT_EXPECTED_SMTP_USER`. The separately protected Auth-config
   environments also hold `SUPABASE_SMTP_PASSWORD`.
 - Release principals: `SUPABASE_SERVICE_ROLE_KEY`,
