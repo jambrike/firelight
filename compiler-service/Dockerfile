@@ -24,6 +24,23 @@ RUN mkdir -p /opt/arduino/data /opt/arduino/libraries /tmp/arduino-downloads /tm
 
 FROM public.ecr.aws/lambda/python:3.12@sha256:e0143f8ba81973bb5fb5235115f74750589b1888421b4ff2f8733f91011a8c0a
 
+# The runtime does not need OS package management or GObject introspection.
+# Remove their complete dependency closure without --nodeps so a changed base
+# fails the build instead of silently leaving broken or vulnerable libraries.
+RUN rpm -e \
+      gawk \
+      glib2 \
+      gobject-introspection \
+      libdnf \
+      libmodulemd \
+      libpeas \
+      librepo \
+      libsolv \
+      microdnf \
+      microdnf-dnf \
+      rpm \
+      rpm-libs
+
 LABEL org.opencontainers.image.title="Firelight Arduino compiler" \
       org.opencontainers.image.description="Authenticated Lambda gateway and isolated Fargate Arduino compiler" \
       org.opencontainers.image.source="https://github.com/jambrike/firelight" \
