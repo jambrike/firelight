@@ -95,8 +95,8 @@ All six repository starter sketches compile for the exact Nano old-bootloader
 target with the pinned Arduino CLI 1.5.1, AVR core 1.8.6, and Servo 1.3.0
 toolchain. The Cloudflare release principal, protected GitHub environments, and
 distinct Supabase staging/production projects are provisioned. Still gated
-outside this repository: adding an independent environment reviewer, completing
-SMTP and the remaining provider secrets, DNS cutover, alert-recipient
+outside this repository: completing SMTP and the remaining provider secrets,
+DNS cutover, alert-recipient
 subscription and alarm drills, backup/PITR restore drills, non-root AWS
 Terraform apply and compiler-image build/scan, physical
 validation of all six builds across the documented browser/OS/kit matrix, and

@@ -244,7 +244,8 @@ new files in full-release mode with the registry-reported digest.
 
 The compiler workflow is manual-only and takes `environment` plus the exact
 `DEPLOY_STAGING_COMPILER` or `DEPLOY_PRODUCTION_COMPILER` confirmation. Production
-requires an independent reviewer. Its ordered jobs are:
+requires explicit approval in its named environment; the single-operator pilot
+permits the initiator to provide that approval. Its ordered jobs are:
 
 1. Run CI, compiler Python tests, Terraform format/validate/mock tests, export all
    six starter sketches, build the pinned `linux/amd64` image, run the six-sketch
