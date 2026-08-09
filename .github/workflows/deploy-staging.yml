@@ -339,6 +339,12 @@ jobs:
       - release-anchors
       - snapshot-production-project
       - database-target
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.release-anchors.result == 'success' &&
+      needs.snapshot-production-project.result == 'success' &&
+      needs.database-target.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
