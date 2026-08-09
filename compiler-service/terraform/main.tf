@@ -31,7 +31,6 @@ data "aws_iam_policy_document" "compiler_ecr_lambda" {
       "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer",
     ]
-    resources = ["*"]
 
     principals {
       type        = "Service"
@@ -204,7 +203,6 @@ resource "aws_ecs_task_definition" "compiler" {
           "awslogs-group"         = aws_cloudwatch_log_group.compiler.name
           "awslogs-region"        = "eu-west-1"
           "awslogs-stream-prefix" = "compiler"
-          "awslogs-create-group"  = "false"
         }
       }
     },

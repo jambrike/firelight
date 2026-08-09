@@ -86,6 +86,7 @@ class IsolationInfrastructureTests(unittest.TestCase):
         self.assertIn('identifiers = ["lambda.amazonaws.com"]', policy_document)
         self.assertIn('"ecr:BatchGetImage"', policy_document)
         self.assertIn('"ecr:GetDownloadUrlForLayer"', policy_document)
+        self.assertNotIn("resources =", policy_document)
         self.assertIn('variable = "aws:SourceAccount"', policy_document)
         self.assertIn('values   = [var.aws_account_id]', policy_document)
         self.assertIn('test     = "ArnEquals"', policy_document)
@@ -106,6 +107,7 @@ class IsolationInfrastructureTests(unittest.TestCase):
         self.assertIn('["/var/task/app.py", "serve"]', self.main_compact)
         self.assertIn("readonlyRootFilesystem = true", self.main_compact)
         self.assertIn('drop = ["ALL"]', self.main_compact)
+        self.assertNotIn("awslogs-create-group", self.main)
 
         execution_policy = self.iam.split(
             'data "aws_iam_policy_document" "ecs_execution"', 1
