@@ -37,11 +37,12 @@ Local values belong only in ignored `.dev.vars`; never point local development
 at production.
 
 Configure the `staging` and `production` GitHub environments with deployment
-branch/tag restrictions and required reviewers. Production must require an
-independent reviewer who did not author the release. `production-preview` is a
-separate environment whose job must finish before the protected production job
-can request approval. The two database-bootstrap environments require separate
-named reviewers and are used only for an explicitly confirmed first deployment.
+branch/tag restrictions and a named repository-owner reviewer. The current
+single-operator pilot permits that owner to approve their own deployment job.
+`production-preview` is a separate environment whose job must finish before the
+protected production job can request approval. The two database-bootstrap
+environments require explicit named-owner approval and are used only for an
+explicitly confirmed first deployment.
 Limit the Cloudflare token to the intended account and Workers, the Supabase
 token to the intended organization/projects, and any AWS identity to the
 compiler stack in `eu-west-1`. Prefer short-lived GitHub OIDC or operator
@@ -375,9 +376,9 @@ the deployed
 history, runs `supabase db push --dry-run`, and records the release SHA, Git
 migration-tree hash, project identity, and migration-state hashes as job
 evidence. Only after that job succeeds does the `apply-and-deploy` job request
-the protected `production` approval. The
-independent reviewer inspects the preview log, ordered migration filenames, and
-hash before approval. The protected job checks out the exact previewed SHA,
+the protected `production` approval. The named approver inspects the preview
+log, ordered migration filenames, and hash before approval. The protected job
+checks out the exact previewed SHA,
 recomputes the migration tree, matches its environment's project-reference hash,
 rechecks the Management API and live `/api/config`, and requires that remote
 migration history still matches the preview. It then reruns the dry-run, applies,
