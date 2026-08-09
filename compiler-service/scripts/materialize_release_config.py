@@ -124,7 +124,7 @@ def parse_environment(
         "deployment_role_name": ROLE_NAMES[release_environment],
         "enable_deletion_protection": True,
         "environment": release_environment,
-        "gateway_reserved_concurrency": 5,
+        "gateway_reserved_concurrency": -1,
         "image_digest": image_digest,
         "log_retention_days": 14,
         "release_build_id": release_build_id,
