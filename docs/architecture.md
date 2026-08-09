@@ -48,6 +48,13 @@ compile job.
 Hosted configuration fails closed unless the Supabase URL matches the separately
 bound project reference, the compiler URL matches its separately bound origin and
 `eu-west-1` Function URL hostname, and `BUILD_ID` is a full lowercase commit SHA.
+After service-token authentication and valid identity loading, the gateway
+reports environment, canonical service, protocol version, build, and digest
+identity on every response. The Worker requires its exact environment, canonical
+service, and protocol version, and validates canonical nonzero build/digest
+shapes without coupling them to the web release before accepting either success
+or error semantics. It rejects a missing identity.
+Unauthenticated responses disclose no release identity.
 Every credentialed Supabase request also rejects redirects so bearer, publishable,
 and service-role credentials cannot be forwarded to a second origin. The browser
 removes the obsolete local plaintext-password key before starting configuration or
@@ -100,6 +107,10 @@ after every environment is revision-aware.
 - `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py'`
   verifies compiler-service bounds, protocol, redaction, and supply-chain pins.
 
-No deployment command is run automatically outside an approved release workflow.
+Staging and production release workflows are manual-only and accept only the
+current commit on `main`. Production deliberately overlays the retained legacy
+Pages hostname with a `firelight.ie/*` Worker route so the Pages deployment and
+DNS record remain available during the rollback window. No deployment command is
+run automatically outside an explicitly confirmed, approved release workflow.
 See `docs/hardware-pipeline.md` and `docs/compiler-service.md` before promoting
 the hardware path or interpreting browser upload evidence.

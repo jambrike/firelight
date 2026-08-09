@@ -11,18 +11,20 @@ import {
 const GITHUB_TIMEOUT_MS = 15_000;
 const MAX_GITHUB_RESPONSE_BYTES = 1024 * 1024;
 const BUILD_SHA = /^[0-9a-f]{40}$/u;
+const POSITIVE_INTEGER = /^[1-9][0-9]{0,15}$/u;
 const REPOSITORY_SEGMENT = /^[A-Za-z0-9_.-]{1,100}$/u;
 const RELEASES = Object.freeze({
   staging: {
     workflow: "deploy-staging.yml",
     path: ".github/workflows/deploy-staging.yml",
     requiredBranch: "main",
-    events: new Set(["push", "workflow_dispatch"]),
+    events: new Set(["workflow_dispatch"]),
   },
   production: {
     workflow: "deploy-production.yml",
     path: ".github/workflows/deploy-production.yml",
-    events: new Set(["push", "workflow_dispatch"]),
+    requiredBranch: "main",
+    events: new Set(["workflow_dispatch"]),
   },
 });
 
@@ -91,6 +93,12 @@ export function parseReleaseRunEnvironment(environment) {
   if (release === undefined) fail("INVALID_FIRELIGHT_RELEASE_ENVIRONMENT");
   const buildId = requiredString(environment, "FIRELIGHT_RELEASE_BUILD_ID", 40);
   if (!BUILD_SHA.test(buildId)) fail("INVALID_FIRELIGHT_RELEASE_BUILD_ID");
+  const rawRunId = requiredString(environment, "FIRELIGHT_RELEASE_RUN_ID", 16);
+  if (!POSITIVE_INTEGER.test(rawRunId)) {
+    fail("INVALID_FIRELIGHT_RELEASE_RUN_ID");
+  }
+  const runId = Number(rawRunId);
+  if (!Number.isSafeInteger(runId)) fail("INVALID_FIRELIGHT_RELEASE_RUN_ID");
 
   return {
     apiUrl,
@@ -99,18 +107,13 @@ export function parseReleaseRunEnvironment(environment) {
     token,
     releaseEnvironment,
     buildId,
+    runId,
     release,
   };
 }
 
-export function buildReleaseRunsUrl(configuration) {
-  const url = new URL(
-    `${configuration.apiUrl}/repos/${encodeURIComponent(configuration.owner)}/${encodeURIComponent(configuration.repository)}/actions/workflows/${configuration.release.workflow}/runs`,
-  );
-  url.searchParams.set("status", "success");
-  url.searchParams.set("head_sha", configuration.buildId);
-  url.searchParams.set("per_page", "10");
-  return url.href;
+export function buildReleaseRunUrl(configuration) {
+  return `${configuration.apiUrl}/repos/${encodeURIComponent(configuration.owner)}/${encodeURIComponent(configuration.repository)}/actions/runs/${String(configuration.runId)}`;
 }
 
 function matchesReleaseRun(run, configuration) {
@@ -124,32 +127,24 @@ function matchesReleaseRun(run, configuration) {
     run.status === "completed" &&
     run.conclusion === "success" &&
     pathMatches &&
-    Number.isSafeInteger(run.id) &&
-    run.id > 0 &&
+    run.id === configuration.runId &&
     Number.isSafeInteger(run.run_attempt) &&
-    run.run_attempt > 0;
+    run.run_attempt > 0 &&
+    isRecord(run.repository) &&
+    run.repository.full_name ===
+      `${configuration.owner}/${configuration.repository}`;
 }
 
 export function parseReleaseRun(body, configuration) {
-  if (
-    !isRecord(body) ||
-    !Number.isSafeInteger(body.total_count) ||
-    body.total_count < 0 ||
-    !Array.isArray(body.workflow_runs) ||
-    body.workflow_runs.length > 10
-  ) {
-    fail("INVALID_GITHUB_RESPONSE");
+  if (!matchesReleaseRun(body, configuration)) {
+    fail("ACCEPTED_RELEASE_RUN_NOT_FOUND");
   }
-  const matches = body.workflow_runs.filter((run) =>
-    matchesReleaseRun(run, configuration)
-  );
-  if (matches.length < 1) fail("ACCEPTED_RELEASE_RUN_NOT_FOUND");
-  return { runId: matches[0].id, headSha: matches[0].head_sha };
+  return { runId: body.id, headSha: body.head_sha };
 }
 
 function githubErrorCode(response) {
   if (response.status === 401 || response.status === 403) return "GITHUB_AUTH_FAILED";
-  if (response.status === 404) return "GITHUB_WORKFLOW_NOT_FOUND";
+  if (response.status === 404) return "ACCEPTED_RELEASE_RUN_NOT_FOUND";
   if (response.status === 429) return "GITHUB_RATE_LIMITED";
   return "GITHUB_API_FAILED";
 }
@@ -157,7 +152,7 @@ function githubErrorCode(response) {
 export async function verifyReleaseRun(configuration, fetchImpl) {
   const { response, bytes } = await fetchBounded(
     fetchImpl,
-    buildReleaseRunsUrl(configuration),
+    buildReleaseRunUrl(configuration),
     {
       method: "GET",
       headers: {

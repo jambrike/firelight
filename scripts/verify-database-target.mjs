@@ -11,6 +11,7 @@ import {
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CONFIG_RESPONSE_BYTES = 128 * 1024;
+const MAX_LEGACY_ASSET_BYTES = 64 * 1024;
 const PROJECT_REF = /^[a-z0-9]{20}$/;
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
 const ENVIRONMENT_BASE_URLS = Object.freeze({
@@ -100,12 +101,40 @@ export function parseDatabaseTargetEnvironment(environment) {
     fail("INVALID_FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION");
   }
 
+  const legacyPagesEvidenceHash =
+    environment.FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH === ""
+      ? undefined
+      : environment.FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH;
+  const legacyAssetHash = environment.FIRELIGHT_LEGACY_ASSET_HASH === ""
+    ? undefined
+    : environment.FIRELIGHT_LEGACY_ASSET_HASH;
+  if (
+    (legacyPagesEvidenceHash === undefined) !== (legacyAssetHash === undefined) ||
+    (legacyPagesEvidenceHash !== undefined &&
+      (typeof legacyPagesEvidenceHash !== "string" ||
+        !LOWERCASE_SHA256.test(legacyPagesEvidenceHash))) ||
+    (legacyAssetHash !== undefined &&
+      (typeof legacyAssetHash !== "string" ||
+        !LOWERCASE_SHA256.test(legacyAssetHash)))
+  ) {
+    fail("INVALID_FIRELIGHT_LEGACY_PAGES_EVIDENCE");
+  }
+  if (
+    legacyPagesEvidenceHash !== undefined &&
+    (expectedEnvironment !== "production" || confirmation !== requiredConfirmation)
+  ) {
+    fail("LEGACY_PAGES_BOOTSTRAP_NOT_ALLOWED");
+  }
+
   return {
     baseUrl: baseUrl.origin,
     expectedEnvironment,
     projectRef,
     projectRefHash,
     bootstrapApproved: confirmation === requiredConfirmation,
+    ...(legacyPagesEvidenceHash === undefined
+      ? {}
+      : { legacyPagesEvidenceHash, legacyAssetHash }),
   };
 }
 
@@ -175,6 +204,42 @@ export async function verifyDatabaseTarget(configuration, fetchImpl) {
       return bootstrapResult(configuration, `HTTP_${String(response.status)}`);
     }
     fail("DEPLOYED_CONFIG_UNAVAILABLE");
+  }
+
+  if (configuration.legacyAssetHash !== undefined) {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (
+      response.status === 200 &&
+      /^text\/html(?:\s*;|$)/iu.test(contentType)
+    ) {
+      const { response: assetResponse, bytes: assetBytes } = await fetchBounded(
+        fetchImpl,
+        `${configuration.baseUrl}/favicon.svg`,
+        {
+          method: "GET",
+          headers: { Accept: "image/svg+xml" },
+        },
+        {
+          timeoutMs: REQUEST_TIMEOUT_MS,
+          maximumBytes: MAX_LEGACY_ASSET_BYTES,
+        },
+      );
+      const assetContentType = assetResponse.headers.get("content-type") ?? "";
+      const assetHash = createHash("sha256").update(assetBytes).digest("hex");
+      if (
+        assetResponse.status !== 200 ||
+        !/^image\/svg\+xml(?:\s*;|$)/iu.test(assetContentType) ||
+        assetHash !== configuration.legacyAssetHash
+      ) {
+        fail("LEGACY_PAGES_ASSET_MISMATCH");
+      }
+      return {
+        environment: configuration.expectedEnvironment,
+        projectRefHash: configuration.projectRefHash,
+        mode: "legacy-pages",
+        reason: "LEGACY_PAGES_MATCHED",
+      };
+    }
   }
 
   let body;

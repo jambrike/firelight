@@ -135,8 +135,11 @@ correlate rather than raising the fixed time or concurrency bounds.
 | Target 5xx | Internal compiler logs and stable error codes; never copy raw source or unsanitized diagnostics into the incident |
 | Public probe | Both status routes, environment/build identity, DNS/TLS, and the matching deployment record |
 
-If a release caused the incident, restore the last reviewed image digest and
-task definition through Terraform. Do not add a NAT route, public task address,
+If a release caused the incident, merge a reviewed revert or forward repair and
+run the protected compiler workflow through staging and production rather than
+attempting a local or arbitrary-digest Terraform apply. Retain the last reviewed
+image digest and task definition as incident evidence through the repair
+observation window. Do not add a NAT route, public task address,
 test endpoint, broader security-group rule, longer public deadline, or secret to
 the probe as a workaround. Preserve only redacted logs and AWS audit metadata.
 

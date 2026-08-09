@@ -19,6 +19,9 @@ class IsolationInfrastructureTests(unittest.TestCase):
         cls.network = read("network.tf")
         cls.iam = read("iam.tf")
         cls.monitoring = read("monitoring.tf")
+        cls.backend = read("backend.tf")
+        cls.release_gate = read("release-gate.tf")
+        cls.versions = read("versions.tf")
         cls.all_terraform = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted(TERRAFORM_ROOT.glob("*.tf"))
@@ -34,6 +37,14 @@ class IsolationInfrastructureTests(unittest.TestCase):
         self.assertIn('authorization_type = "NONE"', self.main_compact)
         self.assertIn("FIRELIGHT_COMPILER_SECRET_ARN", self.main)
         self.assertIn("FIRELIGHT_INTERNAL_COMPILER_URL", self.main)
+        for binding in (
+            "FIRELIGHT_COMPILER_BUILD_ID",
+            "FIRELIGHT_COMPILER_ENVIRONMENT",
+            "FIRELIGHT_COMPILER_IMAGE_DIGEST",
+            "FIRELIGHT_COMPILER_SERVICE_NAME",
+        ):
+            self.assertIn(binding, self.main)
+        self.assertIn("var.release_build_id", self.main)
         self.assertIn('CMD ["app.gateway_lambda_handler"]', self.dockerfile)
         self.assertIn(
             "COPY docker/verify_lesson_sketches.py",
@@ -51,6 +62,40 @@ class IsolationInfrastructureTests(unittest.TestCase):
             self.dockerfile,
         )
         self.assertIn('VOLUME ["/tmp"]', self.dockerfile)
+
+    def test_ecr_lifecycle_never_expires_tagged_release_or_rollback_images(self):
+        self.assertIn('tagStatus   = "untagged"', self.main)
+        self.assertIn('countType   = "sinceImagePushed"', self.main)
+        self.assertIn('countUnit   = "days"', self.main)
+        self.assertIn("countNumber = 30", self.main)
+        self.assertNotIn('tagStatus   = "any"', self.main)
+        self.assertNotIn('countType   = "imageCountMoreThan"', self.main)
+
+    def test_lambda_ecr_access_is_exact_and_release_gated(self):
+        policy_document = self.main.split(
+            'data "aws_iam_policy_document" "compiler_ecr_lambda"', 1
+        )[1].split('resource "aws_ecr_repository_policy" "compiler_lambda"', 1)[0]
+        policy_resource = self.main.split(
+            'resource "aws_ecr_repository_policy" "compiler_lambda"', 1
+        )[1].split('resource "aws_ecr_lifecycle_policy" "compiler"', 1)[0]
+        lambda_resource = self.main.split(
+            'resource "aws_lambda_function" "gateway"', 1
+        )[1].split('resource "aws_lambda_alias" "live"', 1)[0]
+
+        self.assertIn('sid    = "LambdaECRImageRetrievalPolicy"', policy_document)
+        self.assertIn('identifiers = ["lambda.amazonaws.com"]', policy_document)
+        self.assertIn('"ecr:BatchGetImage"', policy_document)
+        self.assertIn('"ecr:GetDownloadUrlForLayer"', policy_document)
+        self.assertIn('variable = "aws:SourceAccount"', policy_document)
+        self.assertIn('values   = [var.aws_account_id]', policy_document)
+        self.assertIn('test     = "ArnEquals"', policy_document)
+        self.assertIn('variable = "aws:SourceArn"', policy_document)
+        self.assertIn(
+            'arn:aws:lambda:eu-west-1:${var.aws_account_id}:function:${var.service_name}-gateway',
+            policy_document,
+        )
+        self.assertIn('depends_on = [terraform_data.release_gate]', policy_resource)
+        self.assertIn('aws_ecr_repository_policy.compiler_lambda', lambda_resource)
 
     def test_fargate_task_has_no_role_credentials_or_application_secrets(self):
         self.assertNotIn("task_role_arn", self.all_terraform)
@@ -82,6 +127,45 @@ class IsolationInfrastructureTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 self.assertIn(f'resource "aws_vpc_endpoint" "{endpoint}"', self.network)
 
+    def test_remote_state_and_environment_account_gates_are_mandatory(self):
+        compact_backend = " ".join(self.backend.split())
+        compact_gate = " ".join(self.release_gate.split())
+        compact_versions = " ".join(self.versions.split())
+        self.assertIn('backend "s3" {}', compact_backend)
+        self.assertIn("allowed_account_ids = [var.aws_account_id]", compact_versions)
+        self.assertIn("Environment = var.environment", compact_versions)
+        self.assertIn('resource "terraform_data" "operator_gate"', self.release_gate)
+        self.assertIn("data.aws_caller_identity.current.arn", self.release_gate)
+        self.assertIn("assumed-role/${var.deployment_role_name}", self.release_gate)
+        self.assertIn("var.service_name == local.expected_service_name", self.release_gate)
+        self.assertIn("account root and IAM users are forbidden", self.release_gate)
+        self.assertIn('resource "terraform_data" "release_gate"', self.release_gate)
+        self.assertIn(
+            'ecr_bootstrap_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"',
+            self.release_gate,
+        )
+        self.assertIn(
+            "var.image_digest != local.ecr_bootstrap_image_digest",
+            self.release_gate,
+        )
+        self.assertIn("registry-reported immutable image digest", self.release_gate)
+        self.assertIn("depends_on = [terraform_data.operator_gate]", compact_gate)
+        self.assertIn("depends_on = [terraform_data.operator_gate]", self.main_compact)
+        self.assertIn("depends_on = [terraform_data.release_gate]", self.network_compact)
+        for source, resource in (
+            (self.main, 'resource "aws_cloudwatch_log_group" "gateway"'),
+            (self.main, 'resource "aws_cloudwatch_log_group" "compiler"'),
+            (self.main, 'resource "aws_ecs_cluster" "compiler"'),
+            (self.iam, 'resource "aws_iam_role" "gateway"'),
+            (self.iam, 'resource "aws_iam_role" "ecs_execution"'),
+            (self.monitoring, 'resource "aws_kms_key" "compiler_alerts"'),
+        ):
+            with self.subTest(gated_root=resource):
+                block = source.split(resource, 1)[1].split("\n}", 1)[0]
+                self.assertIn("depends_on = [terraform_data.release_gate]", block)
+        self.assertIn('cidrnetmask(var.vpc_cidr) == "255.255.240.0"', self.all_terraform)
+        self.assertIn("condition     = var.enable_deletion_protection", self.all_terraform)
+
     def test_security_groups_encode_gateway_to_alb_to_task_only(self):
         self.assertIn(
             "referenced_security_group_id = aws_security_group.gateway.id",
@@ -109,6 +193,13 @@ class IsolationInfrastructureTests(unittest.TestCase):
         self.assertIn("enable_key_rotation = true", self.monitoring_compact)
         self.assertIn("deletion_window_in_days = 30", self.monitoring_compact)
         self.assertIn('identifiers = ["cloudwatch.amazonaws.com"]', self.monitoring_compact)
+        self.assertIn('identifiers = ["sns.amazonaws.com"]', self.monitoring_compact)
+        self.assertIn('sid = "AllowExactSnsTopicEncryption"', self.monitoring_compact)
+        self.assertIn(
+            'variable = "kms:EncryptionContext:aws:sns:topicArn"',
+            self.monitoring_compact,
+        )
+        self.assertIn("values = [local.compiler_alert_topic_arn]", self.monitoring_compact)
         self.assertIn('"kms:GenerateDataKey*"', self.monitoring)
         self.assertIn('"kms:Decrypt"', self.monitoring)
         self.assertIn('resource "aws_sns_topic_policy" "compiler_alerts"', self.monitoring)

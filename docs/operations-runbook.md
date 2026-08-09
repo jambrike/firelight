@@ -17,16 +17,17 @@ Staging and production must never share an identity store, kit-code pepper,
 compiler credential, database password, deployment approval, or mutable
 infrastructure state.
 
-| Boundary | Staging | Production |
-| --- | --- | --- |
-| Cloudflare Worker | `firelight-staging` | `firelight-production` |
-| Public host | `staging.firelight.ie` | `firelight.ie` |
-| Runtime variable | `ENVIRONMENT=staging` | `ENVIRONMENT=production` |
-| GitHub release environment | `staging` | `production` |
-| GitHub preview environment | not separate | `production-preview` |
-| First-deploy approval environment | `staging-database-bootstrap` | `production-database-bootstrap` |
-| Supabase | dedicated `eu-west-1` project | separate dedicated `eu-west-1` project |
-| AWS compiler | dedicated state, VPC, ECR, service, and secret | separate dedicated state, VPC, ECR, service, and secret |
+| Boundary                          | Staging                                        | Production                                              |
+| --------------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
+| Cloudflare Worker                 | `firelight-staging`                            | `firelight-production`                                  |
+| Public host                       | `staging.firelight.ie`                         | `firelight.ie`                                          |
+| Cloudflare route                  | Worker Custom Domain                           | `firelight.ie/*` route over retained Pages DNS          |
+| Runtime variable                  | `ENVIRONMENT=staging`                          | `ENVIRONMENT=production`                                |
+| GitHub release environment        | `staging`                                      | `production`                                            |
+| GitHub preview environment        | not separate                                   | `production-preview`                                    |
+| First-deploy approval environment | `staging-database-bootstrap`                   | `production-database-bootstrap`                         |
+| Supabase                          | dedicated `eu-west-1` project                  | separate dedicated `eu-west-1` project                  |
+| AWS compiler                      | dedicated state, VPC, ECR, service, and secret | separate dedicated state, VPC, ECR, service, and secret |
 
 The top-level Wrangler configuration is development-only. Named Wrangler
 environments repeat their variables and required secret names because those
@@ -46,6 +47,12 @@ token to the intended organization/projects, and any AWS identity to the
 compiler stack in `eu-west-1`. Prefer short-lived GitHub OIDC or operator
 sessions over long-lived AWS access keys.
 
+Both release workflows are manual-only. A push, merge, or tag cannot start a
+deployment. The operator must dispatch the workflow from `main` and type the
+environment's exact release confirmation before CI or a protected environment
+can be reached. The complete provider-console checklist is
+[`DEPLOYMENT_READINESS.md`](../.github/DEPLOYMENT_READINESS.md).
+
 ## Secret inventory
 
 Secret values are set separately in each environment and never committed. The
@@ -57,6 +64,7 @@ The `staging` and `production` release environments require:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_ZONE_ID` (production Pages/route proof)
 - `SUPABASE_ACCESS_TOKEN`
 - `SUPABASE_DB_PASSWORD`
 - `SUPABASE_PROJECT_REF`
@@ -64,9 +72,18 @@ The `staging` and `production` release environments require:
 - `SUPABASE_PROJECT_NAME`
 - `FIRELIGHT_CANARY_EMAIL`
 - `FIRELIGHT_CANARY_PASSWORD`
+- `FIRELIGHT_CANARY_USER_ID`
+- `FIRELIGHT_SUPPORT_ADMIN_USER_ID`
+- `FIRELIGHT_SUPPORT_ADMIN_EMAIL`
+- `FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME`
+- `FIRELIGHT_EXPECTED_SMTP_HOST`
+- `FIRELIGHT_EXPECTED_SMTP_PORT`
+- `FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL`
+- `FIRELIGHT_EXPECTED_SMTP_USER`
 
-The first three credentials must be scoped to automation rather than a personal
-administrator account where the provider supports it. The project reference is
+The Cloudflare token must be non-personal and limited to Workers Scripts Write,
+Workers Routes Write, Zone Read, and Pages Read for the intended account/zone.
+The Supabase access token must likewise be scoped to automation. The project reference is
 an identifier, but it remains in the encrypted environment inventory to avoid
 accidental cross-environment links. The canary credentials belong to one
 confirmed, activated, non-admin account created only for release verification;
@@ -75,23 +92,52 @@ one of that account's compile attempts, so monitor its bounded hourly/daily quot
 and never use it for ordinary testing. Do not make environment secrets available
 to pull-request jobs.
 
-`production-preview` contains only `SUPABASE_ACCESS_TOKEN`,
+`production-preview` contains `SUPABASE_ACCESS_TOKEN`,
 `SUPABASE_DB_PASSWORD`, `SUPABASE_PROJECT_REF`, `SUPABASE_ORGANIZATION_ID`, and
-`SUPABASE_PROJECT_NAME`, scoped to the production project. It has no Cloudflare,
-compiler, service-role, pepper, or canary secret. Before linking, the workflow
+`SUPABASE_PROJECT_NAME`, plus the four non-password hosted SMTP expectation
+values, scoped to the production project. It has no Cloudflare, compiler,
+service-role, pepper, or canary credential. Before linking, the workflow
 uses the bounded Supabase Management API to require that protected ref,
 organization, name, `eu-west-1` region, and database hostname. It then records a
-SHA-256 identity value and the current remote migration-history fingerprint for
-the later production approval without exposing their plaintext values.
+domain-separated SHA-256 composite project identity, a separate domain-separated
+ref-only project identity, and an organization-boundary value plus the current
+remote migration-history fingerprint for the later production approval without
+exposing their plaintext values. The composite identity detects metadata drift;
+the ref-only identity is the rename-stable peer-collision key.
+
+The authoritative logical labels live in the reviewed canonical
+`.github/supabase-project-anchors.json`, not in any environment-scoped value.
+Its organization and staging placeholders intentionally make the strict
+no-environment anchor job fail until a second project exists and the real safe
+fingerprints are committed. Staging opens `production-preview` read-only and
+proves that peer against the production anchor before any staging mutation;
+production binds accepted staging evidence back to the staging anchor before
+opening a link. A complete staging/production secret swap therefore fails even
+though the two raw projects remain distinct.
 
 `staging-database-bootstrap` contains the staging `SUPABASE_ACCESS_TOKEN`,
 `SUPABASE_PROJECT_REF`, `SUPABASE_ORGANIZATION_ID`, and
-`SUPABASE_PROJECT_NAME`. `production-database-bootstrap` contains all five
-Supabase preview values above. Protect each with a required reviewer who checks
+`SUPABASE_PROJECT_NAME` and hosted SMTP expectations.
+`production-database-bootstrap` contains the production preview values plus the
+Cloudflare token/account/zone identifiers needed for the retained Pages proof.
+Protect each with a required reviewer who checks
 the target project in the provider console. These environments are not a general
 bypass: the Management API identity proof remains mandatory and a well-formed
 deployed `/api/config` that names any different Supabase project fails even after
 bootstrap approval.
+
+Create `staging-auth-config` and `production-auth-config` as separately reviewed
+environments containing the Supabase project identity, hosted SMTP expectations,
+and `SUPABASE_SMTP_PASSWORD`. Only the manual **Configure Supabase Auth**
+workflow can use that password after its exact `APPLY_*_AUTH_CONFIG`
+confirmation. Every dispatch first snapshots both protected Auth projects,
+requires each snapshot to match its own source-pinned logical label and the
+shared organization, then rechecks the selected snapshot and canonical peer
+immediately before mutation. Routine releases only read and hash hosted
+settings. Create `staging-worker-bootstrap` for the first staging Worker and all
+nine runtime bindings. Do not pre-create a partial Worker: the bootstrap job proves absence,
+uploads secrets with the first version, removes its owner-only temporary file,
+and verifies the remote secret names.
 
 ### Worker runtime secrets
 
@@ -112,9 +158,24 @@ browser by `/api/config`; they are configuration, not authorization secrets. The
 remain Worker bindings so one bundle can be promoted without rebuilding against
 the wrong project. The project reference pins the hosted Supabase hostname. The
 compiler origin and hostname independently pin the `eu-west-1` Lambda Function
-URL. Readiness fails closed if these values disagree. The service-role key,
-pepper, compiler URL, and compiler token must never enter a `VITE_*` variable,
-browser response, log, ticket, or screenshot.
+URL. Readiness fails closed if any binding is missing or malformed. Compiler
+responses must carry the exact environment, canonical service, and protocol
+version plus canonical nonzero compiler build and digest values; compiler release
+probes separately match the build and digest to the deployed AWS release. Every
+Worker deployment carries the complete nine-binding file atomically. The
+service-role key, pepper, compiler URL, and compiler token must never enter a
+`VITE_*` variable, browser response, log, ticket, or screenshot.
+
+The protected `staging-worker-bootstrap`, `staging`, and `production`
+environments also hold `COMPILER_SERVICE_BUILD_ID` and
+`COMPILER_SERVICE_IMAGE_DIGEST` as release-only compiler acceptance metadata.
+They are supplied to the authenticated compiler probe and retained in accepted
+release evidence, but are deliberately excluded from Wrangler's runtime secret
+file. Before database mutation, each web workflow performs bounded direct reads
+with the prospective Supabase publishable and service-role credentials, checks
+the URL/ref and pepper contract, and compiles the source-pinned First Spark
+fixture through the protected compiler. The compiler probe repeats after
+database acceptance immediately before Worker deployment.
 
 List names without values with:
 
@@ -124,7 +185,7 @@ npx wrangler secret list --env production --format json
 ```
 
 The release workflows run the repository's secret-inventory verifier before a
-migration. Set or rotate a Worker secret through Wrangler's interactive prompt,
+Worker release. Set or rotate an existing Worker secret through Wrangler's interactive prompt,
 for example `npx wrangler secret put KIT_CODE_PEPPER --env staging`; never pass a
 secret value as a command argument or through `echo`.
 
@@ -137,10 +198,42 @@ the secret uses a customer-managed KMS key, keep its key ARN in the reviewed
 Terraform input and restrict decrypt permission to the gateway role. Treat the
 sensitive Function URL output as the corresponding Worker secret.
 
+Create protected `compiler-staging` and `compiler-production` GitHub
+environments for the manual **Deploy compiler** workflow. Each holds the exact
+environment variables `AWS_ACCOUNT_ID`, `AWS_DEPLOY_ROLE_ARN`,
+`FIRELIGHT_TERRAFORM_STATE_BUCKET`,
+`FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN`,
+`FIRELIGHT_COMPILER_AUTH_SECRET_ARN`, `FIRELIGHT_COMPILER_VPC_CIDR`, and the
+optional `FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN`, plus only the encrypted
+`COMPILER_SERVICE_TOKEN`. The jobs reject ambient access keys and account root,
+assume the canonical environment role through GitHub OIDC, and independently
+approve the saved ECR-bootstrap and full infrastructure plans. See
+`docs/backend-release-readiness.md` for the exact role, state, and policy
+contract.
+
 Supabase owns the hosted database password, access token, service-role key, and
 SMTP credentials. Configure Auth redirect origins, email confirmation, recovery
 templates, and SMTP separately for each project. Keep provider recovery codes and
 break-glass credentials in the approved organizational vault, not GitHub.
+
+Hosted Auth mutation is not part of routine deployment. Dispatch **Configure
+Supabase Auth** from `main`, select one environment, type its exact
+`APPLY_*_AUTH_CONFIG` confirmation, and approve the dedicated Auth-config
+environment. The job PATCHes the versioned settings and templates only after
+read-only staging and production snapshots prove their canonical labels, the
+same organization, and distinct ref-only project identities. It rechecks the
+selected composite, organization, and ref-only snapshot immediately before
+PATCH, then reads them back and emits only a non-secret hash. Every
+release independently rechecks that hashable contract, including the exact SMTP
+user; it never receives `SUPABASE_SMTP_PASSWORD`.
+
+Pin one confirmed canary Auth UUID/email and one distinct confirmed support-admin
+UUID/email/display name per environment. Routine releases prove Auth identity,
+learner activation, support role, and database state before publishing a Worker.
+On the first schema release only, the optional
+`BOOTSTRAP_*_RELEASE_PRINCIPALS` confirmation runs after migrations and linked
+pgTAP, promotes only that pinned support profile, and immediately reruns the
+normal verifier. It is not a general role-edit facility.
 
 ## Secret rotation
 
@@ -211,14 +304,24 @@ Before any hosted release:
 
 ### Staging
 
-A merge to `main` invokes `.github/workflows/deploy-staging.yml`. Before any
+Manually invoke `.github/workflows/deploy-staging.yml` from `main` and type
+`DEPLOY_STAGING`. On the first release also type `BOOTSTRAP_STAGING_WORKER`;
+the separately approved bootstrap job requires the Worker to be absent, uploads
+all protected bindings with its first version, creates the Custom Domain, removes
+the temporary owner-only secret file, and proves the exact build is reachable.
+Before any
 `supabase db push`, a bounded probe of canonical
 `https://staging.firelight.ie/api/config` must report exactly
 `https://<staging-project-ref>.supabase.co`, and a separate Management API proof
 must match the protected project ref, organization, name, region, and database
-host. The migration job rechecks those identities before linking the database.
+host. A separately protected, read-only `production-preview` snapshot must also
+match the source-pinned production label while staging matches its own anchor.
+The migration job rechecks those identities and the canonical peer before
+linking the database.
 After the configured `staging` environment approval, it builds, verifies Worker
-secret names, previews and applies migrations, deploys the staging Worker/assets with
+secret names, proves the prospective Supabase bindings and current authenticated
+compiler with a real First Spark compile, previews and applies migrations,
+repeats the compiler proof, deploys the staging Worker/assets with
 the commit SHA in the `BUILD_ID` binding and Cloudflare version metadata, and
 probes health, readiness, public config, an authenticated bootstrap, and one
 controlled First Spark compile. The canary requires the exact environment,
@@ -230,18 +333,23 @@ idempotent finalizer through an exact bounded Supabase Management API query. It
 then runs the complete canary a second time against the contracted boundary.
 Only after both proofs succeed does the workflow capture the exact 100%
 Cloudflare deployment/version/build tuple and retain it as a 90-day immutable
-workflow artifact.
+workflow artifact. It also re-proves the current protected Supabase snapshot,
+captures a versioned staging web promotion artifact bound to the canonical
+repository, workflow, exact commit, run, attempt, composite project snapshot,
+ref-only project identity, and organization boundary, and prints the exact run
+ID/evidence SHA-256 pair needed by production.
 
-There is one explicit first-deploy path when no valid `/api/config` exists. Run
-the staging workflow manually and type `BOOTSTRAP_STAGING_DATABASE`. The target
-job enters the separately protected `staging-database-bootstrap` environment;
-after its reviewer confirms the project in Supabase, it may accept an absent
-endpoint only when the canonical config request returns HTTP 404 or 410. Network
-failures, malformed/non-Firelight responses, redirects, 5xx responses, and a
-valid config naming another project all fail closed. The target job does not
-apply a migration. The normal `staging` environment must then be approved
-independently before the migration job can repeat the proof and continue. Do not use this confirmation
-for an outage or routine release.
+For the first database-bound release, also type `BOOTSTRAP_STAGING_DATABASE` so
+the target proof enters the separately protected
+`staging-database-bootstrap` environment. After the first Worker bootstrap, its
+canonical `/api/config` must name the exact protected project. The verifier's
+absence-only fallback accepts only HTTP 404/410 under this explicit approval;
+network failures, redirects, malformed content, 5xx responses, and a valid
+config naming another project fail closed. The normal `staging` environment is
+approved independently before migrations. If the pinned roles still need their
+one-time database state, also type
+`BOOTSTRAP_STAGING_RELEASE_PRINCIPALS`; never use any bootstrap confirmation for
+an outage or routine release.
 
 Run fresh-account, activation, progress, admin-denial, admin support, account
 deletion, compile failure, compile success, serial disconnect/reconnect, and
@@ -250,11 +358,19 @@ not sufficient; it checks required bindings, not Supabase or AWS reachability.
 
 ### Production
 
-Production is invoked by an approved `v*` tag or manual dispatch. The workflow
-requires its commit to be on `main`, reruns CI, and fails closed unless GitHub has
-a successful staging deployment run whose `head_sha` is the exact release commit.
+Production is invoked only by a manual dispatch from `main`. Type both
+`DEPLOY_PRODUCTION` and `CUTOVER_FIRELIGHT_IE_TO_WORKER`, and copy the exact
+`staging_run_id` and `staging_evidence_sha256` from the accepted staging run
+summary. The workflow requires its commit to be on `main`, reruns CI, verifies
+that explicit successful exact-commit staging run, downloads only its
+run-and-attempt-specific artifact, and validates the canonical evidence JSON and
+hash. It does not select a mutable "latest successful" run.
 A separate `preview-production-migrations` job enters `production-preview`,
-proves the protected Management API project identity and currently deployed
+first requires accepted evidence to match the source-pinned staging label, then
+proves that the protected Management API project matches the source-pinned
+production label, differs from staging, and shares the protected organization
+boundary. It separately freezes the composite project snapshot. It then proves
+the deployed
 `/api/config` project, links that exact project, fingerprints its remote migration
 history, runs `supabase db push --dry-run`, and records the release SHA, Git
 migration-tree hash, project identity, and migration-state hashes as job
@@ -272,12 +388,53 @@ production canary against the contracted state. Only the twice-proved release is
 followed by the same exact Cloudflare release-tuple artifact used for rollback
 eligibility.
 
+Before any production database or role mutation, the protected job also proves
+that the Worker target is absent only under the explicit bootstrap confirmation
+or already exists for a routine release, and validates the complete first-version
+binding file or existing remote secret inventory. It repeats the target proof
+immediately before deployment to close the approval-to-cutover race. It also
+validates the prospective Supabase credentials/pepper and compiles First Spark
+through the exact protected compiler before migration, then repeats that
+compiler probe immediately before traffic cutover.
+
+Both preview and protected apply re-fetch the production Management API project
+snapshot immediately before their Supabase link. The protected job repeats the
+same composite/ref-only/organization peer-isolation proof immediately before
+either Worker deploy path. Project renames cannot change the ref-only collision
+result. If staging and production secrets ever resolve to the same hosted
+project, all production paths fail before link, preview, migration, or cutover.
+
+Staging applies the same ordering: whether the Worker was just bootstrapped or
+already existed, the protected staging job proves the target and complete secret
+inventory before migrations, then repeats the target proof immediately before
+the routine Worker release.
+
+The production Wrangler environment intentionally configures a zone route for
+`firelight.ie/*`, not a Worker Custom Domain. The existing legacy Pages custom
+domain owns the proxied DNS record and remains the rollback origin. The Worker
+route takes precedence only after the approved deploy; it does not replace that
+record or require the Pages project to be deleted. Immediately before approval,
+the workflow proves the retained direct-upload project, active custom domain,
+production deployment UUID, full commit SHA, and exact immutable favicon bytes.
+The deployment UUID, commit, and evidence hash are pinned in the reviewed
+workflow source and rechecked on every production release; the dispatcher cannot
+substitute a different fallback. Accepting a newer Pages fallback first requires
+a reviewed code change. If the cutover must be abandoned, dispatch **Restore
+production Pages** with the current Worker version/build. It proves the Worker
+is the current 100% deployment and that exactly one route points to it, deletes
+only `firelight.ie/*`, then proves the source-pinned Pages asset and HTML fallback
+own traffic. Do not remove the Pages custom domain or delete its project during
+the pilot observation window.
+
 For the first production database-bound deployment only, manually type
 `BOOTSTRAP_PRODUCTION_DATABASE`. The preview then enters the separately protected
 `production-database-bootstrap` environment instead of `production-preview` and
-uses the same absence-only bootstrap rules as staging. The later `production`
-approval remains mandatory. A live config naming a different project is never
-overridden, and a 5xx response is not treated as an uninitialized endpoint.
+requires the retained Pages proof before accepting its legacy HTML
+`/api/config`: the public immutable asset must byte-match the pinned Pages
+deployment. The later `production` approval repeats the same proof. A live JSON
+config naming a different project, changed asset, redirect, network failure, or
+5xx response is never overridden. On the first principal setup, also type
+`BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS`.
 
 Do not bypass the workflow with a local `wrangler deploy`, `supabase db push`, or
 Terraform apply. Record the GitHub run, migration list, deployed Worker version,
@@ -345,30 +502,103 @@ migration unapplied, and never issue ad-hoc grants in the SQL editor.
 
 ## Compiler image and infrastructure rollout
 
-The AWS compiler is deliberately outside the web deployment workflows. Release
-it separately under AWS and security approval:
+The AWS compiler is deliberately outside the web deployment workflows. Dispatch
+the manual **Deploy compiler** workflow from the current `main` commit, enter
+`DEPLOY_STAGING_COMPILER` or `DEPLOY_PRODUCTION_COMPILER`, and release it under
+the matching AWS and security approvals. Staging leaves `staging_run_id` and
+`staging_evidence_sha256` empty. After its live First Spark probe succeeds, copy
+the run ID and evidence JSON SHA-256 from the accepted staging summary.
+Production requires those exact two values and the same current `main` commit;
+it rejects a missing, expired, failed, cross-commit, or altered staging artifact
+before assuming an AWS role. The evidence also binds domain-separated
+fingerprints of the accepted staging AWS account, state location/KMS key, auth
+secret, and fixed `10.42.0.0/20` VPC. Production must use the same AWS account,
+a distinct state/secret, and the fixed `10.43.0.0/20` VPC. Its current protected
+inputs are materialized before AWS access and the resulting safe snapshot is
+rechecked by every saved-plan job before Terraform initialization:
 
-1. Run the Python, Terraform, and supply-chain tests. Build the pinned
-   `linux/amd64` image, inspect embedded Arduino CLI/core/Servo versions, run an
-   exact-target smoke compile, and scan the image.
-2. Push to the target environment's immutable ECR repository and obtain the
-   registry-reported `sha256` digest. Never deploy `latest` or a mutable tag.
+1. Run the Python, Terraform, and supply-chain tests. If the current commit does
+   not already have an immutable environment-local ECR tag, build the pinned
+   `linux/amd64` image and inspect the embedded Arduino CLI/core/Servo versions.
+   An existing canonical tag is reused without rebuilding. In both cases, pull
+   the exact registry digest, run an exact-target smoke compile, and recheck its
+   scan gate.
+2. For an absent repository or an interrupted partial bootstrap, also enter the
+   environment's exact `BOOTSTRAP_*_COMPILER_ECR` confirmation. A protected
+   targeted saved plan may contain only unique `create` or `no-op` actions for
+   the immutable ECR repository, lifecycle policy, and operator identity gate;
+   any other address, update, destroy, replacement, or read fails. If an apply is
+   interrupted after Terraform persists only part of the state, start a new
+   dispatch with the same bootstrap confirmation. The new run/attempt produces a
+   fresh reviewed plan for only the missing subset. A post-apply targeted plan
+   must then prove all three resources present with zero drift. Its binary,
+   review text, and hash-bound manifest use only
+   create-if-absent keys under
+   `firelight/compiler/<environment>/saved-plans/<run-id>/<run-attempt>/ecr-bootstrap`
+   in the protected state bucket. Every object explicitly uses the state KMS key,
+   and the apply job downloads and verifies that exact manifest and its hashes
+   only after OIDC, then reads the exact verified S3 versions; GitHub artifacts
+   never carry the Terraform files. The normal
+   staging release pushes a unique immutable candidate. Production copies the
+   accepted staging digest with
+   `skopeo copy --preserve-digests`; it must fail if ECR does not report that
+   identical destination digest. The workflow pulls and tests the exact registry
+   image and clears its HIGH/CRITICAL scan before binding the canonical commit
+   tag with the candidate's exact `BatchGetImage` manifest and `PutImage`. It
+   never performs a second Docker push for that tag. Never deploy `latest` or a
+   mutable tag.
+   Before a production bootstrap plan initializes state, the production role
+   must read the accepted digest and canonical commit tag from the fixed staging
+   repository. This proves the same-account staging read path before any
+   bootstrap apply can write.
 3. Put only that digest in the environment's Terraform input. Review a saved plan
    for the no-NAT VPC, private tasks, absent task role/secrets/public IP, bounded
-   gateway, exact IAM/endpoint/security-group rules, and expected cost.
+   gateway, exact IAM/endpoint/security-group rules, and expected cost. The full
+   plan uses the corresponding `.../<run-id>/<run-attempt>/full` state-bucket prefix,
+   conditional writes, SSE-KMS, and a manifest uploaded last. After OIDC, apply
+   re-derives every key and verifies encryption metadata, object sizes, manifest,
+   and hashes before consuming the saved plan. Terraform plan/apply stdout and
+   stderr remain only in mode-`0600` runner files and are never replayed into
+   Actions logs; the separately rendered review text is the only human-readable
+   plan sent through the protected S3 handoff. Generated backend and tfvars files
+   remain runner-local and are never artifacts.
 4. Apply staging first. Wait for ECS desired/running counts and all ALB targets to
    become healthy; the ECS deployment circuit breaker must remain enabled.
-5. Probe unauthorized, authorized, invalid-source, compile-error, timeout/busy,
-   and valid Nano artifact paths. Then exercise the Worker compile proxy.
-6. Promote the identical reviewed image content to production by immutable digest
-   and repeat the plan, health, and protocol checks before web release approval.
+5. Before any ECR mutation and immediately before both the bootstrap and full
+   Terraform applies, read only the protected AWS compiler secret and compare it
+   with the GitHub environment token using `hmac.compare_digest`; stop without
+   writing when parity fails. In the full apply job, run `npm ci` and export the
+   fixed lesson fixture before OIDC or either token is available. Require the deployed ECS tasks and Lambda version to resolve the approved
+   digest, the `live` alias to target that immutable Lambda version, all internal
+   ALB targets to be healthy, and the alias-qualified Function URL policy to
+   contain only the provider-managed public URL invocation and URL-scoped Lambda
+   invocation grants. Require the protected token to equal the AWS secret. The
+   authenticated gateway GET and compile response must report the exact
+   environment, canonical service name, protocol version 1, release commit, and
+   registry digest; the unauthenticated response must disclose no identity. Then
+   require a real First Spark Nano compilation and exercise the Worker compile proxy, which
+   fails closed on identity drift for successful and error responses alike.
+6. The staging acceptance artifact binds the successful workflow run, commit,
+   registry digest, and safe isolation fingerprints for 30 days. Production
+   must prove that exact artifact,
+   read that digest from the fixed `firelight-compiler-stg` repository using
+   narrowly scoped read-only ECR permission in the same reviewed AWS account,
+   and copy it into the production candidate with Skopeo digest preservation. It
+   does not rebuild the promotion image. Production requires the candidate
+   digest to equal staging before it may bind the production commit tag from the
+   same manifest. Repeat the plan, health, and protocol checks before web release
+   approval.
 
 Keep the previous reviewed digest and Lambda version until the observation window
-closes. For a bad image, restore the previous digest through a reviewed Terraform
-plan/apply; verify ECS target health, publish or select the matching gateway
-version, and validate the `live` alias. Do not add a NAT route, public task IP, or
-broad IAM rule to work around an outage. The web Worker rollback workflow does
-not roll back ECS, Lambda, Terraform, or Supabase.
+closes as recovery evidence. For a bad image, merge a reviewed revert or forward
+repair to `main`, then run the normal protected compiler workflow through staging
+acceptance and exact-digest production promotion. This is the only automated AWS
+recovery path: there is deliberately no local Terraform apply or unverified
+previous-digest input. Verify ECS target health, the new immutable gateway
+version, the `live` alias, token parity, and the live compile probe before closing
+the incident. Do not add a NAT route, public task IP, or broad IAM rule to work
+around an outage. The web Worker rollback workflow does not roll back ECS,
+Lambda, Terraform, or Supabase.
 
 ## Monitoring and alerts
 
@@ -509,9 +739,11 @@ At least quarterly and before the first pilot:
    timing, evidence, gaps, and remediation without exporting row contents.
 
 Also retain the previous verified Cloudflare Worker version and compiler digest.
-ECR keeps a bounded image history, but that is not a database backup. Protect and
-back up Terraform state using the approved encrypted remote backend with locking;
-never commit state or copy sensitive outputs into the repository.
+ECR expires only abandoned untagged manifests; immutable candidate and commit
+tags are retained so the running and accepted rollback digests cannot be removed
+by count-based lifecycle churn. That image history is not a database backup.
+Protect and back up Terraform state using the approved encrypted remote backend
+with locking; never commit state or copy sensitive outputs into the repository.
 
 ## Incident triage and rollback
 
@@ -525,26 +757,41 @@ never commit state or copy sensitive outputs into the repository.
    and preserve redacted evidence. Do not expose internal services to recover.
 4. If the Worker is faulty and the current schema is backward compatible, list
    versions, select a previously verified ID, and invoke
-   `.github/workflows/rollback-worker.yml`. Choose the environment, enter the
-   version ID and its expected lowercase commit SHA, type `ROLLBACK`, obtain that
+   `.github/workflows/rollback-worker.yml` from `main`. The workflow pins its
+   implementation to the exact dispatched commit before approval-gated tools or
+   dependencies run. Choose the environment, enter the
+   version ID, its expected lowercase commit SHA, and the exact accepted release
+   run ID retained from that release's summary, type `ROLLBACK`, obtain that
    environment's approval, and require the complete identity/compiler canary to
    match that build before declaring recovery. Before mutation, the workflow
-   requires the entered SHA to be a commit on `main`, finds the exact successful
-   environment release run, downloads its immutable release-evidence artifact,
+   requires the entered SHA to be a commit on `main`, fetches and verifies that
+   explicitly selected successful environment release run, downloads its
+   immutable release-evidence artifact,
    and binds the selected version to that artifact's account, Worker, environment,
-   build, deployment, and version IDs. It then checks Cloudflare's deployable
-   inventory, version metadata/bindings, and deployment history to prove that
-   version was previously deployed alone at 100%. The accepted commit is checked
-   out separately so the post-rollback canary compiles that release's First Spark
-   content, not the current branch's lesson. Evidence is retained for 90 days;
+   build, deployment, and version IDs. Version 3 evidence also requires the
+   current source-pinned anchor set, selected Supabase project-ref/organization
+   identities, compiler connection fingerprint, and compiler protocol to match
+   the accepted release. The compiler build and image digest recorded by that
+   older release remain audit metadata: they need only be canonical and are not
+   required to equal the compiler currently deployed in AWS. Instead, the
+   workflow authenticates to the current compiler and directly proves its exact
+   protected build, digest, environment, service, protocol, and a real compile,
+   then rechecks the selected Supabase composite identity and source-pinned peer
+   isolation immediately before `wrangler rollback`. Any mismatch fails before
+   traffic changes, and only safe codes and non-secret hashes are printed. It
+   then checks Cloudflare's deployable inventory, version metadata/bindings, and
+   deployment history to prove that version was previously deployed alone at
+   100%. The accepted commit is checked out separately so the post-rollback
+   canary compiles that release's First Spark content, not the current branch's
+   lesson. Evidence is retained for 90 days;
    an older version without that artifact is not eligible for automated rollback.
    After the progress-write finalizer has run, only a version recorded as using
    the service progress-write boundary is schema-compatible; a direct browser
    writer is not a rollback candidate even if its static pages still render.
 5. If the database changed, leave the migrated schema in place and ship a forward
    repair. Use PITR only for confirmed data damage, first in isolation. If the
-   compiler changed, use the immutable-digest rollback above; Worker rollback does
-   not change AWS.
+   compiler changed, use the protected revert/forward-repair release above;
+   Worker rollback does not change AWS.
 6. Monitor through the agreed observation window, communicate learner impact
    without exposing personal data, then complete root cause and corrective tests.
 
@@ -611,6 +858,10 @@ before pilot rollout:
 - Resolve every critical accessibility/security issue, cross-user isolation
   failure, serial cleanup failure, or compiler artifact-integrity failure. Keep
   the previous site release available until the observation window closes.
+- Complete every unchecked item in
+  [`.github/DEPLOYMENT_READINESS.md`](../.github/DEPLOYMENT_READINESS.md),
+  including the manual-only workflow confirmations and retained Pages rollback
+  route, before the first hosted release.
 
 The detailed hardware evidence matrix is in
 [`curriculum-verification.md`](./curriculum-verification.md), and the compiler

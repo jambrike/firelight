@@ -38,6 +38,12 @@ runs the Supabase database linter. Both require the local stack.
 - Run the pgTAP suite and HTTP smoke tests after migration, then verify two real
   accounts cannot read or mutate each other's rows.
 
+The exact hosted Auth/SMTP payload, explicit-confirmation apply helper, readback
+hash verifier, protected inputs/scopes, linked pgTAP order, and current separate-
+project blocker are documented in
+[`backend-release-readiness.md`](./backend-release-readiness.md). Routine releases
+verify hosted Auth configuration but never rewrite it.
+
 ## Progress write boundary rollout
 
 `202608080003_progress_write_boundary.sql` is deliberately an expand migration.

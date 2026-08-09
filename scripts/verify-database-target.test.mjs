@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { CanaryError } from "./postdeploy-canary.mjs";
 import {
@@ -76,6 +77,14 @@ test("database target environment pins canonical hosts and evidence", () => {
     }),
     assertCode("SUPABASE_PROJECT_EVIDENCE_MISMATCH"),
   );
+  assert.throws(
+    () => parseDatabaseTargetEnvironment({
+      ...baseEnvironment,
+      FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH: "a".repeat(64),
+      FIRELIGHT_LEGACY_ASSET_HASH: "b".repeat(64),
+    }),
+    assertCode("LEGACY_PAGES_BOOTSTRAP_NOT_ALLOWED"),
+  );
 });
 
 test("deployed config must contain the exact expected Supabase hostname", async () => {
@@ -151,6 +160,53 @@ test("bootstrap requires explicit approval and only accepts an uninitialized end
       async () => new Response("unavailable", { status: 503 }),
     ),
     assertCode("DEPLOYED_CONFIG_UNAVAILABLE"),
+  );
+});
+
+test("production bootstrap accepts only the Pages response proven by exact evidence", async () => {
+  const legacyHtml = "<!doctype html><title>Retained Firelight</title>";
+  const legacyAsset = "<svg><title>Firelight</title></svg>";
+  const legacyAssetHash = createHash("sha256")
+    .update(legacyAsset)
+    .digest("hex");
+  const bootstrap = parseDatabaseTargetEnvironment({
+    FIRELIGHT_BASE_URL: "https://firelight.ie",
+    FIRELIGHT_EXPECTED_ENVIRONMENT: "production",
+    FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: "BOOTSTRAP_PRODUCTION_DATABASE",
+    FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH: "a".repeat(64),
+    FIRELIGHT_LEGACY_ASSET_HASH: legacyAssetHash,
+    SUPABASE_PROJECT_REF: PROJECT_REF,
+  });
+  assert.deepEqual(
+    await verifyDatabaseTarget(
+      bootstrap,
+      async (input) => String(input).endsWith("/favicon.svg")
+        ? new Response(legacyAsset, {
+            headers: { "content-type": "image/svg+xml" },
+          })
+        : new Response(legacyHtml, {
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }),
+    ),
+    {
+      environment: "production",
+      projectRefHash: PROJECT_REF_HASH,
+      mode: "legacy-pages",
+      reason: "LEGACY_PAGES_MATCHED",
+    },
+  );
+  await assert.rejects(
+    verifyDatabaseTarget(
+      bootstrap,
+      async (input) => String(input).endsWith("/favicon.svg")
+        ? new Response(`${legacyAsset}!`, {
+            headers: { "content-type": "image/svg+xml" },
+          })
+        : new Response(`${legacyHtml}!`, {
+            headers: { "content-type": "text/html" },
+          }),
+    ),
+    assertCode("LEGACY_PAGES_ASSET_MISMATCH"),
   );
 });
 

@@ -16,6 +16,12 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 const PROJECT_REF = /^[a-z0-9]{20}$/u;
 const ORGANIZATION_ID = /^[A-Za-z0-9_-]{4,128}$/u;
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/u;
+export const SUPABASE_PROJECT_IDENTITY_DOMAIN =
+  "firelight.supabase-project-identity.v1";
+export const SUPABASE_PROJECT_REF_IDENTITY_DOMAIN =
+  "firelight.supabase-project-ref-identity.v1";
+export const SUPABASE_ORGANIZATION_IDENTITY_DOMAIN =
+  "firelight.supabase-organization-identity.v1";
 
 function fail(code) {
   throw new CanaryError(code);
@@ -50,7 +56,32 @@ export function projectIdentityHash(identity) {
     EXPECTED_REGION,
     `db.${identity.projectRef}.supabase.co`,
   ]);
-  return createHash("sha256").update(canonical, "utf8").digest("hex");
+  return createHash("sha256")
+    .update(`${SUPABASE_PROJECT_IDENTITY_DOMAIN}\0${canonical}`, "utf8")
+    .digest("hex");
+}
+
+export function projectRefIdentityHash(identity) {
+  const canonical = JSON.stringify([identity.projectRef]);
+  return createHash("sha256")
+    .update(`${SUPABASE_PROJECT_REF_IDENTITY_DOMAIN}\0${canonical}`, "utf8")
+    .digest("hex");
+}
+
+export function organizationIdentityHash(identity) {
+  const canonical = JSON.stringify([identity.organizationId]);
+  return createHash("sha256")
+    .update(`${SUPABASE_ORGANIZATION_IDENTITY_DOMAIN}\0${canonical}`, "utf8")
+    .digest("hex");
+}
+
+function optionalSha256(environment, name) {
+  const value = environment[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !LOWERCASE_SHA256.test(value)) {
+    fail(`INVALID_${name}`);
+  }
+  return value;
 }
 
 export function parseSupabaseProjectEnvironment(environment) {
@@ -78,15 +109,44 @@ export function parseSupabaseProjectEnvironment(environment) {
 
   const identity = { projectRef, organizationId, projectName };
   const identityHash = projectIdentityHash(identity);
-  const expectedHash = environment.FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH;
-  if (
-    expectedHash !== undefined &&
-    (typeof expectedHash !== "string" || !LOWERCASE_SHA256.test(expectedHash))
-  ) {
-    fail("INVALID_FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH");
-  }
+  const refIdentityHash = projectRefIdentityHash(identity);
+  const organizationHash = organizationIdentityHash(identity);
+  const expectedHash = optionalSha256(
+    environment,
+    "FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH",
+  );
   if (expectedHash !== undefined && expectedHash !== identityHash) {
     fail("SUPABASE_PROJECT_IDENTITY_EVIDENCE_MISMATCH");
+  }
+  const expectedOrganizationHash = optionalSha256(
+    environment,
+    "FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH",
+  );
+  if (
+    expectedOrganizationHash !== undefined &&
+    expectedOrganizationHash !== organizationHash
+  ) {
+    fail("SUPABASE_ORGANIZATION_IDENTITY_EVIDENCE_MISMATCH");
+  }
+  const expectedRefIdentityHash = optionalSha256(
+    environment,
+    "FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH",
+  );
+  if (
+    expectedRefIdentityHash !== undefined &&
+    expectedRefIdentityHash !== refIdentityHash
+  ) {
+    fail("SUPABASE_PROJECT_REF_IDENTITY_EVIDENCE_MISMATCH");
+  }
+  const peerRefIdentityHash = optionalSha256(
+    environment,
+    "FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH",
+  );
+  if (
+    peerRefIdentityHash !== undefined &&
+    peerRefIdentityHash === refIdentityHash
+  ) {
+    fail("SUPABASE_PROJECT_REF_PEER_COLLISION");
   }
 
   return {
@@ -95,6 +155,8 @@ export function parseSupabaseProjectEnvironment(environment) {
     expectedRegion: EXPECTED_REGION,
     expectedDatabaseHost: `db.${projectRef}.supabase.co`,
     identityHash,
+    projectRefIdentityHash: refIdentityHash,
+    organizationIdentityHash: organizationHash,
   };
 }
 
@@ -124,6 +186,8 @@ export function validateSupabaseProject(value, configuration) {
   return {
     projectRef: configuration.projectRef,
     identityHash: configuration.identityHash,
+    projectRefIdentityHash: configuration.projectRefIdentityHash,
+    organizationIdentityHash: configuration.organizationIdentityHash,
   };
 }
 
@@ -148,7 +212,11 @@ export async function verifySupabaseProject(configuration, fetchImpl) {
 async function main() {
   const configuration = parseSupabaseProjectEnvironment(process.env);
   const result = await verifySupabaseProject(configuration, globalThis.fetch);
-  process.stdout.write(`project_identity_hash=${result.identityHash}\n`);
+  process.stdout.write(
+    `project_identity_hash=${result.identityHash}\n` +
+      `project_ref_identity_hash=${result.projectRefIdentityHash}\n` +
+      `organization_identity_hash=${result.organizationIdentityHash}\n`,
+  );
 }
 
 const entryPoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;

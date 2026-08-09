@@ -13,6 +13,8 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 resource "aws_iam_role" "gateway" {
   name               = "${var.service_name}-gateway-execution"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+
+  depends_on = [terraform_data.release_gate]
 }
 
 data "aws_iam_policy_document" "gateway" {
@@ -79,6 +81,8 @@ data "aws_iam_policy_document" "ecs_tasks_assume_role" {
 resource "aws_iam_role" "ecs_execution" {
   name               = "${var.service_name}-ecs-agent"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
+
+  depends_on = [terraform_data.release_gate]
 }
 
 data "aws_iam_policy_document" "ecs_execution" {

@@ -1,0 +1,10 @@
+# Copy outside version control and replace every FIRELIGHT_* placeholder.
+# The bucket must already enforce versioning, public-access blocking, and
+# SSE-KMS. Credentials come only from the operator's short-lived AWS session.
+bucket              = "FIRELIGHT_STAGING_STATE_BUCKET"
+key                 = "firelight/compiler/staging/terraform.tfstate"
+region              = "eu-west-1"
+encrypt             = true
+use_lockfile        = true
+kms_key_id          = "arn:aws:kms:eu-west-1:111111111111:key/11111111-1111-4111-8111-111111111111"
+allowed_account_ids = ["111111111111"]

@@ -14,15 +14,22 @@ const MAX_DIAGNOSTIC_LINE_CHARACTERS = 512;
 const COMPILER_TIMEOUT_MS = 45_000;
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const LAMBDA_FUNCTION_URL_HOST = /^[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws$/;
-const STRUCTURED_DIAGNOSTIC = /^(?:\[redacted\])*(?:\[path\]|[A-Za-z0-9_.-]+\.(?:ino|c|cc|cpp|h|hpp)):\d+(?::\d+)?:\s*(?:fatal error|error|warning|note)\s*:/i;
-const GLOBAL_DIAGNOSTIC = /^(?:error during build|compilation failed|exit status)\b/i;
+const BUILD_ID = /^[0-9a-f]{40}$/;
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const COMPILER_PROTOCOL_VERSION = 1;
+const LAMBDA_FUNCTION_URL_HOST =
+  /^[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws$/;
+const STRUCTURED_DIAGNOSTIC =
+  /^(?:\[redacted\])*(?:\[path\]|[A-Za-z0-9_.-]+\.(?:ino|c|cc|cpp|h|hpp)):\d+(?::\d+)?:\s*(?:fatal error|error|warning|note)\s*:/i;
+const GLOBAL_DIAGNOSTIC =
+  /^(?:error during build|compilation failed|exit status)\b/i;
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi;
 const UNIX_PATH_IN_TEXT = /(?<![A-Za-z0-9_])\/(?:[^/\s:'"]+\/)*[^/\s:'"]+/g;
 const WINDOWS_PATH_IN_TEXT = /\b[A-Za-z]:\\(?:[^\\\s:'"]+\\)*[^\\\s:'"]+/g;
-// ANSI control bytes are intentional here: upstream diagnostics are untrusted terminal text.
-// eslint-disable-next-line no-control-regex
-const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
+const ANSI_ESCAPE =
+  // ANSI control bytes are intentional here: upstream diagnostics are untrusted terminal text.
+  // eslint-disable-next-line no-control-regex
+  /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 
 export type CompilerFetcher = (request: Request) => Promise<Response>;
 
@@ -43,7 +50,8 @@ export interface CompilerGatewayResult {
 
 export class CompilerGatewayError extends Error {
   readonly code: string;
-  readonly kind: "configuration" | "timeout" | "upstream" | "compile" | "invalid-response";
+  readonly kind:
+    "configuration" | "timeout" | "upstream" | "compile" | "invalid-response";
   readonly diagnostics: readonly string[];
 
   constructor(
@@ -82,7 +90,8 @@ function configuredUrl(
       "The compiler service is not configured.",
     );
   }
-  const isLoopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+  const isLoopback =
+    parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
   const isDevelopmentLoopback =
     environment === "development" &&
     isLoopback &&
@@ -134,7 +143,78 @@ function configuredToken(value: string): string {
   return token;
 }
 
-function sanitizeDiagnostic(value: string, redactions: readonly string[] = []): string {
+interface ExpectedCompilerIdentity {
+  readonly environment: string;
+  readonly serviceName: string;
+  readonly protocolVersion: typeof COMPILER_PROTOCOL_VERSION;
+}
+
+function configuredIdentity(
+  config: CompilerGatewayConfig,
+): ExpectedCompilerIdentity {
+  const canonicalServiceName =
+    config.environment === "staging"
+      ? "firelight-compiler-stg"
+      : config.environment === "production"
+        ? "firelight-compiler-prd"
+        : config.environment === "development"
+          ? "firelight-compiler-dev"
+          : null;
+  if (canonicalServiceName === null) {
+    throw new CompilerGatewayError(
+      "configuration",
+      "COMPILER_NOT_CONFIGURED",
+      "The compiler service is not configured.",
+    );
+  }
+  return {
+    environment: config.environment,
+    serviceName: canonicalServiceName,
+    protocolVersion: COMPILER_PROTOCOL_VERSION,
+  };
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const keys = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    keys.length === sortedExpected.length &&
+    keys.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+function hasExpectedIdentity(
+  value: unknown,
+  expected: ExpectedCompilerIdentity,
+): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, [
+      "buildId",
+      "environment",
+      "imageDigest",
+      "protocolVersion",
+      "serviceName",
+    ]) &&
+    typeof value.buildId === "string" &&
+    BUILD_ID.test(value.buildId) &&
+    value.buildId !== "0".repeat(40) &&
+    value.environment === expected.environment &&
+    typeof value.imageDigest === "string" &&
+    IMAGE_DIGEST.test(value.imageDigest) &&
+    value.imageDigest !== `sha256:${"0".repeat(64)}` &&
+    value.protocolVersion === expected.protocolVersion &&
+    value.serviceName === expected.serviceName
+  );
+}
+
+function sanitizeDiagnostic(
+  value: string,
+  redactions: readonly string[] = [],
+): string {
   let withoutAnsi = value.replace(ANSI_ESCAPE, "");
   for (const sensitiveValue of redactions) {
     if (sensitiveValue.length > 0) {
@@ -181,7 +261,9 @@ export function diagnosticSummary(diagnostics: readonly string[]): string {
   const summary = diagnostics.join("\n");
   const bytes = new TextEncoder().encode(summary);
   if (bytes.byteLength <= MAX_DIAGNOSTIC_BYTES) return summary;
-  let bounded = new TextDecoder().decode(bytes.slice(0, MAX_DIAGNOSTIC_BYTES)).trimEnd();
+  let bounded = new TextDecoder()
+    .decode(bytes.slice(0, MAX_DIAGNOSTIC_BYTES))
+    .trimEnd();
   while (new TextEncoder().encode(bounded).byteLength > MAX_DIAGNOSTIC_BYTES) {
     bounded = Array.from(bounded).slice(0, -1).join("").trimEnd();
   }
@@ -196,11 +278,18 @@ function timeoutError(): CompilerGatewayError {
   );
 }
 
-async function readBoundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
+async function readBoundedJson(
+  response: Response,
+  signal: AbortSignal,
+): Promise<unknown> {
   const declaredLength = response.headers.get("Content-Length");
   if (declaredLength) {
     const length = Number(declaredLength);
-    if (!Number.isFinite(length) || length < 0 || length > MAX_COMPILER_RESPONSE_BYTES) {
+    if (
+      !Number.isFinite(length) ||
+      length < 0 ||
+      length > MAX_COMPILER_RESPONSE_BYTES
+    ) {
       await response.body?.cancel();
       throw new CompilerGatewayError(
         "invalid-response",
@@ -286,7 +375,10 @@ function validateIntelHexText(value: unknown): string {
     );
   }
   const encoded = new TextEncoder().encode(value);
-  if (encoded.byteLength < 12 || encoded.byteLength > MAX_INTEL_HEX_TEXT_BYTES) {
+  if (
+    encoded.byteLength < 12 ||
+    encoded.byteLength > MAX_INTEL_HEX_TEXT_BYTES
+  ) {
     throw new CompilerGatewayError(
       "invalid-response",
       "COMPILER_INVALID_ARTIFACT",
@@ -310,13 +402,19 @@ function validateIntelHexText(value: unknown): string {
 }
 
 export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
 }
 
-function parseUpstreamError(value: unknown, redactions: readonly string[]): {
+function parseUpstreamError(
+  value: unknown,
+  redactions: readonly string[],
+): {
   readonly code: string;
   readonly message: string;
   readonly diagnostics: readonly string[];
@@ -325,17 +423,19 @@ function parseUpstreamError(value: unknown, redactions: readonly string[]): {
     ? sanitizeDiagnostics(value.diagnostics, redactions)
     : [];
   const error = isRecord(value) && isRecord(value.error) ? value.error : null;
-  const rawCode = error && typeof error.code === "string" ? error.code : "COMPILER_FAILED";
+  const rawCode =
+    error && typeof error.code === "string" ? error.code : "COMPILER_FAILED";
   const code = SAFE_ERROR_CODE.test(rawCode) ? rawCode : "COMPILER_FAILED";
   return {
     code,
-    message: code === "COMPILER_TIMEOUT"
-      ? "Compilation took too long. Try again in a moment."
-      : code === "COMPILER_SOURCE_POLICY_REJECTED"
-        ? "The sketch uses a compiler feature that Firelight lessons do not allow."
-        : code === "COMPILER_FAILED"
-          ? "The sketch did not compile."
-          : "The compiler could not complete this request.",
+    message:
+      code === "COMPILER_TIMEOUT"
+        ? "Compilation took too long. Try again in a moment."
+        : code === "COMPILER_SOURCE_POLICY_REJECTED"
+          ? "The sketch uses a compiler feature that Firelight lessons do not allow."
+          : code === "COMPILER_FAILED"
+            ? "The sketch did not compile."
+            : "The compiler could not complete this request.",
     diagnostics,
   };
 }
@@ -346,6 +446,7 @@ export async function requestCompilation(
   expectedSourceHash: string,
   fetcher: CompilerFetcher = (request) => fetch(request),
 ): Promise<CompilerGatewayResult> {
+  const expectedIdentity = configuredIdentity(config);
   const url = configuredUrl(
     config.url,
     config.expectedOrigin,
@@ -397,6 +498,16 @@ export async function requestCompilation(
     clearTimeout(timeout);
   }
 
+  if (
+    !isRecord(body) ||
+    !hasExpectedIdentity(body.identity, expectedIdentity)
+  ) {
+    throw new CompilerGatewayError(
+      "invalid-response",
+      "COMPILER_IDENTITY_MISMATCH",
+      "The compiler returned an invalid release identity.",
+    );
+  }
   if (!response.ok) {
     const failure = parseUpstreamError(body, [token]);
     throw new CompilerGatewayError(
@@ -406,7 +517,12 @@ export async function requestCompilation(
       failure.diagnostics,
     );
   }
-  if (!isRecord(body) || body.ok !== true || !isRecord(body.artifact)) {
+  if (
+    !hasExactKeys(body, ["artifact", "diagnostics", "identity", "ok"]) ||
+    body.ok !== true ||
+    !isRecord(body.artifact) ||
+    !hasExpectedIdentity(body.identity, expectedIdentity)
+  ) {
     throw new CompilerGatewayError(
       "invalid-response",
       "COMPILER_INVALID_RESPONSE",
@@ -430,7 +546,8 @@ export async function requestCompilation(
   const artifactHash = await sha256Hex(hex);
   if (
     artifact.artifactHash !== undefined &&
-    (typeof artifact.artifactHash !== "string" || artifact.artifactHash !== artifactHash)
+    (typeof artifact.artifactHash !== "string" ||
+      artifact.artifactHash !== artifactHash)
   ) {
     throw new CompilerGatewayError(
       "invalid-response",

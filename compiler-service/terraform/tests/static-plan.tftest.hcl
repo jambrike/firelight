@@ -13,9 +13,9 @@ override_data {
 override_data {
   target = data.aws_caller_identity.current
   values = {
-    account_id = "123456789012"
-    arn        = "arn:aws:iam::123456789012:root"
-    user_id    = "123456789012"
+    account_id = "999999999999"
+    arn        = "arn:aws:sts::999999999999:assumed-role/FirelightCompilerStagingDeploy/terraform-test"
+    user_id    = "AROATEST:terraform-test"
   }
 }
 
@@ -89,6 +89,11 @@ override_data {
 }
 
 override_data {
+  target = data.aws_iam_policy_document.compiler_ecr_lambda
+  values = { json = "{}" }
+}
+
+override_data {
   target = data.aws_iam_policy_document.ecr_endpoint
   values = { json = "{}" }
 }
@@ -118,12 +123,82 @@ override_data {
   values = { json = "{}" }
 }
 
+run "targeted_ecr_bootstrap_plan" {
+  command = plan
+
+  variables {
+    environment          = "staging"
+    aws_account_id       = "999999999999"
+    service_name         = "firelight-compiler-stg"
+    deployment_role_name = "FirelightCompilerStagingDeploy"
+    image_digest         = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    release_build_id     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auth_secret_arn      = "arn:aws:secretsmanager:eu-west-1:999999999999:secret:firelight/compiler-auth-test"
+  }
+
+  plan_options {
+    target = [
+      aws_ecr_repository.compiler,
+      aws_ecr_lifecycle_policy.compiler,
+    ]
+  }
+
+  assert {
+    condition     = aws_ecr_repository.compiler.name == "firelight-compiler-stg"
+    error_message = "The sentinel may plan only the canonical targeted ECR bootstrap."
+  }
+}
+
+run "targeted_ecr_bootstrap_rejects_noncanonical_repository" {
+  command = plan
+
+  variables {
+    environment          = "staging"
+    aws_account_id       = "999999999999"
+    service_name         = "firelight-compiler-bad"
+    deployment_role_name = "FirelightCompilerStagingDeploy"
+    image_digest         = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    release_build_id     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auth_secret_arn      = "arn:aws:secretsmanager:eu-west-1:999999999999:secret:firelight/compiler-auth-test"
+  }
+
+  plan_options {
+    target = [
+      aws_ecr_repository.compiler,
+      aws_ecr_lifecycle_policy.compiler,
+    ]
+  }
+
+  expect_failures = [terraform_data.operator_gate]
+}
+
+run "complete_plan_rejects_ecr_bootstrap_sentinel" {
+  command = plan
+
+  variables {
+    environment          = "staging"
+    aws_account_id       = "999999999999"
+    service_name         = "firelight-compiler-stg"
+    deployment_role_name = "FirelightCompilerStagingDeploy"
+    image_digest         = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    release_build_id     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auth_secret_arn      = "arn:aws:secretsmanager:eu-west-1:999999999999:secret:firelight/compiler-auth-test"
+  }
+
+  expect_failures = [terraform_data.release_gate]
+}
+
 run "isolated_compiler_plan" {
   command = plan
 
   variables {
-    image_digest    = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    auth_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:firelight/compiler-auth-test"
+    environment          = "staging"
+    aws_account_id       = "999999999999"
+    service_name         = "firelight-compiler-stg"
+    deployment_role_name = "FirelightCompilerStagingDeploy"
+    image_digest         = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    release_build_id     = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    auth_secret_arn      = "arn:aws:secretsmanager:eu-west-1:999999999999:secret:firelight/compiler-auth-test"
   }
 
   assert {
@@ -167,11 +242,16 @@ run "isolated_compiler_plan" {
   }
 
   assert {
+    condition     = aws_ecr_repository_policy.compiler_lambda.repository == aws_ecr_repository.compiler.name
+    error_message = "The exact Lambda image retrieval policy must remain attached to the compiler repository."
+  }
+
+  assert {
     condition = (
       aws_sns_topic.compiler_alerts.kms_master_key_id == aws_kms_key.compiler_alerts.arn &&
       aws_kms_key.compiler_alerts.enable_key_rotation &&
       aws_kms_key.compiler_alerts.deletion_window_in_days == 30 &&
-      aws_kms_alias.compiler_alerts.name == "alias/firelight-compiler-alerts"
+      aws_kms_alias.compiler_alerts.name == "alias/firelight-compiler-stg-alerts"
     )
     error_message = "Compiler alerts must use a rotating customer-managed key with a recovery window."
   }
@@ -245,7 +325,7 @@ run "isolated_compiler_plan" {
   }
 
   assert {
-    condition     = aws_cloudwatch_dashboard.compiler.dashboard_name == "firelight-compiler-operations"
+    condition     = aws_cloudwatch_dashboard.compiler.dashboard_name == "firelight-compiler-stg-operations"
     error_message = "The compiler operational dashboard must keep its stable environment-local name."
   }
 }

@@ -5,10 +5,12 @@ node_modules/
 coverage/
 *.tsbuildinfo
 .dev.vars
+.dev.vars.*
 .env
 .env.*
 !.env.example
 supabase/.temp/
 worker-startup.cpuprofile
+*.candidate.json
 playwright-report/
 test-results/

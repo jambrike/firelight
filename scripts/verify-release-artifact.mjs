@@ -11,6 +11,7 @@ async function main() {
   const configuration = parseReleaseEvidenceEnvironment(process.env, {
     requirePath: true,
     requireApiToken: false,
+    requireCompilerDeploymentIdentity: false,
   });
   const source = await readFile(configuration.evidencePath, "utf8");
   if (source.length > 16 * 1024) throw new TypeError("Release evidence is too large.");

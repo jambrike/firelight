@@ -60,12 +60,14 @@ without evidence remain readable but cannot be repurposed.
 
 ## Configuration and deployment order
 
-The Worker requires these encrypted secrets in addition to the identity values:
+The Worker requires these four encrypted compiler secrets:
 
 - `COMPILER_SERVICE_URL`: the HTTPS Lambda Function URL. Treat the URL as
   sensitive even though the token is the authorization boundary.
 - `COMPILER_SERVICE_ORIGIN`: the independently configured exact scheme/host
   origin of that same eu-west-1 Function URL, with no path or trailing slash.
+- `COMPILER_SERVICE_HOST`: the same URL's exact lowercase hostname, bound
+  independently so a redirect or origin mismatch fails closed.
 - `COMPILER_SERVICE_TOKEN`: 32–512 characters of high-entropy secret material,
   identical to the value stored in the compiler service's Secrets Manager secret.
 
@@ -74,16 +76,22 @@ details. Deploy in this order:
 
 1. Build and scan the pinned compiler image, smoke-compile the exact target, push
    by immutable digest, apply reviewed Terraform in `eu-west-1`, and run authorized
-   and unauthorized Function URL probes.
+   and unauthorized Function URL probes. The authorized probe must return the
+   exact environment, service, protocol version, release commit, and image digest;
+   the unauthorized response must disclose no release identity.
 2. Apply the Supabase hardware migration and run pgTAP against the target staging
    project.
-3. Set the three Worker compiler bindings, deploy the Worker/UI to staging, and run
+3. Set the four Worker compiler bindings, deploy the Worker/UI to staging, and run
    fresh-account browser and physical-board acceptance.
 4. Promote only after staging evidence, compile-rate, disconnect, and rollback
    checks pass. Keep the prior Worker and static prototype release available.
 
-Never expose the gateway URL/origin/token through `/api/config`, Vite variables, browser
-logs, Terraform non-sensitive outputs, or diagnostic messages.
+Never expose the gateway URL/origin/host/token through `/api/config`, Vite
+variables, browser logs, Terraform non-sensitive outputs, or diagnostic messages.
+The accepted compiler build ID and digest remain protected release-workflow
+metadata and audit evidence. They are not Worker bindings: runtime compatibility
+is tied to environment, canonical service name, and protocol version so web and
+compiler releases—and accepted Worker rollbacks—can advance independently.
 
 ## Failure and recovery behavior
 

@@ -14,8 +14,10 @@ compiler task --validated Intel HEX--> gateway --validated artifact--> Worker
 ```
 
 The Lambda gateway authenticates the server-only Worker credential before method
-or body processing, validates the closed request contract, applies the source
-policy, and forwards to the Terraform-provided internal ALB. It does not call
+or body processing. Only then does it load and return the Terraform-bound release
+identity: environment, canonical service name, release commit, and ECR image
+digest. It validates the closed request contract, applies the source policy, and
+forwards to the Terraform-provided internal ALB. It does not call
 `compile_sketch`; both `app.lambda_handler` and the image's default command point
 to `app.gateway_lambda_handler`.
 
@@ -61,20 +63,43 @@ A successful response is:
     "hex": ":...\n:00000001FF\n",
     "sourceHash": "<lowercase SHA-256 of submitted source UTF-8 bytes>"
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "identity": {
+    "buildId": "<lowercase 40-character release commit>",
+    "environment": "staging",
+    "imageDigest": "sha256:<64 lowercase hexadecimal characters>",
+    "protocolVersion": 1,
+    "serviceName": "firelight-compiler-stg"
+  }
 }
 ```
+
+An authenticated `GET /` returns only `{ "ok": true, "identity": ... }` and
+is the release probe. A request without the valid service token returns the
+fixed unauthorized envelope and no identity. Once the identity configuration is
+validly loaded, every post-authentication response, including validation,
+compile, and infrastructure errors, carries that same exact identity. Missing or
+invalid identity configuration returns a generic unavailable response that the
+Worker rejects as an identity mismatch.
 
 The gateway treats the internal service as untrusted output: it bounds the body,
 rejects redirects, ignores proxy environment variables, checks the exact JSON
 shape, recomputes source and artifact hashes, validates the FQBN and Intel HEX,
-and rejects status/error-code mismatches. The Worker repeats the source, target,
-hash, and HEX checks before returning an artifact to the browser.
+and rejects status/error-code mismatches. On every authenticated upstream
+response, the Worker requires its exact environment, derived canonical service
+name, and `protocolVersion: 1`. It independently requires `buildId` and
+`imageDigest` to have canonical nonzero release shapes, but does not compare
+either value to the web `BUILD_ID` or a Worker binding. The protected compiler
+release probe still matches both values to the exact compiler release. The Worker
+then repeats the source, target, hash, and HEX checks before returning an artifact
+to the browser. Identity drift fails closed even when the upstream status is 4xx
+or 5xx.
 
 The Worker owns the compile-job UUID. Neither AWS surface accepts or issues a
 `compileJobId`, and neither persists raw source or HEX.
 
-Non-2xx responses use stable codes and fixed messages:
+Authenticated non-2xx responses use stable codes and fixed messages plus the
+same `identity` object:
 
 ```json
 {
@@ -83,7 +108,14 @@ Non-2xx responses use stable codes and fixed messages:
     "code": "COMPILER_FAILED",
     "message": "The sketch did not compile."
   },
-  "diagnostics": ["[path]:4: error: expected ';'"]
+  "diagnostics": ["[path]:4: error: expected ';'"],
+  "identity": {
+    "buildId": "<lowercase 40-character release commit>",
+    "environment": "staging",
+    "imageDigest": "sha256:<64 lowercase hexadecimal characters>",
+    "protocolVersion": 1,
+    "serviceName": "firelight-compiler-stg"
+  }
 }
 ```
 
@@ -97,27 +129,27 @@ Codes are `COMPILER_UNAUTHORIZED`, `COMPILER_METHOD_NOT_ALLOWED`,
 
 ## Enforced limits
 
-| Boundary | Limit |
-| --- | ---: |
-| Decoded request JSON | 512 KiB |
-| Source | 65,536 UTF-8 bytes |
-| Board targets | one exact old-bootloader FQBN |
-| Public Lambda timeout | 45 seconds |
-| Gateway wait for internal service | 42 seconds |
-| Internal ALB idle timeout | 45 seconds |
-| Target/task rollout drain | 60 seconds |
-| Compiler process wall time | 40 seconds |
-| Internal socket read/write timeout | 5 seconds |
-| Concurrent compiler processes per task | 1 |
-| Internal HTTP accept backlog per task | 8 |
-| Captured compiler stdout + stderr | 64 KiB |
-| Returned diagnostic lines | 16 |
-| Returned diagnostics | 8 KiB total, 512 bytes per line |
-| Intel HEX text | 128 KiB |
-| Unique/maximum application flash address | below 30,720 bytes |
-| JSON response | 192 KiB |
-| Gateway reserved concurrency | 5 by default, configurable 1–20 |
-| Fargate service | 2 tasks by default, 1 vCPU / 2 GiB each |
+| Boundary                                 |                                   Limit |
+| ---------------------------------------- | --------------------------------------: |
+| Decoded request JSON                     |                                 512 KiB |
+| Source                                   |                      65,536 UTF-8 bytes |
+| Board targets                            |           one exact old-bootloader FQBN |
+| Public Lambda timeout                    |                              45 seconds |
+| Gateway wait for internal service        |                              42 seconds |
+| Internal ALB idle timeout                |                              45 seconds |
+| Target/task rollout drain                |                              60 seconds |
+| Compiler process wall time               |                              40 seconds |
+| Internal socket read/write timeout       |                               5 seconds |
+| Concurrent compiler processes per task   |                                       1 |
+| Internal HTTP accept backlog per task    |                                       8 |
+| Captured compiler stdout + stderr        |                                  64 KiB |
+| Returned diagnostic lines                |                                      16 |
+| Returned diagnostics                     |         8 KiB total, 512 bytes per line |
+| Intel HEX text                           |                                 128 KiB |
+| Unique/maximum application flash address |                      below 30,720 bytes |
+| JSON response                            |                                 192 KiB |
+| Gateway reserved concurrency             |         5 by default, configurable 1–20 |
+| Fargate service                          | 2 tasks by default, 1 vCPU / 2 GiB each |
 
 The gateway stops waiting at 42 seconds so it can return a bounded error before
 Lambda's 45-second hard deadline. The compiler process is killed by its own
@@ -156,12 +188,12 @@ Terraform creates a dedicated VPC across two availability zones. It creates no
 internet gateway, NAT gateway, public subnet, or default route. Private endpoints
 provide only what the AWS-managed runtimes need:
 
-| Endpoint | Consumer | Purpose |
-| --- | --- | --- |
-| Secrets Manager interface | Lambda gateway | Read the single auth token |
-| ECR API + ECR DKR interfaces | Fargate agent | Authenticate and pull the pinned image |
-| S3 gateway | Fargate agent | Fetch the regional ECR layer objects |
-| CloudWatch Logs interface | Fargate agent | Create streams and put log events |
+| Endpoint                     | Consumer       | Purpose                                |
+| ---------------------------- | -------------- | -------------------------------------- |
+| Secrets Manager interface    | Lambda gateway | Read the single auth token             |
+| ECR API + ECR DKR interfaces | Fargate agent  | Authenticate and pull the pinned image |
+| S3 gateway                   | Fargate agent  | Fetch the regional ECR layer objects   |
+| CloudWatch Logs interface    | Fargate agent  | Create streams and put log events      |
 
 Endpoint policies scope Secrets Manager to the one secret, ECR image calls to the
 one repository, S3 to the regional ECR layer bucket, and Logs to the two service
@@ -178,15 +210,15 @@ The container definitions contain empty `environment` and `secrets` collections.
 
 ## Pinned supply chain and container modes
 
-| Component | Pin |
-| --- | --- |
-| Lambda Python base | `public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37` |
-| Arduino CLI | `1.5.1`, Linux 64-bit archive SHA-256 `28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b` |
-| Arduino AVR core | `arduino:avr@1.8.6`, archive SHA-256 `ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6` |
-| Arduino Servo library | `1.3.0`, registry archive SHA-256 `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38` |
-| Terraform AWS provider | `6.56.0` |
-| Runtime architecture | `linux/amd64`, Lambda/ECS `x86_64` |
-| Fargate platform | `1.4.0` |
+| Component              | Pin                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Lambda Python base     | `public.ecr.aws/lambda/python:3.12@sha256:8e75daf5b46d34c8ea7336eb7a3e3dbd4d43032689dbd401e52c6d319d312e37` |
+| Arduino CLI            | `1.5.1`, Linux 64-bit archive SHA-256 `28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b`    |
+| Arduino AVR core       | `arduino:avr@1.8.6`, archive SHA-256 `ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6`     |
+| Arduino Servo library  | `1.3.0`, registry archive SHA-256 `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38`        |
+| Terraform AWS provider | `6.56.0`                                                                                                    |
+| Runtime architecture   | `linux/amd64`, Lambda/ECS `x86_64`                                                                          |
+| Fargate platform       | `1.4.0`                                                                                                     |
 
 The build verifies the Arduino CLI archive and repository-owned URL, size,
 version, and checksum pins for the AVR core plus its `avr-gcc`, `avrdude`, and
@@ -298,29 +330,53 @@ the notification/alarm drill, and the evidence is reviewed. Follow
 [Monitoring and hosted acceptance](monitoring.md); recipient endpoints never
 belong in Terraform state.
 
-Deployment is two phase because every runtime references an image digest:
+The environment-separated remote state, assumed-role/account gates, real input
+validator, OIDC handoff, immutable-image rollout, sensitive-output handling, and
+post-deploy gateway proof are specified in
+[`backend-release-readiness.md`](./backend-release-readiness.md). Account root,
+IAM-user credentials, example account IDs, a placeholder image digest, and a
+cross-account compiler secret now produce hard failures before a normal plan.
 
-1. Install Docker Buildx, Terraform, and AWS CLI with narrowly scoped operator
-   credentials. Create the service token outside Terraform.
-2. Copy `terraform.tfvars.example` outside version control. Choose an unused
-   RFC1918 VPC CIDR (Terraform derives two subnets) and use the placeholder digest
-   only for repository bootstrap.
-3. From `compiler-service/terraform`, run `terraform init`, `terraform fmt -check`,
-   and `terraform validate`; review a plan, then bootstrap only the ECR repository
-   and lifecycle policy.
-4. Build and smoke the linux/amd64 image, push it, obtain the registry-reported
-   digest, review the ECR scan, and replace the placeholder.
-5. Review a full plan for the absence of internet/NAT resources, public task IPs,
-   task-role fields and task secrets; verify the exact endpoint/IAM/SG rules,
-   `app.gateway_lambda_handler`, 45-second gateway timeout, and digest.
-6. Apply only after cost, security, image, rollback, and physical-hardware gates
-   have owners. Store `compiler_gateway_function_url` directly as the Worker
-   `COMPILER_SERVICE_URL` secret without printing it to logs. Set
-   `COMPILER_SERVICE_ORIGIN` to that URL's exact `https://<host>` origin (no path
-   or trailing slash); the Worker checks both values to prevent redirect/origin
-   drift.
-7. Test unauthorized, authorized, invalid-source, compile-failure, busy-service,
-   timeout, and artifact-bound responses from staging.
+Deployment is two phase because every runtime references an image digest, but
+both phases run only through the protected manual **Deploy compiler** workflow:
+
+1. Complete the organization bootstrap and protected GitHub environment setup in
+   [`backend-release-readiness.md`](./backend-release-readiness.md). An
+   organization administrator creates the OIDC roles, encrypted state boundary,
+   and compiler token outside Terraform; account root and local AWS credentials
+   are forbidden.
+2. Local work is validation-only. From `compiler-service/terraform`, run
+   `terraform fmt -check -recursive`, `terraform init -backend=false
+   -lockfile=readonly`, `terraform validate`, and `terraform test`. Do not create
+   local backend/tfvars files, run a provider-backed plan, push an image, or run
+   `terraform apply`.
+3. Dispatch **Deploy compiler** for staging from the current `main` commit with
+   `DEPLOY_STAGING_COMPILER`. Include `BOOTSTRAP_STAGING_COMPILER_ECR` when the
+   repository is absent or a prior bootstrap was interrupted. A fresh protected
+   run can resume only unique `create`/`no-op` actions for the repository,
+   lifecycle policy, and operator gate, followed by a zero-drift proof.
+4. The workflow builds or safely reuses the immutable linux/amd64 image, smoke
+   tests all lesson fixtures, scans the registry digest, and creates the complete
+   saved plan. Its plan/apply streams remain in mode-`0600` ephemeral runner
+   files; only separately rendered review text travels through the SSE-KMS state
+   handoff. Approvers verify the no-NAT design, endpoint/IAM/security-group rules,
+   gateway timeout, release commit, digest, and expected cost before apply.
+5. After staging acceptance, transfer the protected Function URL, origin, host,
+   token, build ID, and digest into the staging web-release environment without
+   printing their values. Test unauthorized, authenticated identity,
+   invalid-source, compile-failure, busy-service, timeout, and artifact-bound
+   responses, plus the physical Nano acceptance gate.
+6. Dispatch **Deploy compiler** for production from the same current `main`
+   commit with `DEPLOY_PRODUCTION_COMPILER` and the exact accepted staging run
+   ID/evidence hash. Include `BOOTSTRAP_PRODUCTION_COMPILER_ECR` only when its
+   repository is absent or its bootstrap was interrupted. Production copies the
+   accepted staging digest with preservation, never rebuilds it, and repeats the
+   protected plan, apply, health, identity, and compile gates.
+7. Transfer the independently protected production compiler bindings to the
+   production web-release environment. The Worker pins the exact Function URL
+   origin and host, while every authenticated compiler response must match the
+   environment/service/protocol/build/digest contract. Do not use a local
+   Terraform, ECR, Lambda, or secret-management command as a shortcut.
 
 Function URLs with `AuthType=NONE` require public resource-policy permissions;
 AWS provider 6.56 manages both current permissions when it creates the URL. The
@@ -342,28 +398,33 @@ compiler-specific recovery actions.
   status, and Fargate-agent ECR/Logs events. Do not add a NAT route as a shortcut.
 - Timeouts: compare gateway duration with task CPU/memory and compiler deadline;
   drain/replace unhealthy tasks rather than raising the 45-second public bound.
-- Bad image release: restore the last reviewed digest and task definition through
-  Terraform, then publish/alias the matching gateway version.
+- Bad image release: merge a reviewed revert or forward repair and run the normal
+  staging-then-production compiler workflow. It creates and applies the reviewed
+  digest-bound plan, proves target health, and advances the live alias; local
+  Terraform and arbitrary previous-digest inputs remain forbidden.
 - Suspected source escape or credential exposure: disable the public Function URL,
   rotate the gateway token, stop the ECS service, preserve redacted AWS audit
   records, and do not return service until image and IAM boundaries are reviewed.
 
-## Verification record (2026-08-08)
+## Verification record (2026-08-09)
 
 - `python3 -m unittest discover -s compiler-service/tests -p 'test_*.py' -v`:
-  63 tests passed, including manifest/toolchain verification and 11-alarm static
-  infrastructure coverage.
-- `npm run test:operations`: 69 tests passed; 11 cover the real typed six-lesson
-  catalog export, strict public envelopes, request/response bounds, fixed
-  timeout, and one retry.
-- `npm run lint -- --no-cache`: passed with zero warnings.
+  109 tests passed, including manifest/toolchain verification, resumable ECR
+  plan validation, deployment probes, and 11-alarm static infrastructure
+  coverage.
+- `npm run test:operations`: 155 tests passed, including the typed six-lesson
+  export, protected workflow ordering, release evidence, rollback identity,
+  request/response bounds, and fixed compiler timeouts.
+- `npm run check`: passed with 282 UI unit tests, 152 Worker tests, the compiler
+  and operations suites above, type checks, lint, lesson validation, and the
+  production build. Playwright passed all 19 hermetic browser journeys.
 - The pinned Servo installer downloaded the current Arduino CDN artifact, matched
   133,580 bytes and SHA-256
   `d25b0d77f10a810d24876c570410f32cc3129f9cc3d0370c861a278b969b4b38`,
   safely extracted it, and verified Servo `1.3.0` with AVR support.
 - Terraform 1.15.8: `fmt -check -recursive`, offline-backend `init`, `validate`,
-  and the mocked static plan test passed using locked AWS provider 6.56.0; one
-  mocked plan passed and none failed. No AWS account was contacted or mutated.
+  and four mocked static plan tests passed using locked AWS provider 6.56.0.
+  No AWS account was contacted or mutated.
 - Docker is unavailable in the implementation environment, so the image build,
   non-root six-sketch image gate, Fargate-mode smoke, embedded CLI/core/Servo
   inspection, and ECR scan were not run.

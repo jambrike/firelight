@@ -1,5 +1,6 @@
 locals {
-  compiler_alarm_actions = [aws_sns_topic.compiler_alerts.arn]
+  compiler_alarm_actions   = [aws_sns_topic.compiler_alerts.arn]
+  compiler_alert_topic_arn = "arn:${data.aws_partition.current.partition}:sns:eu-west-1:${data.aws_caller_identity.current.account_id}:${var.service_name}-alerts"
   gateway_metric_dimensions = {
     FunctionName = aws_lambda_function.gateway.function_name
     Resource     = "${aws_lambda_function.gateway.function_name}:${aws_lambda_alias.live.name}"
@@ -57,6 +58,38 @@ data "aws_iam_policy_document" "compiler_alerts_kms" {
       ]
     }
   }
+
+  statement {
+    sid    = "AllowExactSnsTopicEncryption"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["sns.amazonaws.com"]
+    }
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [local.compiler_alert_topic_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:aws:sns:topicArn"
+      values   = [local.compiler_alert_topic_arn]
+    }
+  }
 }
 
 resource "aws_kms_key" "compiler_alerts" {
@@ -64,6 +97,8 @@ resource "aws_kms_key" "compiler_alerts" {
   deletion_window_in_days = 30
   enable_key_rotation     = true
   policy                  = data.aws_iam_policy_document.compiler_alerts_kms.json
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_kms_alias" "compiler_alerts" {

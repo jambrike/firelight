@@ -65,7 +65,7 @@ _ERROR_MESSAGES = {
     "compiler_unavailable": "The compiler is temporarily unavailable.",
     "internal_error": "The compiler could not complete the request.",
     "invalid_request": "The request is invalid.",
-    "method_not_allowed": "Only POST requests are accepted.",
+    "method_not_allowed": "Only GET and POST requests are accepted.",
     "request_too_large": "The request exceeds the service limit.",
     "source_too_large": "The source exceeds the 64 KiB limit.",
     "source_policy_rejected": "The sketch uses a compiler feature that Firelight lessons do not allow.",
@@ -122,6 +122,13 @@ _FORBIDDEN_SOURCE_RE = re.compile(
 _FORBIDDEN_TRANSLATION_RE = re.compile(
     r'(?:\\(?:\r\n|\r|\n)|\?\?[=/\'()!<>-]|%:|(?:\bu8|\b[LuU])?R")'
 )
+_BUILD_ID_RE = re.compile(r"^[0-9a-f]{40}$")
+_IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+COMPILER_PROTOCOL_VERSION = 1
+_EXPECTED_SERVICE_NAMES = {
+    "staging": "firelight-compiler-stg",
+    "production": "firelight-compiler-prd",
+}
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -156,6 +163,23 @@ class CompileArtifact:
     format: str = ARTIFACT_FORMAT
 
 
+@dataclass(frozen=True)
+class ReleaseIdentity:
+    environment: str
+    service_name: str
+    build_id: str
+    image_digest: str
+
+    def public_payload(self) -> dict[str, str | int]:
+        return {
+            "buildId": self.build_id,
+            "environment": self.environment,
+            "imageDigest": self.image_digest,
+            "protocolVersion": COMPILER_PROTOCOL_VERSION,
+            "serviceName": self.service_name,
+        }
+
+
 class CompilerError(Exception):
     """A safe, expected failure with a stable public error code."""
 
@@ -183,14 +207,19 @@ def _json_response(status: int, payload: Mapping[str, Any]) -> dict[str, Any]:
     )
     if len(body.encode("utf-8")) > MAX_RESULT_BYTES:
         status = 500
-        body = json.dumps(
-            {
-                "error": {
-                    "code": _PUBLIC_ERROR_CODES["internal_error"],
-                    "message": _ERROR_MESSAGES["internal_error"],
-                },
-                "ok": False,
+        fallback_payload: dict[str, Any] = {
+            "diagnostics": [],
+            "error": {
+                "code": _PUBLIC_ERROR_CODES["internal_error"],
+                "message": _ERROR_MESSAGES["internal_error"],
             },
+            "ok": False,
+        }
+        identity = payload.get("identity")
+        if isinstance(identity, Mapping):
+            fallback_payload["identity"] = dict(identity)
+        body = json.dumps(
+            fallback_payload,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -206,15 +235,20 @@ def _error_response(
     code: str,
     status: int,
     diagnostics: Sequence[str] = (),
+    identity: ReleaseIdentity | None = None,
 ) -> dict[str, Any]:
     error: dict[str, Any] = {
         "code": _PUBLIC_ERROR_CODES[code],
         "message": _ERROR_MESSAGES[code],
     }
-    return _json_response(
-        status,
-        {"ok": False, "error": error, "diagnostics": list(diagnostics)},
-    )
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error": error,
+        "diagnostics": list(diagnostics),
+    }
+    if identity is not None:
+        payload["identity"] = identity.public_payload()
+    return _json_response(status, payload)
 
 
 def _normalise_headers(event: Mapping[str, Any]) -> dict[str, str]:
@@ -303,6 +337,32 @@ def _load_service_token() -> str:
         _secret_value = token
         _secret_loaded_at = now
         return token
+
+
+def _load_release_identity(
+    environment: Mapping[str, str] | None = None,
+) -> ReleaseIdentity:
+    values = os.environ if environment is None else environment
+    release_environment = values.get("FIRELIGHT_COMPILER_ENVIRONMENT", "")
+    expected_service = _EXPECTED_SERVICE_NAMES.get(release_environment)
+    service_name = values.get("FIRELIGHT_COMPILER_SERVICE_NAME", "")
+    build_id = values.get("FIRELIGHT_COMPILER_BUILD_ID", "")
+    image_digest = values.get("FIRELIGHT_COMPILER_IMAGE_DIGEST", "")
+    if (
+        expected_service is None
+        or service_name != expected_service
+        or not _BUILD_ID_RE.fullmatch(build_id)
+        or build_id == "0" * 40
+        or not _IMAGE_DIGEST_RE.fullmatch(image_digest)
+        or image_digest == f"sha256:{'0' * 64}"
+    ):
+        raise RuntimeError("release identity is not configured")
+    return ReleaseIdentity(
+        environment=release_environment,
+        service_name=service_name,
+        build_id=build_id,
+        image_digest=image_digest,
+    )
 
 
 def _decode_body(event: Mapping[str, Any]) -> bytes:
@@ -799,6 +859,7 @@ def handle_event(
     event: Any,
     *,
     token_loader: Callable[[], str] = _load_service_token,
+    identity_loader: Callable[[], ReleaseIdentity] = _load_release_identity,
     compile_fn: Callable[[str], CompileArtifact] = compile_sketch,
 ) -> dict[str, Any]:
     if not isinstance(event, Mapping):
@@ -814,9 +875,20 @@ def handle_event(
     if not _authenticate(supplied_token, expected_token):
         return _error_response("unauthorized", 401)
 
-    if _request_method(event) != "POST":
-        response = _error_response("method_not_allowed", 405)
-        response["headers"]["allow"] = "POST"
+    try:
+        identity = identity_loader()
+    except Exception:
+        return _error_response("compiler_unavailable", 503)
+
+    method = _request_method(event)
+    if method == "GET":
+        return _json_response(
+            200,
+            {"identity": identity.public_payload(), "ok": True},
+        )
+    if method != "POST":
+        response = _error_response("method_not_allowed", 405, identity=identity)
+        response["headers"]["allow"] = "GET, POST"
         return response
 
     try:
@@ -824,6 +896,7 @@ def handle_event(
         artifact = compile_fn(source)
         payload = {
             "ok": True,
+            "identity": identity.public_payload(),
             "artifact": {
                 "artifactHash": artifact.artifact_hash,
                 "format": artifact.format,
@@ -839,10 +912,15 @@ def handle_event(
             "\n".join(error.diagnostics),
             redactions=(expected_token,),
         )
-        return _error_response(error.code, error.status, diagnostics)
+        return _error_response(
+            error.code,
+            error.status,
+            diagnostics,
+            identity=identity,
+        )
     except Exception:
         # Exception details can contain source, paths, URLs, environment, or secrets.
-        return _error_response("internal_error", 500)
+        return _error_response("internal_error", 500, identity=identity)
 
 
 def _validate_internal_compiler_url(value: str) -> str:
@@ -1004,6 +1082,7 @@ def gateway_lambda_handler(event: Any, context: Any) -> dict[str, Any]:
     return handle_event(
         event,
         token_loader=_load_service_token,
+        identity_loader=_load_release_identity,
         compile_fn=_invoke_isolated_compiler,
     )
 

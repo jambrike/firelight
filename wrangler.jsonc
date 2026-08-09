@@ -8,11 +8,11 @@
     "binding": "ASSETS",
     "directory": "./dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": true
+    "run_worker_first": true,
   },
   "vars": {
     "ENVIRONMENT": "development",
-    "BUILD_ID": "local"
+    "BUILD_ID": "local",
   },
   "secrets": {
     "required": [
@@ -24,34 +24,35 @@
       "COMPILER_SERVICE_URL",
       "COMPILER_SERVICE_ORIGIN",
       "COMPILER_SERVICE_HOST",
-      "COMPILER_SERVICE_TOKEN"
-    ]
+      "COMPILER_SERVICE_TOKEN",
+    ],
   },
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "invocation_logs": false
+      "invocation_logs": false,
     },
     "traces": {
       "enabled": false,
-      "head_sampling_rate": 0
-    }
+      "head_sampling_rate": 0,
+    },
   },
   "env": {
     "staging": {
       "name": "firelight-staging",
       "workers_dev": false,
+      "preview_urls": false,
       "routes": [
         {
           "pattern": "staging.firelight.ie",
-          "custom_domain": true
-        }
+          "custom_domain": true,
+        },
       ],
       "vars": {
         "ENVIRONMENT": "staging",
-        "BUILD_ID": "staging"
+        "BUILD_ID": "staging",
       },
       "secrets": {
         "required": [
@@ -63,22 +64,25 @@
           "COMPILER_SERVICE_URL",
           "COMPILER_SERVICE_ORIGIN",
           "COMPILER_SERVICE_HOST",
-          "COMPILER_SERVICE_TOKEN"
-        ]
-      }
+          "COMPILER_SERVICE_TOKEN",
+        ],
+      },
     },
     "production": {
       "name": "firelight-production",
       "workers_dev": false,
+      "preview_urls": false,
       "routes": [
         {
-          "pattern": "firelight.ie",
-          "custom_domain": true
-        }
+          // Preserve the legacy Pages hostname as the rollback origin. This
+          // route overlays its existing proxied DNS record during cutover.
+          "pattern": "firelight.ie/*",
+          "zone_name": "firelight.ie",
+        },
       ],
       "vars": {
         "ENVIRONMENT": "production",
-        "BUILD_ID": "production"
+        "BUILD_ID": "production",
       },
       "secrets": {
         "required": [
@@ -90,9 +94,9 @@
           "COMPILER_SERVICE_URL",
           "COMPILER_SERVICE_ORIGIN",
           "COMPILER_SERVICE_HOST",
-          "COMPILER_SERVICE_TOKEN"
-        ]
-      }
-    }
-  }
+          "COMPILER_SERVICE_TOKEN",
+        ],
+      },
+    },
+  },
 }

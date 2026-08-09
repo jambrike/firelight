@@ -1,14 +1,35 @@
 name: Deploy production
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
+      deploy_confirmation:
+        description: Type DEPLOY_PRODUCTION to start the protected production release
+        required: true
+        type: string
+      traffic_cutover_confirmation:
+        description: Type CUTOVER_FIRELIGHT_IE_TO_WORKER to overlay the legacy Pages site
+        required: true
+        type: string
+      worker_bootstrap_confirmation:
+        description: Type BOOTSTRAP_PRODUCTION_WORKER only when firelight-production does not exist
+        required: false
+        type: string
       database_bootstrap_confirmation:
         description: Type BOOTSTRAP_PRODUCTION_DATABASE only for the first database-bound deploy
         required: false
+        type: string
+      release_principals_bootstrap_confirmation:
+        description: Type BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS only for the one-time role bootstrap
+        required: false
+        type: string
+      staging_run_id:
+        description: Exact accepted staging web workflow run ID
+        required: true
+        type: string
+      staging_evidence_sha256:
+        description: Exact accepted staging web evidence JSON SHA-256
+        required: true
         type: string
 
 permissions:
@@ -20,11 +41,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require an explicit production cutover from main
+        shell: bash
+        env:
+          DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          TRAFFIC_CUTOVER_CONFIRMATION: ${{ inputs.traffic_cutover_confirmation }}
+          WORKER_BOOTSTRAP_CONFIRMATION: ${{ inputs.worker_bootstrap_confirmation }}
+          DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
+          PRINCIPALS_BOOTSTRAP_CONFIRMATION: ${{ inputs.release_principals_bootstrap_confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          STAGING_EVIDENCE_SHA256: ${{ inputs.staging_evidence_sha256 }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOY_CONFIRMATION" != "DEPLOY_PRODUCTION" ]]; then
+            echo "The production release confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$TRAFFIC_CUTOVER_CONFIRMATION" != "CUTOVER_FIRELIGHT_IE_TO_WORKER" ]]; then
+            echo "The production traffic-cutover confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$WORKER_BOOTSTRAP_CONFIRMATION" && "$WORKER_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_PRODUCTION_WORKER" ]]; then
+            echo "The production Worker bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$DATABASE_BOOTSTRAP_CONFIRMATION" && "$DATABASE_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_PRODUCTION_DATABASE" ]]; then
+            echo "The production database bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$PRINCIPALS_BOOTSTRAP_CONFIRMATION" && "$PRINCIPALS_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS" ]]; then
+            echo "The production release-principal bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "Production releases must be dispatched from main." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The production release must resolve to one lowercase commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$STAGING_RUN_ID" =~ ^[1-9][0-9]{0,15}$ || ! "$STAGING_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Production requires one exact accepted staging run and evidence hash." >&2
+            exit 1
+          fi
+
   verify:
+    needs: authorize-release
     uses: ./.github/workflows/ci.yml
 
-  preview-production-migrations:
+  release-anchors:
     needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      anchor-set-sha256: ${{ steps.anchors.outputs.anchor_set_sha256 }}
+      organization-identity-hash: ${{ steps.anchors.outputs.organization_identity_hash }}
+      staging-project-ref-identity-hash: ${{ steps.anchors.outputs.staging_project_ref_identity_hash }}
+      production-project-ref-identity-hash: ${{ steps.anchors.outputs.production_project_ref_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Load the source-pinned Supabase environment anchors
+        id: anchors
+        run: >-
+          node scripts/verify-release-environment-anchors.mjs
+          .github/supabase-project-anchors.json >> "$GITHUB_OUTPUT"
+
+  preview-production-migrations:
+    needs:
+      - verify
+      - release-anchors
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -34,12 +131,22 @@ jobs:
       migration-tree: ${{ steps.migrations.outputs.tree }}
       project-ref-hash: ${{ steps.target.outputs.project_ref_hash }}
       project-identity-hash: ${{ steps.project.outputs.project_identity_hash }}
+      project-ref-identity-hash: ${{ steps.project.outputs.project_ref_identity_hash }}
+      organization-identity-hash: ${{ steps.project.outputs.organization_identity_hash }}
+      staging-project-identity-hash: ${{ steps.staging-evidence.outputs.staging_project_identity_hash }}
+      staging-project-ref-identity-hash: ${{ steps.staging-evidence.outputs.staging_project_ref_identity_hash }}
+      staging-organization-identity-hash: ${{ steps.staging-evidence.outputs.staging_organization_identity_hash }}
+      staging-web-evidence-sha256: ${{ steps.staging-evidence.outputs.staging_web_evidence_sha256 }}
       migration-state-hash: ${{ steps.remote-migrations.outputs.migration_state_hash }}
+      auth-config-hash: ${{ steps.auth.outputs.auth_config_hash }}
+      legacy-pages-evidence-hash: ${{ steps.legacy-pages.outputs.legacy_pages_evidence_hash }}
+      legacy-asset-hash: ${{ steps.legacy-pages.outputs.legacy_asset_hash }}
       target-mode: ${{ steps.target.outputs.database_target_mode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -60,27 +167,109 @@ jobs:
         env:
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-      - name: Require successful staging acceptance for this exact commit
+      - name: Require the exact successful staging run for this commit
+        id: staging-run
         env:
+          FIRELIGHT_STAGING_RUN_ID: ${{ inputs.staging_run_id }}
           GITHUB_SHA: ${{ steps.release.outputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/verify-staging-evidence.mjs
+        run: node scripts/verify-staging-evidence.mjs >> "$GITHUB_OUTPUT"
+      - name: Download the exact accepted staging web evidence artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ steps.staging-run.outputs.staging_artifact_name }}
+          path: ${{ runner.temp }}/firelight-web-staging-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging-run.outputs.staging_run_id }}
+      - name: Verify the exact staging web evidence hash and identity snapshot
+        id: staging-evidence
+        env:
+          FIRELIGHT_STAGING_EVIDENCE_SHA256: ${{ inputs.staging_evidence_sha256 }}
+          FIRELIGHT_STAGING_RUN_ID: ${{ steps.staging-run.outputs.staging_run_id }}
+          FIRELIGHT_STAGING_RUN_NUMBER: ${{ steps.staging-run.outputs.staging_run_number }}
+          FIRELIGHT_STAGING_RUN_ATTEMPT: ${{ steps.staging-run.outputs.staging_run_attempt }}
+          FIRELIGHT_WEB_STAGING_EVIDENCE_PATH: ${{ runner.temp }}/firelight-web-staging-evidence/firelight-web-staging-evidence.json
+          GITHUB_SHA: ${{ steps.release.outputs.sha }}
+        run: node scripts/verify-web-staging-evidence.mjs >> "$GITHUB_OUTPUT"
+      - name: Bind accepted staging evidence to the source-pinned project label
+        shell: bash
+        env:
+          ACCEPTED_STAGING_ORGANIZATION_IDENTITY_HASH: ${{ steps.staging-evidence.outputs.staging_organization_identity_hash }}
+          ACCEPTED_STAGING_PROJECT_REF_IDENTITY_HASH: ${{ steps.staging-evidence.outputs.staging_project_ref_identity_hash }}
+          CANONICAL_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+        run: |
+          set -euo pipefail
+          for fingerprint in \
+            "$ACCEPTED_STAGING_ORGANIZATION_IDENTITY_HASH" \
+            "$ACCEPTED_STAGING_PROJECT_REF_IDENTITY_HASH" \
+            "$CANONICAL_ORGANIZATION_IDENTITY_HASH" \
+            "$CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH"; do
+            if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "The staging project evidence anchor is invalid." >&2
+              exit 1
+            fi
+          done
+          if [[ "$ACCEPTED_STAGING_ORGANIZATION_IDENTITY_HASH" != "$CANONICAL_ORGANIZATION_IDENTITY_HASH" || "$ACCEPTED_STAGING_PROJECT_REF_IDENTITY_HASH" != "$CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH" ]]; then
+            echo "Accepted staging evidence does not match the source-pinned staging project." >&2
+            exit 1
+          fi
       - name: Prove the protected production Supabase project identity
         id: project
         env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
           SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
         run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+      - name: Prove hosted production Auth settings
+        id: auth
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/verify-supabase-auth-config.mjs >> "$GITHUB_OUTPUT"
+      - name: Prove the retained production Pages origin for first bootstrap
+        if: inputs.database_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_DATABASE'
+        id: legacy-pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FIRELIGHT_EXPECTED_PAGES_DEPLOYMENT_ID: 06b4410d-37ff-4526-ac71-5fc4e65bee91
+          FIRELIGHT_EXPECTED_PAGES_COMMIT_SHA: 38e05a32af5e8506e5f4f5d3b516b1f3c405d2c7
+          FIRELIGHT_EXPECTED_LEGACY_PAGES_EVIDENCE_HASH: 02b573aae8d9cfa71312a4e968d0e1f0cab049341519cc782128f5a68e989b4e
+          FIRELIGHT_LEGACY_PAGES_PUBLIC_MODE: matched
+        run: node scripts/verify-legacy-pages.mjs >> "$GITHUB_OUTPUT"
       - name: Prove the production database target before migration preview
         id: target
         env:
           FIRELIGHT_BASE_URL: https://firelight.ie
           FIRELIGHT_EXPECTED_ENVIRONMENT: production
           FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
+          FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH: ${{ steps.legacy-pages.outputs.legacy_pages_evidence_hash }}
+          FIRELIGHT_LEGACY_ASSET_HASH: ${{ steps.legacy-pages.outputs.legacy_asset_hash }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/verify-database-target.mjs >> "$GITHUB_OUTPUT"
+      - name: Recheck production Supabase peer isolation immediately before preview link
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ steps.project.outputs.project_identity_hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
       - name: Link the production database for preview
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -116,9 +305,10 @@ jobs:
   apply-and-deploy:
     needs:
       - verify
+      - release-anchors
       - preview-production-migrations
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment:
       name: production
       url: https://firelight.ie
@@ -127,6 +317,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.preview-production-migrations.outputs.release-sha }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -151,33 +342,136 @@ jobs:
           fi
           echo "Applying reviewed migration tree: $actual_tree"
       - run: npm run build
-      - name: Read runtime secret names
+      - name: Prepare the source-pinned compiler preflight fixture
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: >-
-          npx wrangler secret list --env production --format json
-          > "$RUNNER_TEMP/firelight-worker-secrets.json"
-      - name: Verify the complete runtime secret inventory
-        run: >-
-          node scripts/verify-worker-secrets.mjs
-          "$RUNNER_TEMP/firelight-worker-secrets.json"
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
       - name: Recheck the protected production Supabase project identity
         env:
           FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.preview-production-migrations.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
           SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
         run: node scripts/verify-supabase-project.mjs
+      - name: Recheck the approved hosted production Auth settings
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_EXPECTED_AUTH_CONFIG_HASH: ${{ needs.preview-production-migrations.outputs.auth-config-hash }}
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/verify-supabase-auth-config.mjs
+      - name: Recheck the source-pinned retained production Pages fallback
+        id: legacy-pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FIRELIGHT_EXPECTED_PAGES_DEPLOYMENT_ID: 06b4410d-37ff-4526-ac71-5fc4e65bee91
+          FIRELIGHT_EXPECTED_PAGES_COMMIT_SHA: 38e05a32af5e8506e5f4f5d3b516b1f3c405d2c7
+          FIRELIGHT_EXPECTED_LEGACY_PAGES_EVIDENCE_HASH: 02b573aae8d9cfa71312a4e968d0e1f0cab049341519cc782128f5a68e989b4e
+          FIRELIGHT_LEGACY_PAGES_PUBLIC_MODE: ${{ inputs.database_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_DATABASE' && 'matched' || 'deployment-only' }}
+        run: node scripts/verify-legacy-pages.mjs >> "$GITHUB_OUTPUT"
       - name: Recheck the approved production database target
         env:
           FIRELIGHT_BASE_URL: https://firelight.ie
           FIRELIGHT_EXPECTED_ENVIRONMENT: production
           FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
           FIRELIGHT_EXPECTED_PROJECT_REF_HASH: ${{ needs.preview-production-migrations.outputs.project-ref-hash }}
+          FIRELIGHT_LEGACY_PAGES_EVIDENCE_HASH: ${{ needs.preview-production-migrations.outputs.legacy-pages-evidence-hash }}
+          FIRELIGHT_LEGACY_ASSET_HASH: ${{ inputs.database_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_DATABASE' && steps.legacy-pages.outputs.legacy_asset_hash || '' }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/verify-database-target.mjs
+      - name: Prove the prospective production Worker bindings before migration
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+        run: node scripts/verify-prospective-worker-bindings.mjs
+      - name: Probe the protected production compiler before migration
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: production
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Preflight the production Worker target is absent for bootstrap
+        if: inputs.worker_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: production
+          FIRELIGHT_WORKER_TARGET_MODE: bootstrap
+        run: node scripts/verify-worker-target.mjs
+      - name: Preflight the existing production Worker target
+        if: inputs.worker_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: production
+          FIRELIGHT_WORKER_TARGET_MODE: existing
+        run: node scripts/verify-worker-target.mjs
+      - name: Prepare and validate the protected production Worker bindings
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: node scripts/write-worker-secrets.mjs
+      - name: Preflight the existing runtime secret inventory
+        if: inputs.worker_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler secret list --env production --format json > "$RUNNER_TEMP/firelight-worker-secrets.json"
+          node scripts/verify-worker-secrets.mjs "$RUNNER_TEMP/firelight-worker-secrets.json"
+      - name: Prove the production release principals before migration
+        if: inputs.release_principals_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS'
+        id: principals
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs >> "$GITHUB_OUTPUT"
+      - name: Recheck production Supabase peer isolation immediately before migration
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.preview-production-migrations.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
       - name: Link the approved production database
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -202,16 +496,141 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: npx supabase db push --linked
-      - name: Deploy the approved production Worker and assets
+      - name: Run linked production database acceptance
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: npx supabase test db --linked
+      - name: Bootstrap the exact production release principals
+        if: inputs.release_principals_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS'
+        id: bootstrap-principals
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_RELEASE_PRINCIPALS_BOOTSTRAP_CONFIRMATION: ${{ inputs.release_principals_bootstrap_confirmation }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/bootstrap-release-principals.mjs >> "$GITHUB_OUTPUT"
+      - name: Recheck the approved production release principals
+        if: inputs.release_principals_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS'
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_EXPECTED_RELEASE_PRINCIPALS_HASH: ${{ steps.principals.outputs.release_principals_hash }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs
+      - name: Recheck the bootstrapped production release principals
+        if: inputs.release_principals_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_RELEASE_PRINCIPALS'
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_EXPECTED_RELEASE_PRINCIPALS_HASH: ${{ steps.bootstrap-principals.outputs.release_principals_hash }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs
+      - name: Recheck production Supabase peer isolation immediately before Worker deploy
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.preview-production-migrations.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
+      - name: Recheck the production Worker target is absent immediately before bootstrap
+        if: inputs.worker_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_WORKER'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: production
+          FIRELIGHT_WORKER_TARGET_MODE: bootstrap
+        run: node scripts/verify-worker-target.mjs
+      - name: Recheck the existing production Worker target immediately before deploy
+        if: inputs.worker_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: production
+          FIRELIGHT_WORKER_TARGET_MODE: existing
+        run: node scripts/verify-worker-target.mjs
+      - name: Re-probe the production compiler immediately before Worker deploy
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: production
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Deploy the approved production Worker and Pages-overlay route
+        if: inputs.worker_bootstrap_confirmation != 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
         run: >-
           npx wrangler deploy --env production --strict
+          --secrets-file "$FIRELIGHT_WORKER_SECRETS_PATH"
           --var ENVIRONMENT:production
           --var BUILD_ID:${{ needs.preview-production-migrations.outputs.release-sha }}
           --tag "${{ needs.preview-production-migrations.outputs.release-sha }}"
           --message "firelight-release:production:${{ needs.preview-production-migrations.outputs.release-sha }}"
+      - name: Deploy the first production Worker and Pages-overlay route
+        if: inputs.worker_bootstrap_confirmation == 'BOOTSTRAP_PRODUCTION_WORKER'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+        run: >-
+          npx wrangler deploy --env production --strict
+          --secrets-file "$FIRELIGHT_WORKER_SECRETS_PATH"
+          --var ENVIRONMENT:production
+          --var BUILD_ID:${{ needs.preview-production-migrations.outputs.release-sha }}
+          --tag "${{ needs.preview-production-migrations.outputs.release-sha }}"
+          --message "firelight-release:production:${{ needs.preview-production-migrations.outputs.release-sha }}"
+      - name: Remove the temporary Worker bootstrap file
+        if: always()
+        shell: bash
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+        run: |
+          set -euo pipefail
+          if [[ -f "$FIRELIGHT_WORKER_SECRETS_PATH" ]]; then
+            rm -- "$FIRELIGHT_WORKER_SECRETS_PATH"
+          fi
+      - name: Verify the deployed runtime secret inventory
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler secret list --env production --format json > "$RUNNER_TEMP/firelight-worker-secrets.json"
+          node scripts/verify-worker-secrets.mjs "$RUNNER_TEMP/firelight-worker-secrets.json"
+      - name: Wait for the exact production release build
+        env:
+          FIRELIGHT_BASE_URL: https://firelight.ie
+          FIRELIGHT_EXPECTED_ENVIRONMENT: production
+          FIRELIGHT_EXPECTED_BUILD_ID: ${{ needs.preview-production-migrations.outputs.release-sha }}
+        run: node scripts/wait-for-release.mjs
       - name: Verify production identity and compiler dependencies
         env:
           FIRELIGHT_BASE_URL: https://firelight.ie
@@ -243,6 +662,15 @@ jobs:
           FIRELIGHT_RELEASE_WORKER_NAME: firelight-production
           FIRELIGHT_RELEASE_BUILD_ID: ${{ needs.preview-production-migrations.outputs.release-sha }}
           FIRELIGHT_RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/firelight-release-evidence.json
+          FIRELIGHT_SUPABASE_ANCHOR_SET_SHA256: ${{ needs.release-anchors.outputs.anchor-set-sha256 }}
+          FIRELIGHT_SUPABASE_PROJECT_REF_IDENTITY_SHA256: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_SUPABASE_ORGANIZATION_IDENTITY_SHA256: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          COMPILER_SERVICE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          COMPILER_SERVICE_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
         run: node scripts/release-evidence.mjs
       - name: Preserve accepted production release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

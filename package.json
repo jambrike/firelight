@@ -38,7 +38,7 @@
     "check": "npm run cf-typegen:check && npm run typecheck && npm run typecheck:e2e && npm run lint && npm run test && npm run build",
     "check:startup": "wrangler check startup",
     "deploy:dry-run": "npm run build && wrangler deploy --dry-run",
-    "deploy": "npm run check && wrangler deploy"
+    "deploy": "node scripts/refuse-local-deploy.mjs"
   },
   "dependencies": {
     "@fontsource/press-start-2p": "^5.3.0",

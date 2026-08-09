@@ -21,6 +21,14 @@ import app  # noqa: E402
 TOKEN = "deterministic-test-token-000000000000000000000000"
 SOURCE = "void setup() {}\nvoid loop() {}\n"
 VALID_HEX = ":020000000C945E\n:00000001FF\n"
+BUILD_ID = "a" * 40
+IMAGE_DIGEST = f"sha256:{'b' * 64}"
+RELEASE_IDENTITY = app.ReleaseIdentity(
+    environment="staging",
+    service_name="firelight-compiler-stg",
+    build_id=BUILD_ID,
+    image_digest=IMAGE_DIGEST,
+)
 
 
 def event_for(
@@ -70,6 +78,7 @@ class HandlerTests(unittest.TestCase):
         return app.handle_event(
             event,
             token_loader=lambda: TOKEN,
+            identity_loader=lambda: RELEASE_IDENTITY,
             compile_fn=compile_fn or (lambda source: artifact_for(source)),
         )
 
@@ -82,6 +91,7 @@ class HandlerTests(unittest.TestCase):
             payload,
             {
                 "ok": True,
+                "identity": RELEASE_IDENTITY.public_payload(),
                 "artifact": {
                     "artifactHash": hashlib.sha256(VALID_HEX.encode()).hexdigest(),
                     "format": "intel-hex",
@@ -116,12 +126,79 @@ class HandlerTests(unittest.TestCase):
             response_json(response)["error"]["code"], "COMPILER_UNAVAILABLE"
         )
 
-    def test_authentication_happens_before_method_validation(self):
+    def test_authenticated_get_exposes_only_bound_release_identity(self):
         unauthenticated = self.handle(event_for(token=None, method="GET"))
         authenticated = self.handle(event_for(method="GET"))
         self.assertEqual(unauthenticated["statusCode"], 401)
-        self.assertEqual(authenticated["statusCode"], 405)
-        self.assertEqual(authenticated["headers"]["allow"], "POST")
+        self.assertNotIn("identity", response_json(unauthenticated))
+        self.assertEqual(authenticated["statusCode"], 200)
+        self.assertEqual(
+            response_json(authenticated),
+            {"identity": RELEASE_IDENTITY.public_payload(), "ok": True},
+        )
+
+    def test_every_authenticated_error_with_loaded_identity_carries_exact_identity(self):
+        cases = (
+            event_for(method="DELETE"),
+            event_for(content_type="text/plain"),
+            event_for({"fqbn": "arduino:avr:uno", "source": SOURCE}),
+        )
+        for event in cases:
+            with self.subTest(event=event):
+                response = self.handle(event)
+                self.assertGreaterEqual(response["statusCode"], 400)
+                self.assertEqual(
+                    response_json(response)["identity"],
+                    RELEASE_IDENTITY.public_payload(),
+                )
+
+    def test_invalid_release_identity_fails_only_after_authentication(self):
+        identity_loader = mock.Mock(side_effect=RuntimeError("bad identity"))
+        unauthorized = app.handle_event(
+            event_for(token=None),
+            token_loader=lambda: TOKEN,
+            identity_loader=identity_loader,
+        )
+        self.assertEqual(unauthorized["statusCode"], 401)
+        identity_loader.assert_not_called()
+
+        authenticated = app.handle_event(
+            event_for(),
+            token_loader=lambda: TOKEN,
+            identity_loader=identity_loader,
+        )
+        self.assertEqual(authenticated["statusCode"], 503)
+        self.assertEqual(
+            response_json(authenticated)["error"]["code"],
+            "COMPILER_UNAVAILABLE",
+        )
+
+    def test_release_identity_configuration_is_exact_and_canonical(self):
+        values = {
+            "FIRELIGHT_COMPILER_ENVIRONMENT": "production",
+            "FIRELIGHT_COMPILER_SERVICE_NAME": "firelight-compiler-prd",
+            "FIRELIGHT_COMPILER_BUILD_ID": BUILD_ID,
+            "FIRELIGHT_COMPILER_IMAGE_DIGEST": IMAGE_DIGEST,
+        }
+        self.assertEqual(
+            app._load_release_identity(values).public_payload(),
+            {
+                "buildId": BUILD_ID,
+                "environment": "production",
+                "imageDigest": IMAGE_DIGEST,
+                "protocolVersion": 1,
+                "serviceName": "firelight-compiler-prd",
+            },
+        )
+        for name, value in [
+            ("FIRELIGHT_COMPILER_ENVIRONMENT", "development"),
+            ("FIRELIGHT_COMPILER_SERVICE_NAME", "firelight-compiler-stg"),
+            ("FIRELIGHT_COMPILER_BUILD_ID", "A" * 40),
+            ("FIRELIGHT_COMPILER_BUILD_ID", "0" * 40),
+            ("FIRELIGHT_COMPILER_IMAGE_DIGEST", f"sha256:{'0' * 64}"),
+        ]:
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                app._load_release_identity({**values, name: value})
 
     def test_rejects_non_json_media_type(self):
         response = self.handle(event_for(content_type="text/plain"))
@@ -304,6 +381,10 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(
             response_json(response)["error"]["code"], "COMPILER_INTERNAL_ERROR"
         )
+        self.assertEqual(
+            response_json(response)["identity"],
+            RELEASE_IDENTITY.public_payload(),
+        )
 
 
 class IsolationBoundaryTests(unittest.TestCase):
@@ -311,6 +392,11 @@ class IsolationBoundaryTests(unittest.TestCase):
         forward = mock.Mock(return_value=artifact_for())
         with (
             mock.patch.object(app, "_load_service_token", return_value=TOKEN),
+            mock.patch.object(
+                app,
+                "_load_release_identity",
+                return_value=RELEASE_IDENTITY,
+            ),
             mock.patch.object(app, "_invoke_isolated_compiler", forward),
         ):
             accepted = app.gateway_lambda_handler(event_for(), None)

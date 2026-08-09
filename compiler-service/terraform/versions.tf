@@ -10,13 +10,15 @@ terraform {
 }
 
 provider "aws" {
-  region = "eu-west-1"
+  region              = "eu-west-1"
+  allowed_account_ids = [var.aws_account_id]
 
   default_tags {
     tags = {
-      ManagedBy = "terraform"
-      Project   = "firelight"
-      Service   = "compiler"
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Project     = "firelight"
+      Service     = "compiler"
     }
   }
 }

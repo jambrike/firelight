@@ -1,11 +1,40 @@
 variable "service_name" {
-  description = "Stable prefix for compiler resources. Kept short enough for ALB names."
+  description = "Canonical environment-scoped compiler resource prefix: firelight-compiler-stg or firelight-compiler-prd."
   type        = string
-  default     = "firelight-compiler"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,23}$", var.service_name))
     error_message = "service_name must be 3-24 lowercase letters, numbers, or hyphens."
+  }
+}
+
+variable "environment" {
+  description = "Protected Firelight environment represented by this independent Terraform state."
+  type        = string
+
+  validation {
+    condition     = contains(["staging", "production"], var.environment)
+    error_message = "environment must be staging or production."
+  }
+}
+
+variable "aws_account_id" {
+  description = "Reviewed 12-digit AWS account ID; the provider refuses any other account."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must contain exactly 12 digits."
+  }
+}
+
+variable "deployment_role_name" {
+  description = "Exact short-lived assumed role allowed to plan or apply this environment; IAM users and account root are rejected."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9+=,.@_-]{0,63}$", var.deployment_role_name))
+    error_message = "deployment_role_name must be a valid IAM role name."
   }
 }
 
@@ -16,6 +45,16 @@ variable "image_digest" {
   validation {
     condition     = can(regex("^sha256:[0-9a-f]{64}$", var.image_digest))
     error_message = "image_digest must be an immutable lowercase sha256 digest."
+  }
+}
+
+variable "release_build_id" {
+  description = "Immutable lowercase Git commit SHA that produced and approved this compiler image."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.release_build_id))
+    error_message = "release_build_id must be a lowercase 40-character Git commit SHA."
   }
 }
 
@@ -40,7 +79,7 @@ variable "auth_secret_kms_key_arn" {
 
   validation {
     condition = var.auth_secret_kms_key_arn == null || can(regex(
-      "^arn:aws:kms:eu-west-1:[0-9]{12}:key/[0-9a-f-]{36}$",
+      "^arn:aws:kms:eu-west-1:[0-9]{12}:key/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
       var.auth_secret_kms_key_arn,
     ))
     error_message = "auth_secret_kms_key_arn must be an eu-west-1 KMS key ARN or null."
@@ -53,8 +92,17 @@ variable "vpc_cidr" {
   default     = "10.42.0.0/20"
 
   validation {
-    condition     = can(cidrnetmask(var.vpc_cidr)) && can(cidrsubnet(var.vpc_cidr, 4, 1))
-    error_message = "vpc_cidr must be a valid IPv4 CIDR with room for two derived subnets."
+    condition = try(
+      cidrnetmask(var.vpc_cidr) == "255.255.240.0" &&
+      cidrhost(var.vpc_cidr, 0) == split("/", var.vpc_cidr)[0] &&
+      (
+        can(regex("^10\\.", var.vpc_cidr)) ||
+        can(regex("^172\\.(1[6-9]|2[0-9]|3[01])\\.", var.vpc_cidr)) ||
+        can(regex("^192\\.168\\.", var.vpc_cidr))
+      ),
+      false,
+    )
+    error_message = "vpc_cidr must be a canonical RFC1918 IPv4 /20 network."
   }
 }
 
@@ -84,6 +132,11 @@ variable "enable_deletion_protection" {
   description = "Protect the internal ALB from accidental deletion in long-lived environments."
   type        = bool
   default     = true
+
+  validation {
+    condition     = var.enable_deletion_protection
+    error_message = "enable_deletion_protection must remain enabled in staging and production."
+  }
 }
 
 variable "log_retention_days" {

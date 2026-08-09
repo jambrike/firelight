@@ -15,6 +15,8 @@ resource "aws_vpc" "compiler" {
   tags = {
     Name = "${var.service_name}-isolated"
   }
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_subnet" "compiler" {

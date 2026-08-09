@@ -166,22 +166,38 @@ export function classifyLogMethod(method: string): string {
 
 export function classifyLogRoute(path: string): string {
   switch (path) {
-    case "/api": return "api.root";
-    case "/api/health": return "api.health";
-    case "/api/readiness": return "api.readiness";
-    case "/api/config": return "api.config";
-    case "/api/bootstrap": return "api.bootstrap";
-    case "/api/account/export": return "api.account_export";
-    case "/api/profile": return "api.profile";
-    case "/api/kits/claim": return "api.kit_claim";
-    case "/api/compile": return "api.compile";
-    case "/api/hardware/upload-evidence": return "api.upload_evidence";
-    case "/api/admin/kits/batches": return "api.admin_kit_batch";
-    case "/api/admin/kits": return "api.admin_kits";
-    case "/api/admin/learners": return "api.admin_learners";
-    case "/api/admin/compile-diagnostics": return "api.admin_compile_diagnostics";
-    case "/api/admin/audit": return "api.admin_audit";
-    case "/api/account": return "api.account_delete";
+    case "/api":
+      return "api.root";
+    case "/api/health":
+      return "api.health";
+    case "/api/readiness":
+      return "api.readiness";
+    case "/api/config":
+      return "api.config";
+    case "/api/bootstrap":
+      return "api.bootstrap";
+    case "/api/account/export":
+      return "api.account_export";
+    case "/api/profile":
+      return "api.profile";
+    case "/api/kits/claim":
+      return "api.kit_claim";
+    case "/api/compile":
+      return "api.compile";
+    case "/api/hardware/upload-evidence":
+      return "api.upload_evidence";
+    case "/api/admin/kits/batches":
+      return "api.admin_kit_batch";
+    case "/api/admin/kits":
+      return "api.admin_kits";
+    case "/api/admin/learners":
+      return "api.admin_learners";
+    case "/api/admin/compile-diagnostics":
+      return "api.admin_compile_diagnostics";
+    case "/api/admin/audit":
+      return "api.admin_audit";
+    case "/api/account":
+      return "api.account_delete";
     case "/index.html":
     case "/dashboard.html":
     case "/learn.html":
@@ -213,7 +229,10 @@ function applyResponseHeaders(context: Context<FirelightWorker>): void {
   }
   context.header("Content-Security-Policy", contentSecurityPolicy(context.env));
   if (isHostedEnvironment(context.env)) {
-    context.header("Strict-Transport-Security", HOSTED_STRICT_TRANSPORT_SECURITY);
+    context.header(
+      "Strict-Transport-Security",
+      HOSTED_STRICT_TRANSPORT_SECURITY,
+    );
   }
 
   if (isApiPath(context.req.path)) {
@@ -239,7 +258,10 @@ function apiError(
   );
 }
 
-function toLearnerProfile(user: AuthenticatedUser, profile: ProfileRecord): LearnerProfile {
+function toLearnerProfile(
+  user: AuthenticatedUser,
+  profile: ProfileRecord,
+): LearnerProfile {
   return {
     id: profile.id,
     displayName: profile.displayName,
@@ -251,7 +273,9 @@ function toLearnerProfile(user: AuthenticatedUser, profile: ProfileRecord): Lear
   };
 }
 
-function buildAchievements(completedIds: ReadonlySet<string>): readonly Achievement[] {
+function buildAchievements(
+  completedIds: ReadonlySet<string>,
+): readonly Achievement[] {
   return [
     {
       id: "first-upload",
@@ -279,11 +303,16 @@ function buildBootstrap(
     records.progress
       .filter((progress) => {
         const lesson = findCurriculumLesson(progress.lessonId);
-        return progress.status === "completed" && lesson?.version === progress.lessonVersion;
+        return (
+          progress.status === "completed" &&
+          lesson?.version === progress.lessonVersion
+        );
       })
       .map((progress) => progress.lessonId),
   );
-  const next = curriculumLessons.find((lesson) => !currentCompleted.has(lesson.id));
+  const next = curriculumLessons.find(
+    (lesson) => !currentCompleted.has(lesson.id),
+  );
 
   return {
     profile: toLearnerProfile(user, records.profile),
@@ -315,11 +344,23 @@ function buildAccountExport(
 function mapRepositoryError(error: RepositoryError): ApiRequestError {
   switch (error.kind) {
     case "unauthorized":
-      return new ApiRequestError(401, "SESSION_INVALID", "Sign in again to continue.");
+      return new ApiRequestError(
+        401,
+        "SESSION_INVALID",
+        "Sign in again to continue.",
+      );
     case "forbidden":
-      return new ApiRequestError(403, "FORBIDDEN", "This account cannot perform that action.");
+      return new ApiRequestError(
+        403,
+        "FORBIDDEN",
+        "This account cannot perform that action.",
+      );
     case "conflict":
-      return new ApiRequestError(409, "CONFLICT", "The request conflicts with saved data.");
+      return new ApiRequestError(
+        409,
+        "CONFLICT",
+        "The request conflicts with saved data.",
+      );
     case "kit_invalid":
       return new ApiRequestError(
         400,
@@ -333,7 +374,11 @@ function mapRepositoryError(error: RepositoryError): ApiRequestError {
         "Your complete export is too large for self-service. Contact Firelight support.",
       );
     case "invalid":
-      return new ApiRequestError(422, "DATA_REJECTED", "The saved data was rejected.");
+      return new ApiRequestError(
+        422,
+        "DATA_REJECTED",
+        "The saved data was rejected.",
+      );
     case "unavailable":
       return new ApiRequestError(
         503,
@@ -343,15 +388,26 @@ function mapRepositoryError(error: RepositoryError): ApiRequestError {
   }
 }
 
-async function readJsonBody(context: Context<FirelightWorker>, maxBytes: number): Promise<unknown> {
+async function readJsonBody(
+  context: Context<FirelightWorker>,
+  maxBytes: number,
+): Promise<unknown> {
   const contentType = context.req.header("Content-Type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("application/json")) {
-    throw new ApiRequestError(415, "JSON_REQUIRED", "Send this request as JSON.");
+    throw new ApiRequestError(
+      415,
+      "JSON_REQUIRED",
+      "Send this request as JSON.",
+    );
   }
 
   const declaredLength = context.req.header("Content-Length");
   if (declaredLength && Number(declaredLength) > maxBytes) {
-    throw new ApiRequestError(413, "REQUEST_TOO_LARGE", "The request body is too large.");
+    throw new ApiRequestError(
+      413,
+      "REQUEST_TOO_LARGE",
+      "The request body is too large.",
+    );
   }
 
   const body = context.req.raw.body;
@@ -368,12 +424,20 @@ async function readJsonBody(context: Context<FirelightWorker>, maxBytes: number)
       if (result.done) break;
       const chunk: unknown = result.value;
       if (!(chunk instanceof Uint8Array)) {
-        throw new ApiRequestError(400, "INVALID_BODY", "The request body is invalid.");
+        throw new ApiRequestError(
+          400,
+          "INVALID_BODY",
+          "The request body is invalid.",
+        );
       }
       total += chunk.byteLength;
       if (total > maxBytes) {
         await reader.cancel();
-        throw new ApiRequestError(413, "REQUEST_TOO_LARGE", "The request body is too large.");
+        throw new ApiRequestError(
+          413,
+          "REQUEST_TOO_LARGE",
+          "The request body is too large.",
+        );
       }
       chunks.push(chunk);
     }
@@ -391,7 +455,11 @@ async function readJsonBody(context: Context<FirelightWorker>, maxBytes: number)
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
-    throw new ApiRequestError(400, "INVALID_JSON", "The request body is not valid JSON.");
+    throw new ApiRequestError(
+      400,
+      "INVALID_JSON",
+      "The request body is not valid JSON.",
+    );
   }
 }
 
@@ -406,7 +474,10 @@ function hasRuntimeString(value: unknown): value is string {
 function hasUnsupportedControlCharacter(value: string): boolean {
   for (const character of value) {
     const code = character.charCodeAt(0);
-    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127) {
+    if (
+      (code < 32 && code !== 9 && code !== 10 && code !== 13) ||
+      code === 127
+    ) {
       return true;
     }
   }
@@ -423,7 +494,11 @@ function hasAnyControlCharacter(value: string): boolean {
 
 function parseDisplayName(value: unknown): string {
   if (!isRecord(value) || typeof value.displayName !== "string") {
-    throw new ApiRequestError(422, "DISPLAY_NAME_REQUIRED", "Enter a builder name.");
+    throw new ApiRequestError(
+      422,
+      "DISPLAY_NAME_REQUIRED",
+      "Enter a builder name.",
+    );
   }
   const displayName = value.displayName.trim();
   if (
@@ -446,7 +521,11 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 function normalizeKitCode(value: unknown): string {
   if (!isRecord(value) || typeof value.code !== "string") {
-    throw new ApiRequestError(422, "KIT_CODE_REQUIRED", "Enter the code from your kit.");
+    throw new ApiRequestError(
+      422,
+      "KIT_CODE_REQUIRED",
+      "Enter the code from your kit.",
+    );
   }
   const normalized = value.code.toUpperCase().replace(/[ -]/g, "");
   if (!CROCKFORD_KIT_CODE_PATTERN.test(normalized)) {
@@ -460,7 +539,10 @@ function normalizeKitCode(value: unknown): string {
 }
 
 function configuredKitCodePepper(env: Env): string {
-  if (!hasRuntimeString(env.KIT_CODE_PEPPER) || env.KIT_CODE_PEPPER.length < 16) {
+  if (
+    !hasRuntimeString(env.KIT_CODE_PEPPER) ||
+    env.KIT_CODE_PEPPER.length < 16
+  ) {
     throw new ApiRequestError(
       503,
       "KIT_SERVICE_UNAVAILABLE",
@@ -480,11 +562,16 @@ function parseAccountDeletionInput(value: unknown): void {
   }
 }
 
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+function hasExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
   const supplied = Object.keys(value).sort();
   const expected = [...keys].sort();
-  return supplied.length === expected.length &&
-    supplied.every((key, index) => key === expected[index]);
+  return (
+    supplied.length === expected.length &&
+    supplied.every((key, index) => key === expected[index])
+  );
 }
 
 function adminSearchParams(
@@ -505,7 +592,10 @@ function adminSearchParams(
   return params;
 }
 
-function parseAdminPage(params: URLSearchParams): { readonly limit: number; readonly offset: number } {
+function parseAdminPage(params: URLSearchParams): {
+  readonly limit: number;
+  readonly offset: number;
+} {
   const limitValue = params.get("limit");
   const offsetValue = params.get("offset");
   if (
@@ -518,7 +608,8 @@ function parseAdminPage(params: URLSearchParams): { readonly limit: number; read
       "Support-console pagination is invalid.",
     );
   }
-  const limit = limitValue === null ? ADMIN_PAGE_DEFAULT_LIMIT : Number(limitValue);
+  const limit =
+    limitValue === null ? ADMIN_PAGE_DEFAULT_LIMIT : Number(limitValue);
   const offset = offsetValue === null ? 0 : Number(offsetValue);
   if (
     !Number.isSafeInteger(limit) ||
@@ -543,7 +634,10 @@ function parseAdminQueryText(
   maximumLength = 120,
 ): string {
   const value = (params.get(key) ?? "").trim();
-  if (Array.from(value).length > maximumLength || hasUnsupportedControlCharacter(value)) {
+  if (
+    Array.from(value).length > maximumLength ||
+    hasUnsupportedControlCharacter(value)
+  ) {
     throw new ApiRequestError(
       422,
       "QUERY_INVALID",
@@ -566,7 +660,11 @@ function parseAdminKitListQuery(context: Context<FirelightWorker>): {
     stateValue !== "claimed" &&
     stateValue !== "revoked"
   ) {
-    throw new ApiRequestError(422, "KIT_STATE_INVALID", "The kit state filter is invalid.");
+    throw new ApiRequestError(
+      422,
+      "KIT_STATE_INVALID",
+      "The kit state filter is invalid.",
+    );
   }
   return {
     query: parseAdminQueryText(params, "q"),
@@ -575,7 +673,10 @@ function parseAdminKitListQuery(context: Context<FirelightWorker>): {
   };
 }
 
-function parseAdminKitBatch(value: unknown): { readonly batch: string; readonly count: number } {
+function parseAdminKitBatch(value: unknown): {
+  readonly batch: string;
+  readonly count: number;
+} {
   if (!isRecord(value) || !hasExactKeys(value, ["batch", "count"])) {
     throw new ApiRequestError(
       422,
@@ -609,7 +710,9 @@ function parseAdminKitBatch(value: unknown): { readonly batch: string; readonly 
   return { batch, count: Number(value.count) };
 }
 
-function parseAdminRevocation(value: unknown): AdminKitRevocationInput["reason"] {
+function parseAdminRevocation(
+  value: unknown,
+): AdminKitRevocationInput["reason"] {
   if (!isRecord(value) || !hasExactKeys(value, ["reason"])) {
     throw new ApiRequestError(
       422,
@@ -646,7 +749,12 @@ function parseAdminCompileQuery(context: Context<FirelightWorker>): {
   readonly errorCode: string | null;
   readonly page: { readonly limit: number; readonly offset: number };
 } {
-  const params = adminSearchParams(context, ["state", "errorCode", "limit", "offset"]);
+  const params = adminSearchParams(context, [
+    "state",
+    "errorCode",
+    "limit",
+    "offset",
+  ]);
   const state = params.get("state");
   if (
     state !== null &&
@@ -662,9 +770,10 @@ function parseAdminCompileQuery(context: Context<FirelightWorker>): {
     );
   }
   const errorCodeValue = params.get("errorCode");
-  const errorCode = errorCodeValue === null || errorCodeValue === ""
-    ? null
-    : errorCodeValue.trim();
+  const errorCode =
+    errorCodeValue === null || errorCodeValue === ""
+      ? null
+      : errorCodeValue.trim();
   if (errorCode !== null && !/^[A-Z][A-Z0-9_]{0,63}$/.test(errorCode)) {
     throw new ApiRequestError(
       422,
@@ -677,16 +786,32 @@ function parseAdminCompileQuery(context: Context<FirelightWorker>): {
 
 function parseCompileInput(value: unknown): CompileSketchInput {
   if (!isRecord(value)) {
-    throw new ApiRequestError(422, "COMPILE_REQUEST_INVALID", "Sketch details are required.");
+    throw new ApiRequestError(
+      422,
+      "COMPILE_REQUEST_INVALID",
+      "Sketch details are required.",
+    );
   }
-  const lesson = typeof value.lessonId === "string"
-    ? findCurriculumLesson(value.lessonId)
-    : undefined;
+  const lesson =
+    typeof value.lessonId === "string"
+      ? findCurriculumLesson(value.lessonId)
+      : undefined;
   if (!lesson) {
-    throw new ApiRequestError(404, "LESSON_NOT_FOUND", "That lesson does not exist.");
+    throw new ApiRequestError(
+      404,
+      "LESSON_NOT_FOUND",
+      "That lesson does not exist.",
+    );
   }
-  if (!Number.isInteger(value.lessonVersion) || Number(value.lessonVersion) < 1) {
-    throw new ApiRequestError(422, "LESSON_VERSION_INVALID", "Lesson version is invalid.");
+  if (
+    !Number.isInteger(value.lessonVersion) ||
+    Number(value.lessonVersion) < 1
+  ) {
+    throw new ApiRequestError(
+      422,
+      "LESSON_VERSION_INVALID",
+      "Lesson version is invalid.",
+    );
   }
   if (Number(value.lessonVersion) !== lesson.version) {
     throw new ApiRequestError(
@@ -703,9 +828,15 @@ function parseCompileInput(value: unknown): CompileSketchInput {
     );
   }
   if (typeof value.source !== "string" || value.source.trim().length === 0) {
-    throw new ApiRequestError(422, "SKETCH_REQUIRED", "Enter an Arduino sketch to compile.");
+    throw new ApiRequestError(
+      422,
+      "SKETCH_REQUIRED",
+      "Enter an Arduino sketch to compile.",
+    );
   }
-  if (new TextEncoder().encode(value.source).byteLength > MAX_SKETCH_SOURCE_BYTES) {
+  if (
+    new TextEncoder().encode(value.source).byteLength > MAX_SKETCH_SOURCE_BYTES
+  ) {
     throw new ApiRequestError(
       413,
       "SKETCH_TOO_LARGE",
@@ -735,14 +866,20 @@ function parseUploadEvidenceInput(value: unknown): UploadEvidenceInput {
       "Upload details are required.",
     );
   }
-  if (typeof value.compileJobId !== "string" || !UUID_PATTERN.test(value.compileJobId)) {
+  if (
+    typeof value.compileJobId !== "string" ||
+    !UUID_PATTERN.test(value.compileJobId)
+  ) {
     throw new ApiRequestError(
       422,
       "COMPILE_JOB_INVALID",
       "The compile job reference is invalid.",
     );
   }
-  if (typeof value.artifactHash !== "string" || !SHA256_PATTERN.test(value.artifactHash)) {
+  if (
+    typeof value.artifactHash !== "string" ||
+    !SHA256_PATTERN.test(value.artifactHash)
+  ) {
     throw new ApiRequestError(
       422,
       "ARTIFACT_HASH_INVALID",
@@ -786,7 +923,11 @@ function requireVerifiedLearner(user: AuthenticatedUser): void {
 
 function parseProgressInput(value: unknown): ProgressUpdateInput {
   if (!isRecord(value)) {
-    throw new ApiRequestError(422, "PROGRESS_INVALID", "Progress data is required.");
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_INVALID",
+      "Progress data is required.",
+    );
   }
 
   const lessonVersion = value.lessonVersion;
@@ -798,7 +939,11 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
   const uploadEvidenceId = value.uploadEvidenceId;
 
   if (!Number.isInteger(lessonVersion) || Number(lessonVersion) < 1) {
-    throw new ApiRequestError(422, "LESSON_VERSION_INVALID", "Lesson version is invalid.");
+    throw new ApiRequestError(
+      422,
+      "LESSON_VERSION_INVALID",
+      "Lesson version is invalid.",
+    );
   }
   if (
     expectedRevision !== null &&
@@ -811,7 +956,10 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
     );
   }
   if (status === "completed") {
-    if (typeof uploadEvidenceId !== "string" || !UUID_PATTERN.test(uploadEvidenceId)) {
+    if (
+      typeof uploadEvidenceId !== "string" ||
+      !UUID_PATTERN.test(uploadEvidenceId)
+    ) {
       throw new ApiRequestError(
         422,
         "UPLOAD_EVIDENCE_REQUIRED",
@@ -832,18 +980,42 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
       "Upload evidence can only be attached to completed progress.",
     );
   }
-  if (status !== "not_started" && status !== "in_progress" && status !== "completed") {
-    throw new ApiRequestError(422, "PROGRESS_STATUS_INVALID", "Progress status is invalid.");
+  if (
+    status !== "not_started" &&
+    status !== "in_progress" &&
+    status !== "completed"
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_STATUS_INVALID",
+      "Progress status is invalid.",
+    );
   }
   if (typeof currentStepValue !== "string") {
-    throw new ApiRequestError(422, "CURRENT_STEP_INVALID", "Current step is invalid.");
+    throw new ApiRequestError(
+      422,
+      "CURRENT_STEP_INVALID",
+      "Current step is invalid.",
+    );
   }
   const currentStep = currentStepValue.trim();
   if (currentStep.length < 1 || currentStep.length > 100) {
-    throw new ApiRequestError(422, "CURRENT_STEP_INVALID", "Current step is invalid.");
+    throw new ApiRequestError(
+      422,
+      "CURRENT_STEP_INVALID",
+      "Current step is invalid.",
+    );
   }
-  if (!Number.isInteger(percentage) || Number(percentage) < 0 || Number(percentage) > 100) {
-    throw new ApiRequestError(422, "PROGRESS_PERCENTAGE_INVALID", "Progress percentage is invalid.");
+  if (
+    !Number.isInteger(percentage) ||
+    Number(percentage) < 0 ||
+    Number(percentage) > 100
+  ) {
+    throw new ApiRequestError(
+      422,
+      "PROGRESS_PERCENTAGE_INVALID",
+      "Progress percentage is invalid.",
+    );
   }
   const numericPercentage = Number(percentage);
   if (
@@ -857,11 +1029,26 @@ function parseProgressInput(value: unknown): ProgressUpdateInput {
       "Progress status and percentage do not agree.",
     );
   }
-  if (codeSnapshot !== undefined && codeSnapshot !== null && typeof codeSnapshot !== "string") {
-    throw new ApiRequestError(422, "CODE_SNAPSHOT_INVALID", "Code snapshot is invalid.");
+  if (
+    codeSnapshot !== undefined &&
+    codeSnapshot !== null &&
+    typeof codeSnapshot !== "string"
+  ) {
+    throw new ApiRequestError(
+      422,
+      "CODE_SNAPSHOT_INVALID",
+      "Code snapshot is invalid.",
+    );
   }
-  if (typeof codeSnapshot === "string" && new TextEncoder().encode(codeSnapshot).byteLength > 65_536) {
-    throw new ApiRequestError(413, "CODE_SNAPSHOT_TOO_LARGE", "Code snapshot is too large.");
+  if (
+    typeof codeSnapshot === "string" &&
+    new TextEncoder().encode(codeSnapshot).byteLength > 65_536
+  ) {
+    throw new ApiRequestError(
+      413,
+      "CODE_SNAPSHOT_TOO_LARGE",
+      "Code snapshot is too large.",
+    );
   }
   if (
     typeof codeSnapshot === "string" &&
@@ -898,7 +1085,9 @@ function validateProgressCheckpoint(
   lesson: LessonCatalogEntry,
   input: ProgressUpdateInput,
 ): void {
-  const stepIndex = lesson.steps.findIndex((step) => step.id === input.currentStep);
+  const stepIndex = lesson.steps.findIndex(
+    (step) => step.id === input.currentStep,
+  );
   const step = lesson.steps[stepIndex];
   if (stepIndex < 0 || !step) {
     throw new ApiRequestError(
@@ -958,7 +1147,10 @@ function hasCompletedCurrentLesson(
 }
 
 function validatedSupabaseUrl(env: Env): URL | null {
-  if (!hasRuntimeString(env.SUPABASE_URL) || !hasRuntimeString(env.SUPABASE_PROJECT_REF)) {
+  if (
+    !hasRuntimeString(env.SUPABASE_URL) ||
+    !hasRuntimeString(env.SUPABASE_PROJECT_REF)
+  ) {
     return null;
   }
   try {
@@ -995,9 +1187,11 @@ function validatedSupabaseUrl(env: Env): URL | null {
 }
 
 function runtimeIdentityConfigurationReady(env: Env): boolean {
-  return hasRuntimeString(env.SUPABASE_PUBLISHABLE_KEY) &&
+  return (
+    hasRuntimeString(env.SUPABASE_PUBLISHABLE_KEY) &&
     hasRuntimeString(env.SUPABASE_SERVICE_ROLE_KEY) &&
-    validatedSupabaseUrl(env) !== null;
+    validatedSupabaseUrl(env) !== null
+  );
 }
 
 function runtimeCompilerConfigurationReady(env: Env): boolean {
@@ -1015,26 +1209,34 @@ function runtimeCompilerConfigurationReady(env: Env): boolean {
     const environment: string = env.ENVIRONMENT;
     const url = new URL(env.COMPILER_SERVICE_URL);
     const origin = new URL(env.COMPILER_SERVICE_ORIGIN);
-    const exactOrigin = origin.origin === env.COMPILER_SERVICE_ORIGIN.replace(/\/$/, "") &&
+    const exactOrigin =
+      origin.origin === env.COMPILER_SERVICE_ORIGIN.replace(/\/$/, "") &&
       origin.pathname === "/" &&
       origin.search.length === 0 &&
       origin.hash.length === 0 &&
       origin.username.length === 0 &&
       origin.password.length === 0;
-    if (!exactOrigin || url.origin !== origin.origin || url.hostname !== env.COMPILER_SERVICE_HOST) {
+    if (
+      !exactOrigin ||
+      url.origin !== origin.origin ||
+      url.hostname !== env.COMPILER_SERVICE_HOST
+    ) {
       return false;
     }
     if (environment === "development") {
-      return url.protocol === "http:" &&
+      return (
+        url.protocol === "http:" &&
         (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
         url.port.length > 0 &&
         url.username.length === 0 &&
         url.password.length === 0 &&
         url.pathname === "/" &&
         url.search.length === 0 &&
-        url.hash.length === 0;
+        url.hash.length === 0
+      );
     }
-    return (environment === "staging" || environment === "production") &&
+    return (
+      (environment === "staging" || environment === "production") &&
       url.protocol === "https:" &&
       /^[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws$/.test(url.hostname) &&
       url.port.length === 0 &&
@@ -1042,29 +1244,38 @@ function runtimeCompilerConfigurationReady(env: Env): boolean {
       url.password.length === 0 &&
       url.pathname === "/" &&
       url.search.length === 0 &&
-      url.hash.length === 0;
+      url.hash.length === 0
+    );
   } catch {
     return false;
   }
 }
 
 function runtimeConfigurationReady(env: Env): boolean {
-  const buildIsValid = env.ENVIRONMENT === "development"
-    ? hasRuntimeString(env.BUILD_ID)
-    : /^[0-9a-f]{40}$/.test(env.BUILD_ID);
-  return buildIsValid &&
+  const buildIsValid =
+    env.ENVIRONMENT === "development"
+      ? hasRuntimeString(env.BUILD_ID)
+      : /^[0-9a-f]{40}$/.test(env.BUILD_ID);
+  return (
+    buildIsValid &&
     runtimeIdentityConfigurationReady(env) &&
     runtimeCompilerConfigurationReady(env) &&
     hasRuntimeString(env.KIT_CODE_PEPPER) &&
-    env.KIT_CODE_PEPPER.length >= 16;
+    env.KIT_CODE_PEPPER.length >= 16
+  );
 }
 
 export function createFirelightApp(dependencies: AppDependencies = {}) {
-  const createRepository = dependencies.createRepository ?? createSupabaseIdentityRepository;
-  const compilerFetcher = dependencies.compilerFetcher ?? ((request: Request) => fetch(request));
+  const createRepository =
+    dependencies.createRepository ?? createSupabaseIdentityRepository;
+  const compilerFetcher =
+    dependencies.compilerFetcher ?? ((request: Request) => fetch(request));
   const app = new Hono<FirelightWorker>();
 
-  const requestContext: MiddlewareHandler<FirelightWorker> = async (context, next) => {
+  const requestContext: MiddlewareHandler<FirelightWorker> = async (
+    context,
+    next,
+  ) => {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
     context.set("requestId", requestId);
@@ -1086,7 +1297,10 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     );
   };
 
-  const sameOriginMutations: MiddlewareHandler<FirelightWorker> = async (context, next) => {
+  const sameOriginMutations: MiddlewareHandler<FirelightWorker> = async (
+    context,
+    next,
+  ) => {
     if (["GET", "HEAD", "OPTIONS"].includes(context.req.method)) {
       await next();
       return;
@@ -1109,11 +1323,19 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     await next();
   };
 
-  const requireAuth: MiddlewareHandler<FirelightWorker> = async (context, next) => {
+  const requireAuth: MiddlewareHandler<FirelightWorker> = async (
+    context,
+    next,
+  ) => {
     const authorization = context.req.header("Authorization") ?? "";
     const match = /^Bearer ([^\s]+)$/.exec(authorization);
     if (!match?.[1]) {
-      context.res = apiError(context, 401, "AUTH_REQUIRED", "Sign in to continue.");
+      context.res = apiError(
+        context,
+        401,
+        "AUTH_REQUIRED",
+        "Sign in to continue.",
+      );
       return;
     }
 
@@ -1125,7 +1347,12 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     } catch (error) {
       if (error instanceof RepositoryError) {
         const mapped = mapRepositoryError(error);
-        context.res = apiError(context, mapped.status, mapped.code, mapped.message);
+        context.res = apiError(
+          context,
+          mapped.status,
+          mapped.code,
+          mapped.message,
+        );
         return;
       }
       throw error;
@@ -1133,7 +1360,10 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     await next();
   };
 
-  const requireAdmin: MiddlewareHandler<FirelightWorker> = async (context, next) => {
+  const requireAdmin: MiddlewareHandler<FirelightWorker> = async (
+    context,
+    next,
+  ) => {
     const user = context.get("user");
     if (!(await context.get("repository").isAdmin(user.id))) {
       context.res = apiError(
@@ -1150,13 +1380,15 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
   app.use("*", requestContext);
   app.use("/api/*", sameOriginMutations);
 
-  app.get("/api/health", (context) => context.json({
-    data: {
-      status: "ok" as const,
-      environment: context.env.ENVIRONMENT,
-      buildId: context.env.BUILD_ID,
-    },
-  }));
+  app.get("/api/health", (context) =>
+    context.json({
+      data: {
+        status: "ok" as const,
+        environment: context.env.ENVIRONMENT,
+        buildId: context.env.BUILD_ID,
+      },
+    }),
+  );
 
   app.get("/api/readiness", (context) => {
     if (!runtimeConfigurationReady(context.env)) {
@@ -1177,9 +1409,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
   });
 
   app.get("/api/config", (context) => {
-    if (
-      !runtimeIdentityConfigurationReady(context.env)
-    ) {
+    if (!runtimeIdentityConfigurationReady(context.env)) {
       return apiError(
         context,
         503,
@@ -1217,7 +1447,7 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     const envelope = { data: accountExport };
     if (
       new TextEncoder().encode(JSON.stringify(envelope)).byteLength >
-        ACCOUNT_EXPORT_MAX_RESPONSE_BYTES
+      ACCOUNT_EXPORT_MAX_RESPONSE_BYTES
     ) {
       throw new RepositoryError(
         "export_too_large",
@@ -1230,15 +1460,22 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
   app.patch("/api/profile", requireAuth, async (context) => {
     const displayName = parseDisplayName(await readJsonBody(context, 2048));
     const user = context.get("user");
-    const profile = await context.get("repository").updateProfile(user.id, displayName);
+    const profile = await context
+      .get("repository")
+      .updateProfile(user.id, displayName);
     return context.json({ data: toLearnerProfile(user, profile) });
   });
 
   app.post("/api/kits/claim", requireAuth, async (context) => {
     const code = normalizeKitCode(await readJsonBody(context, 2048));
-    const codeHash = await hashKitCode(code, configuredKitCodePepper(context.env));
+    const codeHash = await hashKitCode(
+      code,
+      configuredKitCodePepper(context.env),
+    );
     const user = context.get("user");
-    const activation = await context.get("repository").claimKit(user.id, codeHash);
+    const activation = await context
+      .get("repository")
+      .claimKit(user.id, codeHash);
     return context.json({ data: activation });
   });
 
@@ -1246,7 +1483,12 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     const lesson = findCurriculumLesson(context.req.param("id"));
     const definition = findLesson(lesson?.id);
     if (!lesson || !definition) {
-      return apiError(context, 404, "LESSON_NOT_FOUND", "That lesson does not exist.");
+      return apiError(
+        context,
+        404,
+        "LESSON_NOT_FOUND",
+        "That lesson does not exist.",
+      );
     }
     const input = parseProgressInput(await readJsonBody(context, 132 * 1024));
     if (input.lessonVersion !== lesson.version) {
@@ -1272,7 +1514,8 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     if (definition.prerequisites.length > 0) {
       const records = await repository.getBootstrap(user.id);
       const missing = definition.prerequisites.filter(
-        (prerequisite) => !hasCompletedCurrentLesson(records.progress, prerequisite),
+        (prerequisite) =>
+          !hasCompletedCurrentLesson(records.progress, prerequisite),
       );
       if (missing.length > 0) {
         return apiError(
@@ -1284,7 +1527,11 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       }
     }
     try {
-      const progress = await repository.upsertProgress(user.id, lesson.id, input);
+      const progress = await repository.upsertProgress(
+        user.id,
+        lesson.id,
+        input,
+      );
       return context.json({ data: progress });
     } catch (error) {
       if (error instanceof RepositoryError && error.kind === "forbidden") {
@@ -1344,7 +1591,8 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     if (definition.prerequisites.length > 0) {
       const records = await repository.getBootstrap(user.id);
       const missing = definition.prerequisites.filter(
-        (prerequisite) => !hasCompletedCurrentLesson(records.progress, prerequisite),
+        (prerequisite) =>
+          !hasCompletedCurrentLesson(records.progress, prerequisite),
       );
       if (missing.length > 0) {
         return apiError(
@@ -1355,10 +1603,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         );
       }
     }
-    const compileStep = definition.steps.find((step) => step.type === "compile");
+    const compileStep = definition.steps.find(
+      (step) => step.type === "compile",
+    );
     const validationStep = compileStep
       ? definition.steps.find(
-          (step) => step.type === "code-validation" && step.id === compileStep.validationStepId,
+          (step) =>
+            step.type === "code-validation" &&
+            step.id === compileStep.validationStepId,
         )
       : undefined;
     if (validationStep?.type !== "code-validation") {
@@ -1369,7 +1621,10 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         "This lesson is temporarily unavailable for compilation.",
       );
     }
-    const lessonValidation = validateLessonCode(validationStep.validatorId, input.source);
+    const lessonValidation = validateLessonCode(
+      validationStep.validatorId,
+      input.source,
+    );
     if (!lessonValidation.valid) {
       return apiError(
         context,
@@ -1456,13 +1711,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
           "Kit access was revoked before compilation completed.",
         );
       }
-      const failure = error instanceof CompilerGatewayError
-        ? error
-        : new CompilerGatewayError(
-            "upstream",
-            "COMPILER_INTERNAL_ERROR",
-            "The compiler could not complete this request.",
-          );
+      const failure =
+        error instanceof CompilerGatewayError
+          ? error
+          : new CompilerGatewayError(
+              "upstream",
+              "COMPILER_INTERNAL_ERROR",
+              "The compiler could not complete this request.",
+            );
       const durationMs = Math.min(60_000, Math.max(0, Date.now() - startedAt));
       try {
         await repository.finishCompileJob(user.id, {
@@ -1472,11 +1728,16 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
           safeErrorCode: failure.code,
           artifactHash: null,
           diagnosticSummary: diagnosticSummary(
-            failure.diagnostics.length > 0 ? failure.diagnostics : [failure.message],
+            failure.diagnostics.length > 0
+              ? failure.diagnostics
+              : [failure.message],
           ),
         });
       } catch (finishError) {
-        if (finishError instanceof RepositoryError && finishError.kind === "forbidden") {
+        if (
+          finishError instanceof RepositoryError &&
+          finishError.kind === "forbidden"
+        ) {
           return apiError(
             context,
             403,
@@ -1490,7 +1751,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
             requestId: context.get("requestId"),
             jobId: gate.jobId,
             failureCategory:
-              finishError instanceof RepositoryError ? "repository" : "unexpected",
+              finishError instanceof RepositoryError
+                ? "repository"
+                : "unexpected",
           }),
         );
         return apiError(
@@ -1501,13 +1764,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         );
       }
 
-      const status: ErrorStatus = failure.kind === "compile"
-        ? 422
-        : failure.kind === "timeout"
-          ? 504
-          : failure.kind === "configuration"
-            ? 503
-            : 502;
+      const status: ErrorStatus =
+        failure.kind === "compile"
+          ? 422
+          : failure.kind === "timeout"
+            ? 504
+            : failure.kind === "configuration"
+              ? 503
+              : 502;
       return apiError(context, status, failure.code, failure.message);
     }
   });
@@ -1576,12 +1840,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
         generatedCodes.map((entry) => entry.id),
         codeHashes,
       );
-      console.log(JSON.stringify({
-        event: "admin.write_complete",
-        action: "kit.batch_create",
-        requestId: context.get("requestId"),
-        count: created.count,
-      }));
+      console.log(
+        JSON.stringify({
+          event: "admin.write_complete",
+          action: "kit.batch_create",
+          requestId: context.get("requestId"),
+          count: created.count,
+        }),
+      );
       return context.json({
         data: {
           batch: created.batch,
@@ -1598,12 +1864,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
   app.get("/api/admin/kits", requireAuth, requireAdmin, async (context) => {
     const input = parseAdminKitListQuery(context);
     const user = context.get("user");
-    const page = await context.get("repository").listAdminKits(
-      user.id,
-      input.query,
-      input.state,
-      input.page,
-    );
+    const page = await context
+      .get("repository")
+      .listAdminKits(user.id, input.query, input.state, input.page);
     return context.json({ data: page });
   });
 
@@ -1620,21 +1883,26 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       );
       const reason = parseAdminRevocation(await readJsonBody(context, 2048));
       const user = context.get("user");
-      const result = await context.get("repository").revokeAdminKit(
-        user.id,
-        kitId,
-        reason,
-      );
+      const result = await context
+        .get("repository")
+        .revokeAdminKit(user.id, kitId, reason);
       if (!result) {
-        return apiError(context, 404, "KIT_NOT_FOUND", "That kit record does not exist.");
+        return apiError(
+          context,
+          404,
+          "KIT_NOT_FOUND",
+          "That kit record does not exist.",
+        );
       }
-      console.log(JSON.stringify({
-        event: "admin.write_complete",
-        action: "kit.revoke",
-        requestId: context.get("requestId"),
-        result: result.state,
-        accessRevoked: result.accessRevoked,
-      }));
+      console.log(
+        JSON.stringify({
+          event: "admin.write_complete",
+          action: "kit.revoke",
+          requestId: context.get("requestId"),
+          result: result.state,
+          accessRevoked: result.accessRevoked,
+        }),
+      );
       return context.json({ data: result });
     },
   );
@@ -1643,11 +1911,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     const params = adminSearchParams(context, ["q", "limit", "offset"]);
     const pageInput = parseAdminPage(params);
     const user = context.get("user");
-    const page = await context.get("repository").listAdminLearners(
-      user.id,
-      parseAdminQueryText(params, "q"),
-      pageInput,
-    );
+    const page = await context
+      .get("repository")
+      .listAdminLearners(user.id, parseAdminQueryText(params, "q"), pageInput);
     return context.json({ data: page });
   });
 
@@ -1666,7 +1932,10 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       const repository = context.get("repository");
       const user = context.get("user");
       const [learnerPage, progress] = await Promise.all([
-        repository.listAdminLearners(user.id, learnerId, { limit: 1, offset: 0 }),
+        repository.listAdminLearners(user.id, learnerId, {
+          limit: 1,
+          offset: 0,
+        }),
         repository.listAdminProgress(user.id, learnerId, pageInput),
       ]);
       const learner = learnerPage.items[0];
@@ -1689,12 +1958,14 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     async (context) => {
       const input = parseAdminCompileQuery(context);
       const user = context.get("user");
-      const page = await context.get("repository").listAdminCompileDiagnostics(
-        user.id,
-        input.state,
-        input.errorCode,
-        input.page,
-      );
+      const page = await context
+        .get("repository")
+        .listAdminCompileDiagnostics(
+          user.id,
+          input.state,
+          input.errorCode,
+          input.page,
+        );
       return context.json({ data: page });
     },
   );
@@ -1711,11 +1982,9 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       );
     }
     const user = context.get("user");
-    const page = await context.get("repository").listAdminAudit(
-      user.id,
-      action,
-      parseAdminPage(params),
-    );
+    const page = await context
+      .get("repository")
+      .listAdminAudit(user.id, action, parseAdminPage(params));
     return context.json({ data: page });
   });
 
@@ -1723,7 +1992,10 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     parseAccountDeletionInput(await readJsonBody(context, 1024));
     const user = context.get("user");
     const repository = context.get("repository");
-    if (!user.sessionId || !(await repository.hasRecentSession(user.id, user.sessionId))) {
+    if (
+      !user.sessionId ||
+      !(await repository.hasRecentSession(user.id, user.sessionId))
+    ) {
       return apiError(
         context,
         403,
@@ -1791,7 +2063,12 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
       return context.env.ASSETS.fetch(context.req.raw);
     }
 
-    return apiError(context, 404, "NOT_FOUND", "The requested API route does not exist.");
+    return apiError(
+      context,
+      404,
+      "NOT_FOUND",
+      "The requested API route does not exist.",
+    );
   });
 
   app.onError((error, context) => {
@@ -1827,7 +2104,12 @@ export function createFirelightApp(dependencies: AppDependencies = {}) {
     }
 
     applyResponseHeaders(context);
-    return apiError(context, mappedError.status, mappedError.code, mappedError.message);
+    return apiError(
+      context,
+      mappedError.status,
+      mappedError.code,
+      mappedError.message,
+    );
   });
 
   return app;

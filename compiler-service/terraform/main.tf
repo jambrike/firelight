@@ -16,6 +16,49 @@ resource "aws_ecr_repository" "compiler" {
   image_scanning_configuration {
     scan_on_push = true
   }
+
+  depends_on = [terraform_data.operator_gate]
+}
+
+# Lambda must be able to retrieve the exact same-account image after a cold or
+# inactive-function restore. Own this policy in Terraform so function creation
+# never relies on Lambda mutating ECR through the deploy role.
+data "aws_iam_policy_document" "compiler_ecr_lambda" {
+  statement {
+    sid    = "LambdaECRImageRetrievalPolicy"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = ["*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.aws_account_id]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values = [
+        "arn:aws:lambda:eu-west-1:${var.aws_account_id}:function:${var.service_name}-gateway",
+      ]
+    }
+  }
+}
+
+resource "aws_ecr_repository_policy" "compiler_lambda" {
+  repository = aws_ecr_repository.compiler.name
+  policy     = data.aws_iam_policy_document.compiler_ecr_lambda.json
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_ecr_lifecycle_policy" "compiler" {
@@ -24,11 +67,12 @@ resource "aws_ecr_lifecycle_policy" "compiler" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep the latest ten immutable compiler images"
+        description  = "Expire only abandoned untagged manifests after thirty days"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 30
         }
         action = {
           type = "expire"
@@ -41,11 +85,15 @@ resource "aws_ecr_lifecycle_policy" "compiler" {
 resource "aws_cloudwatch_log_group" "gateway" {
   name              = "/aws/lambda/${var.service_name}-gateway"
   retention_in_days = var.log_retention_days
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_cloudwatch_log_group" "compiler" {
   name              = "/ecs/${var.service_name}"
   retention_in_days = var.log_retention_days
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_lb" "compiler" {
@@ -100,6 +148,8 @@ resource "aws_ecs_cluster" "compiler" {
     name  = "containerInsights"
     value = "enabled"
   }
+
+  depends_on = [terraform_data.release_gate]
 }
 
 resource "aws_ecs_task_definition" "compiler" {
@@ -237,7 +287,11 @@ resource "aws_lambda_function" "gateway" {
 
   environment {
     variables = {
+      FIRELIGHT_COMPILER_BUILD_ID     = var.release_build_id
+      FIRELIGHT_COMPILER_ENVIRONMENT  = var.environment
+      FIRELIGHT_COMPILER_IMAGE_DIGEST = var.image_digest
       FIRELIGHT_COMPILER_SECRET_ARN   = var.auth_secret_arn
+      FIRELIGHT_COMPILER_SERVICE_NAME = var.service_name
       FIRELIGHT_INTERNAL_COMPILER_URL = "http://${aws_lb.compiler.dns_name}/compile"
     }
   }
@@ -263,6 +317,7 @@ resource "aws_lambda_function" "gateway" {
 
   depends_on = [
     aws_cloudwatch_log_group.gateway,
+    aws_ecr_repository_policy.compiler_lambda,
     aws_iam_role_policy.gateway,
     aws_vpc_endpoint.secretsmanager,
   ]

@@ -1,6 +1,14 @@
-# Example shape only. Bootstrap the ECR repository, push the linux/amd64 image,
-# then replace this placeholder with the registry-reported immutable digest.
+# Generic example shape only. Prefer the reviewed environment-specific examples
+# in environments/. A complete plan rejects this canonical sentinel digest; it
+# is valid only while targeting aws_ecr_repository.compiler and
+# aws_ecr_lifecycle_policy.compiler for the one-time bootstrap.
+environment          = "staging"
+aws_account_id       = "123456789012"
+service_name         = "firelight-compiler-stg"
+deployment_role_name = "FirelightCompilerStagingDeploy"
+
 image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+release_build_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 # Create this outside Terraform so plaintext never enters configuration or state.
 # Only the Lambda gateway can read it; the Fargate task has no task role or secret.

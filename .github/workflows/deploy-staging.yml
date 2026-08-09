@@ -1,12 +1,22 @@
 name: Deploy staging
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      deploy_confirmation:
+        description: Type DEPLOY_STAGING to start the protected staging release
+        required: true
+        type: string
+      worker_bootstrap_confirmation:
+        description: Type BOOTSTRAP_STAGING_WORKER only when firelight-staging does not exist
+        required: false
+        type: string
       database_bootstrap_confirmation:
         description: Type BOOTSTRAP_STAGING_DATABASE only for the first database-bound deploy
+        required: false
+        type: string
+      release_principals_bootstrap_confirmation:
+        description: Type BOOTSTRAP_STAGING_RELEASE_PRINCIPALS only for the one-time role bootstrap
         required: false
         type: string
 
@@ -18,32 +28,303 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require an explicit staging release from main
+        shell: bash
+        env:
+          DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          WORKER_BOOTSTRAP_CONFIRMATION: ${{ inputs.worker_bootstrap_confirmation }}
+          DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
+          PRINCIPALS_BOOTSTRAP_CONFIRMATION: ${{ inputs.release_principals_bootstrap_confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOY_CONFIRMATION" != "DEPLOY_STAGING" ]]; then
+            echo "The staging release confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$WORKER_BOOTSTRAP_CONFIRMATION" && "$WORKER_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_STAGING_WORKER" ]]; then
+            echo "The staging Worker bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$DATABASE_BOOTSTRAP_CONFIRMATION" && "$DATABASE_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_STAGING_DATABASE" ]]; then
+            echo "The staging database bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$PRINCIPALS_BOOTSTRAP_CONFIRMATION" && "$PRINCIPALS_BOOTSTRAP_CONFIRMATION" != "BOOTSTRAP_STAGING_RELEASE_PRINCIPALS" ]]; then
+            echo "The staging release-principal bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "Staging releases must be dispatched from main." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The staging release must resolve to one lowercase commit SHA." >&2
+            exit 1
+          fi
+
   verify:
+    needs: authorize-release
     uses: ./.github/workflows/ci.yml
 
-  database-target:
+  release-anchors:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      anchor-set-sha256: ${{ steps.anchors.outputs.anchor_set_sha256 }}
+      organization-identity-hash: ${{ steps.anchors.outputs.organization_identity_hash }}
+      staging-project-ref-identity-hash: ${{ steps.anchors.outputs.staging_project_ref_identity_hash }}
+      production-project-ref-identity-hash: ${{ steps.anchors.outputs.production_project_ref_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Load the source-pinned Supabase environment anchors
+        id: anchors
+        run: >-
+          node scripts/verify-release-environment-anchors.mjs
+          .github/supabase-project-anchors.json >> "$GITHUB_OUTPUT"
+
+  snapshot-production-project:
+    needs:
+      - verify
+      - release-anchors
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
+    environment:
+      name: production-preview
+    outputs:
+      project-identity-hash: ${{ steps.project.outputs.project_identity_hash }}
+      project-ref-identity-hash: ${{ steps.project.outputs.project_ref_identity_hash }}
+      organization-identity-hash: ${{ steps.project.outputs.organization_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Prove the protected production Supabase peer snapshot
+        id: project
+        env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+
+  bootstrap-worker:
+    needs:
+      - verify
+      - release-anchors
+      - snapshot-production-project
+    if: inputs.worker_bootstrap_confirmation == 'BOOTSTRAP_STAGING_WORKER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging-worker-bootstrap
+      url: https://staging.firelight.ie
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Prepare the source-pinned compiler preflight fixture
+        env:
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
+      - name: Prove the protected staging Supabase project identity before Worker bootstrap
+        id: bootstrap-project
+        env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+      - name: Prove hosted staging Auth settings before Worker bootstrap
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/verify-supabase-auth-config.mjs
+      - name: Prove the prospective staging Worker bindings before bootstrap
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+        run: node scripts/verify-prospective-worker-bindings.mjs
+      - name: Probe the protected staging compiler before Worker bootstrap
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: staging
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Require the staging Worker target to be absent
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: staging
+          FIRELIGHT_WORKER_TARGET_MODE: bootstrap
+        run: node scripts/verify-worker-target.mjs
+      - name: Prepare the protected first-version Worker bindings
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: node scripts/write-worker-secrets.mjs
+      - name: Recheck the staging Supabase project snapshot immediately before Worker bootstrap
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ steps.bootstrap-project.outputs.project_identity_hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
+      - name: Re-probe the staging compiler immediately before Worker bootstrap
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: staging
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Deploy the first staging Worker version and Custom Domain
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+        run: >-
+          npx wrangler deploy --env staging --strict
+          --secrets-file "$FIRELIGHT_WORKER_SECRETS_PATH"
+          --var ENVIRONMENT:staging
+          --var BUILD_ID:${{ github.sha }}
+          --tag "${{ github.sha }}"
+          --message "firelight-release:staging:${{ github.sha }}"
+      - name: Remove the temporary Worker bootstrap file
+        if: always()
+        shell: bash
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+        run: |
+          set -euo pipefail
+          if [[ -f "$FIRELIGHT_WORKER_SECRETS_PATH" ]]; then
+            rm -- "$FIRELIGHT_WORKER_SECRETS_PATH"
+          fi
+      - name: Verify the first-version runtime secret inventory
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler secret list --env staging --format json > "$RUNNER_TEMP/firelight-worker-secrets.json"
+          node scripts/verify-worker-secrets.mjs "$RUNNER_TEMP/firelight-worker-secrets.json"
+      - name: Wait for the exact staging bootstrap build
+        env:
+          FIRELIGHT_BASE_URL: https://staging.firelight.ie
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_BUILD_ID: ${{ github.sha }}
+        run: node scripts/wait-for-release.mjs
+
+  database-target:
+    needs:
+      - verify
+      - release-anchors
+      - snapshot-production-project
+      - bootstrap-worker
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.release-anchors.result == 'success' &&
+      needs.snapshot-production-project.result == 'success' &&
+      (needs.bootstrap-worker.result == 'success' || needs.bootstrap-worker.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.database_bootstrap_confirmation == 'BOOTSTRAP_STAGING_DATABASE' && 'staging-database-bootstrap' || 'staging' }}
     outputs:
       project-ref-hash: ${{ steps.target.outputs.project_ref_hash }}
       project-identity-hash: ${{ steps.project.outputs.project_identity_hash }}
+      project-ref-identity-hash: ${{ steps.project.outputs.project_ref_identity_hash }}
+      organization-identity-hash: ${{ steps.project.outputs.organization_identity_hash }}
+      auth-config-hash: ${{ steps.auth.outputs.auth_config_hash }}
       target-mode: ${{ steps.target.outputs.database_target_mode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Prove the protected staging Supabase project identity
         id: project
         env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
           SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
         run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+      - name: Prove hosted staging Auth settings
+        id: auth
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/verify-supabase-auth-config.mjs >> "$GITHUB_OUTPUT"
       - name: Prove the staging database target before migration preview
         id: target
         env:
@@ -52,43 +333,53 @@ jobs:
           FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/verify-database-target.mjs >> "$GITHUB_OUTPUT"
-
   migrate-and-deploy:
     needs:
       - verify
+      - release-anchors
+      - snapshot-production-project
       - database-target
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment:
       name: staging
       url: https://staging.firelight.ie
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Read runtime secret names
+      - name: Prepare the source-pinned compiler preflight fixture
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: >-
-          npx wrangler secret list --env staging --format json
-          > "$RUNNER_TEMP/firelight-worker-secrets.json"
-      - name: Verify the complete runtime secret inventory
-        run: >-
-          node scripts/verify-worker-secrets.mjs
-          "$RUNNER_TEMP/firelight-worker-secrets.json"
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
       - name: Recheck the protected staging Supabase project identity
         env:
           FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.database-target.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
           SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
         run: node scripts/verify-supabase-project.mjs
+      - name: Recheck the approved hosted staging Auth settings
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_AUTH_CONFIG_HASH: ${{ needs.database-target.outputs.auth-config-hash }}
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/verify-supabase-auth-config.mjs
       - name: Recheck the approved staging database target
         env:
           FIRELIGHT_BASE_URL: https://staging.firelight.ie
@@ -97,6 +388,66 @@ jobs:
           FIRELIGHT_EXPECTED_PROJECT_REF_HASH: ${{ needs.database-target.outputs.project-ref-hash }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/verify-database-target.mjs
+      - name: Prove the prospective staging Worker bindings before migration
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+        run: node scripts/verify-prospective-worker-bindings.mjs
+      - name: Probe the protected staging compiler before migration
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: staging
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Preflight the existing staging Worker target before migration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: staging
+          FIRELIGHT_WORKER_TARGET_MODE: existing
+        run: node scripts/verify-worker-target.mjs
+      - name: Preflight the complete staging runtime secret inventory
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler secret list --env staging --format json > "$RUNNER_TEMP/firelight-worker-secrets.json"
+          node scripts/verify-worker-secrets.mjs "$RUNNER_TEMP/firelight-worker-secrets.json"
+      - name: Prove the staging release principals before migration
+        if: inputs.release_principals_bootstrap_confirmation != 'BOOTSTRAP_STAGING_RELEASE_PRINCIPALS'
+        id: principals
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs >> "$GITHUB_OUTPUT"
+      - name: Recheck the staging Supabase project snapshot immediately before migration
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.database-target.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
       - name: Link the staging database
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -115,16 +466,124 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: npx supabase db push --linked
+      - name: Run linked staging database acceptance
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: npx supabase test db --linked
+      - name: Bootstrap the exact staging release principals
+        if: inputs.release_principals_bootstrap_confirmation == 'BOOTSTRAP_STAGING_RELEASE_PRINCIPALS'
+        id: bootstrap-principals
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_RELEASE_PRINCIPALS_BOOTSTRAP_CONFIRMATION: ${{ inputs.release_principals_bootstrap_confirmation }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/bootstrap-release-principals.mjs >> "$GITHUB_OUTPUT"
+      - name: Recheck the approved staging release principals
+        if: inputs.release_principals_bootstrap_confirmation != 'BOOTSTRAP_STAGING_RELEASE_PRINCIPALS'
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_RELEASE_PRINCIPALS_HASH: ${{ steps.principals.outputs.release_principals_hash }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs
+      - name: Recheck the bootstrapped staging release principals
+        if: inputs.release_principals_bootstrap_confirmation == 'BOOTSTRAP_STAGING_RELEASE_PRINCIPALS'
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_RELEASE_PRINCIPALS_HASH: ${{ steps.bootstrap-principals.outputs.release_principals_hash }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIRELIGHT_CANARY_USER_ID: ${{ secrets.FIRELIGHT_CANARY_USER_ID }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_USER_ID: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_USER_ID }}
+          FIRELIGHT_SUPPORT_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_EMAIL }}
+          FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME: ${{ secrets.FIRELIGHT_SUPPORT_ADMIN_DISPLAY_NAME }}
+        run: node scripts/verify-release-principals.mjs
+      - name: Prepare the protected staging Worker bindings
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KIT_CODE_PEPPER: ${{ secrets.KIT_CODE_PEPPER }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: node scripts/write-worker-secrets.mjs
+      - name: Recheck the staging Supabase project snapshot immediately before Worker deploy
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.database-target.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
+      - name: Recheck the existing staging Worker target immediately before deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_ENVIRONMENT: staging
+          FIRELIGHT_WORKER_TARGET_MODE: existing
+        run: node scripts/verify-worker-target.mjs
+      - name: Re-probe the staging compiler immediately before Worker deploy
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: staging
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-compiler-lesson-fixtures
+        run: >-
+          python3 compiler-service/scripts/probe_deployment.py
+          --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
       - name: Deploy the staging Worker and assets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
         run: >-
           npx wrangler deploy --env staging --strict
+          --secrets-file "$FIRELIGHT_WORKER_SECRETS_PATH"
           --var ENVIRONMENT:staging
           --var BUILD_ID:${{ github.sha }}
           --tag "${{ github.sha }}"
           --message "firelight-release:staging:${{ github.sha }}"
+      - name: Remove the temporary staging Worker binding file
+        if: always()
+        shell: bash
+        env:
+          FIRELIGHT_WORKER_SECRETS_PATH: ${{ runner.temp }}/firelight-worker-bootstrap-secrets.json
+        run: |
+          set -euo pipefail
+          if [[ -f "$FIRELIGHT_WORKER_SECRETS_PATH" ]]; then
+            rm -- "$FIRELIGHT_WORKER_SECRETS_PATH"
+          fi
+      - name: Wait for the exact staging release build
+        env:
+          FIRELIGHT_BASE_URL: https://staging.firelight.ie
+          FIRELIGHT_EXPECTED_ENVIRONMENT: staging
+          FIRELIGHT_EXPECTED_BUILD_ID: ${{ github.sha }}
+        run: node scripts/wait-for-release.mjs
       - name: Verify staging identity and compiler dependencies
         env:
           FIRELIGHT_BASE_URL: https://staging.firelight.ie
@@ -148,6 +607,18 @@ jobs:
           FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
           FIRELIGHT_CANARY_PASSWORD: ${{ secrets.FIRELIGHT_CANARY_PASSWORD }}
         run: node scripts/postdeploy-canary.mjs
+      - name: Capture the current accepted staging Supabase project snapshot
+        id: accepted-project
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ needs.database-target.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
       - name: Capture the accepted staging release tuple
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -156,6 +627,15 @@ jobs:
           FIRELIGHT_RELEASE_WORKER_NAME: firelight-staging
           FIRELIGHT_RELEASE_BUILD_ID: ${{ github.sha }}
           FIRELIGHT_RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/firelight-release-evidence.json
+          FIRELIGHT_SUPABASE_ANCHOR_SET_SHA256: ${{ needs.release-anchors.outputs.anchor-set-sha256 }}
+          FIRELIGHT_SUPABASE_PROJECT_REF_IDENTITY_SHA256: ${{ steps.accepted-project.outputs.project_ref_identity_hash }}
+          FIRELIGHT_SUPABASE_ORGANIZATION_IDENTITY_SHA256: ${{ steps.accepted-project.outputs.organization_identity_hash }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          COMPILER_SERVICE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          COMPILER_SERVICE_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
         run: node scripts/release-evidence.mjs
       - name: Preserve accepted staging release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -165,3 +645,38 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+      - name: Capture accepted staging web promotion evidence
+        id: web-staging-evidence
+        env:
+          FIRELIGHT_SUPABASE_PROJECT_IDENTITY_SHA256: ${{ steps.accepted-project.outputs.project_identity_hash }}
+          FIRELIGHT_SUPABASE_PROJECT_REF_IDENTITY_SHA256: ${{ steps.accepted-project.outputs.project_ref_identity_hash }}
+          FIRELIGHT_SUPABASE_ORGANIZATION_IDENTITY_SHA256: ${{ steps.accepted-project.outputs.organization_identity_hash }}
+          FIRELIGHT_WEB_STAGING_EVIDENCE_PATH: ${{ runner.temp }}/firelight-web-staging-evidence.json
+        run: node scripts/capture-web-staging-evidence.mjs >> "$GITHUB_OUTPUT"
+      - name: Preserve accepted staging web promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.web-staging-evidence.outputs.artifact_name }}
+          path: ${{ steps.web-staging-evidence.outputs.evidence_path }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Record the staging web promotion tuple
+        shell: bash
+        env:
+          EVIDENCE_SHA256: ${{ steps.web-staging-evidence.outputs.evidence_sha256 }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ || ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]; then
+            echo "The staging web promotion tuple is invalid." >&2
+            exit 1
+          fi
+          {
+            echo "### Accepted staging web promotion evidence"
+            echo
+            echo "Staging run ID: \`$RELEASE_RUN_ID\`"
+            echo "Evidence JSON SHA-256: \`$EVIDENCE_SHA256\`"
+            echo
+            echo "Production must supply this exact run ID and evidence hash."
+          } >> "$GITHUB_STEP_SUMMARY"

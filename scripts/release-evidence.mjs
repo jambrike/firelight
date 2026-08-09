@@ -1,7 +1,8 @@
 import process from "node:process";
+import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 import { CanaryError, isRecord, safeCanaryErrorCode } from "./postdeploy-canary.mjs";
 import {
   buildDeploymentsUrl,
@@ -11,10 +12,16 @@ import {
 } from "./verify-worker-version.mjs";
 
 export const RELEASE_EVIDENCE_SCHEMA = "firelight.release-evidence";
-export const RELEASE_EVIDENCE_VERSION = 2;
+export const RELEASE_EVIDENCE_VERSION = 3;
 export const PROGRESS_SERVICE_WRITES_CAPABILITY = "service-v1";
+export const COMPILER_PROTOCOL_VERSION = 1;
+export const COMPILER_CONNECTION_FINGERPRINT_DOMAIN =
+  "firelight.compiler-connection-fingerprint.v1";
 const ACCOUNT_ID = /^[0-9a-f]{32}$/u;
 const BUILD_SHA = /^[0-9a-f]{40}$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+const FUNCTION_HOST = /^[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const WORKERS = Object.freeze({
   staging: "firelight-staging",
@@ -38,9 +45,72 @@ function requiredString(environment, name, maximum) {
   return value;
 }
 
+function requiredSha256(environment, name) {
+  const value = requiredString(environment, name, 64);
+  if (!SHA256.test(value) || value === "0".repeat(64)) fail(`INVALID_${name}`);
+  return value;
+}
+
+export function compilerConnectionFingerprint(environment) {
+  const urlValue = requiredString(environment, "COMPILER_SERVICE_URL", 2048);
+  const originValue = requiredString(
+    environment,
+    "COMPILER_SERVICE_ORIGIN",
+    2048,
+  );
+  const host = requiredString(environment, "COMPILER_SERVICE_HOST", 253);
+  const token = requiredString(environment, "COMPILER_SERVICE_TOKEN", 512);
+  if (
+    token.length < 32 ||
+    /\s/u.test(token) ||
+    !FUNCTION_HOST.test(host)
+  ) {
+    fail("COMPILER_CONNECTION_INVALID");
+  }
+  let url;
+  let origin;
+  try {
+    url = new URL(urlValue);
+    origin = new URL(originValue);
+  } catch {
+    fail("COMPILER_CONNECTION_INVALID");
+  }
+  const canonicalOrigin = `https://${host}`;
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hostname !== host ||
+    (url.pathname !== "" && url.pathname !== "/") ||
+    url.search ||
+    url.hash ||
+    originValue !== canonicalOrigin ||
+    origin.origin !== canonicalOrigin ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash
+  ) {
+    fail("COMPILER_CONNECTION_INVALID");
+  }
+  const canonical = JSON.stringify([
+    `${canonicalOrigin}/`,
+    canonicalOrigin,
+    host,
+    token,
+  ]);
+  return createHash("sha256")
+    .update(`${COMPILER_CONNECTION_FINGERPRINT_DOMAIN}\0${canonical}`, "utf8")
+    .digest("hex");
+}
+
 export function parseReleaseEvidenceEnvironment(
   environment,
-  { requirePath = false, requireApiToken = true } = {},
+  {
+    requirePath = false,
+    requireApiToken = true,
+    requireCompilerDeploymentIdentity = true,
+  } = {},
 ) {
   const releaseEnvironment = requiredString(
     environment,
@@ -77,13 +147,60 @@ export function parseReleaseEvidenceEnvironment(
       fail("INVALID_FIRELIGHT_RELEASE_EVIDENCE_PATH");
     }
   }
+  const compilerConnectionSha256 = compilerConnectionFingerprint(environment);
+  const supabaseAnchorSetSha256 = requiredSha256(
+    environment,
+    "FIRELIGHT_SUPABASE_ANCHOR_SET_SHA256",
+  );
+  const supabaseProjectRefIdentitySha256 = requiredSha256(
+    environment,
+    "FIRELIGHT_SUPABASE_PROJECT_REF_IDENTITY_SHA256",
+  );
+  const supabaseOrganizationIdentitySha256 = requiredSha256(
+    environment,
+    "FIRELIGHT_SUPABASE_ORGANIZATION_IDENTITY_SHA256",
+  );
+  let compilerBuildId;
+  let compilerImageDigest;
+  if (requireCompilerDeploymentIdentity) {
+    compilerBuildId = requiredString(
+      environment,
+      "COMPILER_SERVICE_BUILD_ID",
+      40,
+    );
+    compilerImageDigest = requiredString(
+      environment,
+      "COMPILER_SERVICE_IMAGE_DIGEST",
+      71,
+    );
+    if (
+      !BUILD_SHA.test(compilerBuildId) ||
+      compilerBuildId === "0".repeat(40)
+    ) {
+      fail("INVALID_COMPILER_SERVICE_BUILD_ID");
+    }
+    if (
+      !IMAGE_DIGEST.test(compilerImageDigest) ||
+      compilerImageDigest === `sha256:${"0".repeat(64)}`
+    ) {
+      fail("INVALID_COMPILER_SERVICE_IMAGE_DIGEST");
+    }
+  }
   return {
     releaseEnvironment,
     workerName,
     buildId,
     accountId,
+    compilerProtocolVersion: COMPILER_PROTOCOL_VERSION,
+    compilerConnectionSha256,
+    supabaseAnchorSetSha256,
+    supabaseProjectRefIdentitySha256,
+    supabaseOrganizationIdentitySha256,
     ...(requireApiToken ? { apiToken } : {}),
     ...(requirePath ? { evidencePath } : {}),
+    ...(requireCompilerDeploymentIdentity
+      ? { compilerBuildId, compilerImageDigest }
+      : {}),
   };
 }
 
@@ -153,6 +270,15 @@ export async function captureReleaseEvidence(configuration, fetchImpl) {
     environment: configuration.releaseEnvironment,
     workerName: configuration.workerName,
     buildId: configuration.buildId,
+    compilerProtocolVersion: configuration.compilerProtocolVersion,
+    compilerConnectionSha256: configuration.compilerConnectionSha256,
+    compilerBuildId: configuration.compilerBuildId,
+    compilerImageDigest: configuration.compilerImageDigest,
+    supabaseAnchorSetSha256: configuration.supabaseAnchorSetSha256,
+    supabaseProjectRefIdentitySha256:
+      configuration.supabaseProjectRefIdentitySha256,
+    supabaseOrganizationIdentitySha256:
+      configuration.supabaseOrganizationIdentitySha256,
     progressServiceWrites: PROGRESS_SERVICE_WRITES_CAPABILITY,
     versionId: deployment.versionId,
     deploymentId: deployment.deploymentId,
@@ -164,7 +290,7 @@ export function validateReleaseEvidence(value, expected) {
   if (
     !isRecord(value) ||
     Object.keys(value).sort().join(",") !==
-      "accountId,buildId,deployedAt,deploymentId,environment,progressServiceWrites,schema,version,versionId,workerName" ||
+      "accountId,buildId,compilerBuildId,compilerConnectionSha256,compilerImageDigest,compilerProtocolVersion,deployedAt,deploymentId,environment,progressServiceWrites,schema,supabaseAnchorSetSha256,supabaseOrganizationIdentitySha256,supabaseProjectRefIdentitySha256,version,versionId,workerName" ||
     value.schema !== RELEASE_EVIDENCE_SCHEMA ||
     value.version !== RELEASE_EVIDENCE_VERSION ||
     value.progressServiceWrites !== PROGRESS_SERVICE_WRITES_CAPABILITY ||
@@ -172,6 +298,19 @@ export function validateReleaseEvidence(value, expected) {
     value.environment !== expected.releaseEnvironment ||
     value.workerName !== expected.workerName ||
     value.buildId !== expected.buildId ||
+    value.compilerProtocolVersion !== expected.compilerProtocolVersion ||
+    value.compilerConnectionSha256 !== expected.compilerConnectionSha256 ||
+    value.supabaseAnchorSetSha256 !== expected.supabaseAnchorSetSha256 ||
+    value.supabaseProjectRefIdentitySha256 !==
+      expected.supabaseProjectRefIdentitySha256 ||
+    value.supabaseOrganizationIdentitySha256 !==
+      expected.supabaseOrganizationIdentitySha256 ||
+    typeof value.compilerBuildId !== "string" ||
+    !BUILD_SHA.test(value.compilerBuildId) ||
+    value.compilerBuildId === "0".repeat(40) ||
+    typeof value.compilerImageDigest !== "string" ||
+    !IMAGE_DIGEST.test(value.compilerImageDigest) ||
+    value.compilerImageDigest === `sha256:${"0".repeat(64)}` ||
     typeof value.versionId !== "string" ||
     !UUID.test(value.versionId) ||
     typeof value.deploymentId !== "string" ||

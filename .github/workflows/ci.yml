@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -29,8 +31,20 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high
-      - run: npx wrangler deploy --env staging --dry-run
-      - run: npx wrangler deploy --env production --dry-run
+      - name: Validate the exact staging Worker release shape
+        run: >-
+          npx wrangler deploy --env staging --dry-run --strict
+          --var ENVIRONMENT:staging
+          --var BUILD_ID:${{ github.sha }}
+          --tag "${{ github.sha }}"
+          --message "firelight-release:staging:${{ github.sha }}"
+      - name: Validate the exact production Worker release shape
+        run: >-
+          npx wrangler deploy --env production --dry-run --strict
+          --var ENVIRONMENT:production
+          --var BUILD_ID:${{ github.sha }}
+          --tag "${{ github.sha }}"
+          --message "firelight-release:production:${{ github.sha }}"
 
   browser-acceptance:
     # The zero-diff baselines are captured on the matching macOS 26 arm64 image.
@@ -38,6 +52,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -63,6 +79,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -81,6 +99,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -97,7 +117,7 @@ jobs:
       - working-directory: compiler-service/terraform
         run: terraform fmt -check -recursive
       - working-directory: compiler-service/terraform
-        run: terraform init -backend=false -input=false
+        run: terraform init -backend=false -input=false -lockfile=readonly
       - working-directory: compiler-service/terraform
         run: terraform validate
       - working-directory: compiler-service/terraform

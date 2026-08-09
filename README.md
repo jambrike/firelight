@@ -77,11 +77,11 @@ Implemented:
 - Separate Wrangler staging/production Workers, explicit runtime secret
   inventories, independently pinned Supabase/compiler targets, redacted custom
   request logs, health/readiness endpoints, and generated environment bindings.
-- PR-only CI plus environment-gated staging-on-main and production tag/manual
-  workflows, protected project and migration-state proofs, migration-first
+- Pull-request CI plus separately confirmed, protected, manual-only staging and
+  production workflows, protected project and migration-state proofs, migration-first
   deployment, exact-commit staging evidence, signed-in compile canaries,
   immutable accepted-release artifacts, and exact-content verified Worker
-  rollback. CI also runs 14 hermetic browser journeys and builds a restricted
+  rollback. CI also runs 19 hermetic browser journeys and builds a restricted
   compiler image that must compile the six hash-bound typed starter sketches.
   No release workflow is triggered by local checks.
 - Terraform-defined compiler alarms and dashboard plus secrets-free recurring
@@ -154,13 +154,17 @@ Worker secrets; never commit them or add them to `vars`.
   BOM gate, and physical acceptance matrix.
 - `docs/operations-runbook.md` — environment isolation, secrets, releases,
   monitoring, recovery, data operations, and external rollout gates.
+- `.github/DEPLOYMENT_READINESS.md` — the exact provider-console checklist and
+  protected workflow inputs to complete before pressing a deploy button.
+- `docs/backend-release-readiness.md` — Supabase/AWS OIDC, state, identity, and
+  compiler handoff requirements.
 - `docs/monitoring.md` — compiler alarms/dashboard, recurring public probes,
   image acceptance, notification routing, and hosted drill procedure.
 - `docs/browser-acceptance.md` — hermetic Playwright journeys, accessibility
   checks, visual-baseline ownership, and remaining physical-browser gates.
 
 See `docs/identity.md`, `docs/lessons.md`, `docs/hardware-pipeline.md`, and
-`docs/compiler-service.md`, then follow `docs/operations-runbook.md` and
-`docs/monitoring.md` before
+`docs/compiler-service.md`, then follow `.github/DEPLOYMENT_READINESS.md`,
+`docs/operations-runbook.md`, and `docs/monitoring.md` before
 applying migrations to staging. Local verification performs no deploy, remote
 database mutation, AWS change, secret rotation, or domain migration.

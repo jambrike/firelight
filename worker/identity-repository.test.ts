@@ -53,8 +53,11 @@ function update(expectedRevision: number | null): ProgressUpdateInput {
   };
 }
 
-function parseRequestBody(body: BodyInit | null | undefined): Record<string, unknown> {
-  if (typeof body !== "string") throw new TypeError("Expected a JSON request body.");
+function parseRequestBody(
+  body: BodyInit | null | undefined,
+): Record<string, unknown> {
+  if (typeof body !== "string")
+    throw new TypeError("Expected a JSON request body.");
   return JSON.parse(body) as Record<string, unknown>;
 }
 
@@ -92,13 +95,15 @@ describe("Supabase progress repository", () => {
   });
 
   it("fails closed before credentials can follow an upstream redirect", async () => {
-    const fetcher: RepositoryFetcher = vi.fn(async (_url: URL, init: RequestInit) => {
-      expect(init.redirect).toBe("error");
-      const headers = new Headers(init.headers);
-      expect(headers.get("authorization")).toBe("Bearer learner-token");
-      expect(headers.get("apikey")).toBe("test-publishable-key");
-      throw new TypeError("Redirect mode is error");
-    });
+    const fetcher: RepositoryFetcher = vi.fn(
+      async (_url: URL, init: RequestInit) => {
+        expect(init.redirect).toBe("error");
+        const headers = new Headers(init.headers);
+        expect(headers.get("authorization")).toBe("Bearer learner-token");
+        expect(headers.get("apikey")).toBe("test-publishable-key");
+        throw new TypeError("Redirect mode is error");
+      },
+    );
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
       "learner-token",
@@ -132,7 +137,9 @@ describe("Supabase progress repository", () => {
     expect(saved.revision).toBe(8);
     expect(requests[0]?.init.method).toBe("PATCH");
     expect(requests[0]?.url.searchParams.get("revision")).toBe("eq.7");
-    expect(parseRequestBody(requests[0]?.init.body)).toMatchObject({ revision: 8 });
+    expect(parseRequestBody(requests[0]?.init.body)).toMatchObject({
+      revision: 8,
+    });
     const headers = new Headers(requests[0]?.init.headers);
     expect(headers.get("authorization")).toBe("Bearer test-service-role-key");
     expect(headers.get("apikey")).toBe("test-service-role-key");
@@ -158,7 +165,10 @@ describe("Supabase progress repository", () => {
     const fetcher: RepositoryFetcher = vi.fn(async () => {
       call += 1;
       return call === 1
-        ? Response.json({ code: "23505", message: "duplicate" }, { status: 409 })
+        ? Response.json(
+            { code: "23505", message: "duplicate" },
+            { status: 409 },
+          )
         : Response.json([progressRow(1)]);
     });
     const repository = createSupabaseIdentityRepository(
@@ -205,10 +215,16 @@ describe("Supabase progress repository", () => {
     let call = 0;
     const fetcher: RepositoryFetcher = vi.fn(async () => {
       call += 1;
-      return Response.json(call === 1 ? [] : [{
-        ...progressRow(8),
-        current_step: "different-step",
-      }]);
+      return Response.json(
+        call === 1
+          ? []
+          : [
+              {
+                ...progressRow(8),
+                current_step: "different-step",
+              },
+            ],
+      );
     });
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
@@ -287,7 +303,9 @@ describe("Supabase request deadline", () => {
       10,
     );
 
-    await expect(repository.authenticate()).resolves.toMatchObject({ id: userId });
+    await expect(repository.authenticate()).resolves.toMatchObject({
+      id: userId,
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(requestSignal?.aborted).toBe(false);
   });
@@ -362,7 +380,9 @@ describe("Supabase hardware lifecycle repository", () => {
       retryAfterSeconds: 3600,
     });
 
-    expect(requests[0]?.url.pathname).toBe("/rest/v1/rpc/firelight_begin_compile_job");
+    expect(requests[0]?.url.pathname).toBe(
+      "/rest/v1/rpc/firelight_begin_compile_job",
+    );
     expect(new Headers(requests[0]?.init.headers).get("authorization")).toBe(
       "Bearer test-service-role-key",
     );
@@ -414,7 +434,12 @@ describe("Supabase hardware lifecycle repository", () => {
       diagnosticSummary: "Compilation completed.",
     });
     await expect(
-      repository.recordUploadEvidence(userId, compileJobId, "b".repeat(64), 256),
+      repository.recordUploadEvidence(
+        userId,
+        compileJobId,
+        "b".repeat(64),
+        256,
+      ),
     ).resolves.toEqual({
       id: evidenceId,
       compileJobId,
@@ -444,22 +469,32 @@ describe("Supabase hardware lifecycle repository", () => {
       fetcher,
     );
 
-    await expect(repository.finishCompileJob(userId, {
-      jobId: compileJobId,
-      state: "succeeded",
-      durationMs: 500,
-      safeErrorCode: null,
-      artifactHash: "b".repeat(64),
-      diagnosticSummary: "Compilation completed.",
-    })).rejects.toMatchObject({ kind: "forbidden" });
     await expect(
-      repository.recordUploadEvidence(userId, compileJobId, "b".repeat(64), 256),
+      repository.finishCompileJob(userId, {
+        jobId: compileJobId,
+        state: "succeeded",
+        durationMs: 500,
+        safeErrorCode: null,
+        artifactHash: "b".repeat(64),
+        diagnosticSummary: "Compilation completed.",
+      }),
+    ).rejects.toMatchObject({ kind: "forbidden" });
+    await expect(
+      repository.recordUploadEvidence(
+        userId,
+        compileJobId,
+        "b".repeat(64),
+        256,
+      ),
     ).rejects.toMatchObject({ kind: "forbidden" });
   });
 
   it.each([
     ["evidence UUID version", { id: "44444444-4444-1444-8444-444444444444" }],
-    ["compile UUID version", { compileJobId: "33333333-3333-1333-8333-333333333333" }],
+    [
+      "compile UUID version",
+      { compileJobId: "33333333-3333-1333-8333-333333333333" },
+    ],
     ["compile job", { compileJobId: "55555555-5555-4555-8555-555555555555" }],
     ["artifact hash", { artifactHash: "c".repeat(64) }],
     ["byte count", { bytesWritten: 255 }],
@@ -467,35 +502,43 @@ describe("Supabase hardware lifecycle repository", () => {
     ["source hash", { sourceHash: "A".repeat(64) }],
     ["timestamp", { recordedAt: "2026-02-30T12:00:00Z" }],
     ["attestation", { attestation: "device-proof" }],
-  ])("rejects upload evidence whose %s response field is untrusted", async (_field, override) => {
-    const compileJobId = "33333333-3333-4333-8333-333333333333";
-    const fetcher: RepositoryFetcher = vi.fn(async () =>
-      Response.json({
-        result: "recorded",
-        evidence: {
-          id: "44444444-4444-4444-8444-444444444444",
-          compileJobId,
-          lessonId: "first-spark",
-          lessonVersion: 1,
-          sourceHash: "a".repeat(64),
-          artifactHash: "b".repeat(64),
-          bytesWritten: 256,
-          recordedAt: now,
-          attestation: "browser-web-serial-v1",
-          ...override,
-        },
-      }),
-    );
-    const repository = createSupabaseIdentityRepository(
-      repositoryEnv,
-      "learner-token",
-      fetcher,
-    );
+  ])(
+    "rejects upload evidence whose %s response field is untrusted",
+    async (_field, override) => {
+      const compileJobId = "33333333-3333-4333-8333-333333333333";
+      const fetcher: RepositoryFetcher = vi.fn(async () =>
+        Response.json({
+          result: "recorded",
+          evidence: {
+            id: "44444444-4444-4444-8444-444444444444",
+            compileJobId,
+            lessonId: "first-spark",
+            lessonVersion: 1,
+            sourceHash: "a".repeat(64),
+            artifactHash: "b".repeat(64),
+            bytesWritten: 256,
+            recordedAt: now,
+            attestation: "browser-web-serial-v1",
+            ...override,
+          },
+        }),
+      );
+      const repository = createSupabaseIdentityRepository(
+        repositoryEnv,
+        "learner-token",
+        fetcher,
+      );
 
-    await expect(
-      repository.recordUploadEvidence(userId, compileJobId, "b".repeat(64), 256),
-    ).rejects.toMatchObject({ kind: "unavailable" });
-  });
+      await expect(
+        repository.recordUploadEvidence(
+          userId,
+          compileJobId,
+          "b".repeat(64),
+          256,
+        ),
+      ).rejects.toMatchObject({ kind: "unavailable" });
+    },
+  );
 });
 
 describe("Supabase account export repository", () => {
@@ -570,10 +613,18 @@ describe("Supabase account export repository", () => {
     };
   }
 
-  function requestedPage(url: URL, rows: readonly unknown[]): readonly unknown[] {
+  function requestedPage(
+    url: URL,
+    rows: readonly unknown[],
+  ): readonly unknown[] {
     const limit = Number(url.searchParams.get("limit"));
     const offset = Number(url.searchParams.get("offset"));
-    if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(offset) || offset < 0) {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0
+    ) {
       throw new TypeError("Expected valid export pagination.");
     }
     return rows.slice(offset, offset + limit);
@@ -588,19 +639,25 @@ describe("Supabase account export repository", () => {
       readonly activation?: readonly unknown[];
     } = {},
   ): RepositoryFetcher {
-    const progressRows = rows.progress ?? [exportProgressRow(1), exportProgressRow(2)];
+    const progressRows = rows.progress ?? [
+      exportProgressRow(1),
+      exportProgressRow(2),
+    ];
     const compileRows = rows.compile ?? [exportCompileRow()];
     const uploadRows = rows.upload ?? [exportUploadRow()];
-    const activationRows = rows.activation ?? [{
-      id: activationId,
-      batch: "pilot-a",
-      kind: "code",
-      claimed_at: now,
-      code_hash: "must-not-cross-the-projection",
-    }];
+    const activationRows = rows.activation ?? [
+      {
+        id: activationId,
+        batch: "pilot-a",
+        kind: "code",
+        claimed_at: now,
+        code_hash: "must-not-cross-the-projection",
+      },
+    ];
     return vi.fn(async (url: URL, init: RequestInit) => {
       requests.push({ url, init });
-      if (url.pathname === "/rest/v1/profiles") return Response.json([profileRow()]);
+      if (url.pathname === "/rest/v1/profiles")
+        return Response.json([profileRow()]);
       if (url.pathname === "/rest/v1/kit_codes") {
         return Response.json(activationRows);
       }
@@ -628,7 +685,10 @@ describe("Supabase account export repository", () => {
     const result = await repository.getAccountExport(userId);
 
     expect(result.progress.map((row) => row.lessonVersion)).toEqual([1, 2]);
-    expect(result.activation).toMatchObject({ id: activationId, batch: "pilot-a" });
+    expect(result.activation).toMatchObject({
+      id: activationId,
+      batch: "pilot-a",
+    });
     expect(result.compileJobs).toHaveLength(1);
     expect(result.uploadEvidence).toHaveLength(1);
     expect(result.activation).not.toHaveProperty("code_hash");
@@ -648,13 +708,21 @@ describe("Supabase account export repository", () => {
       expect(headers.get("apikey")).toBe("test-publishable-key");
       expect(request.init.redirect).toBe("error");
     }
-    const kitRequest = requests.find((request) =>
-      request.url.pathname === "/rest/v1/kit_codes"
+    const kitRequest = requests.find(
+      (request) => request.url.pathname === "/rest/v1/kit_codes",
     );
-    expect(kitRequest?.url.searchParams.get("select")).toBe("id,batch,kind,claimed_at");
+    expect(kitRequest?.url.searchParams.get("select")).toBe(
+      "id,batch,kind,claimed_at",
+    );
     expect(kitRequest?.url.href).not.toContain("code_hash");
-    for (const table of ["lesson_progress", "compile_jobs", "hardware_upload_evidence"]) {
-      const request = requests.find((item) => item.url.pathname.endsWith(`/${table}`));
+    for (const table of [
+      "lesson_progress",
+      "compile_jobs",
+      "hardware_upload_evidence",
+    ]) {
+      const request = requests.find((item) =>
+        item.url.pathname.endsWith(`/${table}`),
+      );
       expect(request?.url.searchParams.get("user_id")).toBe(`eq.${userId}`);
     }
   });
@@ -666,7 +734,7 @@ describe("Supabase account export repository", () => {
       "learner-token",
       exportFetcher(requests, {
         progress: Array.from({ length: 17 }, (_, index) =>
-          exportProgressRow(index + 1)
+          exportProgressRow(index + 1),
         ),
         compile: Array.from({ length: 129 }, () => exportCompileRow()),
         upload: Array.from({ length: 1_001 }, () => exportUploadRow()),
@@ -678,12 +746,13 @@ describe("Supabase account export repository", () => {
     expect(result.progress).toHaveLength(17);
     expect(result.compileJobs).toHaveLength(129);
     expect(result.uploadEvidence).toHaveLength(1_001);
-    const pagesFor = (pathname: string) => requests
-      .filter((request) => request.url.pathname === pathname)
-      .map((request) => ({
-        limit: request.url.searchParams.get("limit"),
-        offset: request.url.searchParams.get("offset"),
-      }));
+    const pagesFor = (pathname: string) =>
+      requests
+        .filter((request) => request.url.pathname === pathname)
+        .map((request) => ({
+          limit: request.url.searchParams.get("limit"),
+          offset: request.url.searchParams.get("offset"),
+        }));
     expect(pagesFor("/rest/v1/lesson_progress")).toEqual([
       { limit: "4", offset: "0" },
       { limit: "4", offset: "4" },
@@ -708,7 +777,7 @@ describe("Supabase account export repository", () => {
       "learner-token",
       exportFetcher(requests, {
         compile: Array.from({ length: 380 }, () =>
-          exportCompileRow("D".repeat(8_192))
+          exportCompileRow("D".repeat(8_192)),
         ),
       }),
     );
@@ -754,7 +823,9 @@ describe("Supabase account export repository", () => {
     ).toBeLessThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
     expect(
       requests
-        .filter((request) => request.url.pathname === "/rest/v1/lesson_progress")
+        .filter(
+          (request) => request.url.pathname === "/rest/v1/lesson_progress",
+        )
         .map((request) => request.url.searchParams.get("offset")),
     ).toEqual(["0", "4", "8"]);
   });
@@ -804,10 +875,13 @@ describe("Supabase account export repository", () => {
         },
       },
     });
-    const emptyFinalSize = new TextEncoder().encode(JSON.stringify(
-      lowerBoundEnvelope([...progress, finalRow].map(normalizedProgress)),
-    )).byteLength;
-    const finalSnapshotBytes = ACCOUNT_EXPORT_MAX_RESPONSE_BYTES - emptyFinalSize;
+    const emptyFinalSize = new TextEncoder().encode(
+      JSON.stringify(
+        lowerBoundEnvelope([...progress, finalRow].map(normalizedProgress)),
+      ),
+    ).byteLength;
+    const finalSnapshotBytes =
+      ACCOUNT_EXPORT_MAX_RESPONSE_BYTES - emptyFinalSize;
     expect(finalSnapshotBytes).toBeGreaterThan(0);
     expect(finalSnapshotBytes).toBeLessThanOrEqual(65_536);
     finalRow.code_snapshot = "P".repeat(finalSnapshotBytes);
@@ -825,8 +899,9 @@ describe("Supabase account export repository", () => {
     const result = await repository.getAccountExport(userId);
 
     const retainedLowerBound = lowerBoundEnvelope(result.progress);
-    expect(new TextEncoder().encode(JSON.stringify(retainedLowerBound)).byteLength)
-      .toBe(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    expect(
+      new TextEncoder().encode(JSON.stringify(retainedLowerBound)).byteLength,
+    ).toBe(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
     const exactFinalEnvelope = {
       data: {
         ...retainedLowerBound.data,
@@ -841,16 +916,21 @@ describe("Supabase account export repository", () => {
         },
       },
     };
-    expect(new TextEncoder().encode(JSON.stringify(exactFinalEnvelope)).byteLength)
-      .toBeGreaterThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
+    expect(
+      new TextEncoder().encode(JSON.stringify(exactFinalEnvelope)).byteLength,
+    ).toBeGreaterThan(ACCOUNT_EXPORT_MAX_RESPONSE_BYTES);
     expect(
       requests
-        .filter((request) => request.url.pathname === "/rest/v1/lesson_progress")
-        .at(-1)?.url.searchParams.get("offset"),
+        .filter(
+          (request) => request.url.pathname === "/rest/v1/lesson_progress",
+        )
+        .at(-1)
+        ?.url.searchParams.get("offset"),
     ).toBe("64");
     expect(
-      requests.some((request) =>
-        request.url.pathname === "/rest/v1/hardware_upload_evidence"
+      requests.some(
+        (request) =>
+          request.url.pathname === "/rest/v1/hardware_upload_evidence",
       ),
     ).toBe(true);
   });
@@ -866,7 +946,7 @@ describe("Supabase account export repository", () => {
           code_snapshot: "P".repeat(65_536),
         })),
         compile: Array.from({ length: 128 }, () =>
-          exportCompileRow("\\".repeat(8_192))
+          exportCompileRow("\\".repeat(8_192)),
         ),
       }),
     );
@@ -875,15 +955,16 @@ describe("Supabase account export repository", () => {
       kind: "export_too_large",
     });
     expect(
-      requests.some((request) =>
-        request.url.pathname === "/rest/v1/hardware_upload_evidence"
+      requests.some(
+        (request) =>
+          request.url.pathname === "/rest/v1/hardware_upload_evidence",
       ),
     ).toBe(false);
   });
 
   it("fails rather than truncating a complete export above its record bound", async () => {
     const rows = Array.from({ length: 257 }, (_, index) =>
-      exportProgressRow((index % 1_000_000) + 1)
+      exportProgressRow((index % 1_000_000) + 1),
     );
     const requests: { url: URL; init: RequestInit }[] = [];
     const repository = createSupabaseIdentityRepository(
@@ -895,8 +976,8 @@ describe("Supabase account export repository", () => {
     await expect(repository.getAccountExport(userId)).rejects.toMatchObject({
       kind: "export_too_large",
     });
-    const progressRequests = requests.filter((request) =>
-      request.url.pathname === "/rest/v1/lesson_progress"
+    const progressRequests = requests.filter(
+      (request) => request.url.pathname === "/rest/v1/lesson_progress",
     );
     expect(progressRequests.at(-1)?.url.searchParams.get("limit")).toBe("1");
     expect(progressRequests.at(-1)?.url.searchParams.get("offset")).toBe("256");
@@ -922,9 +1003,14 @@ describe("Supabase account export repository", () => {
     "rejects a projected %s row owned by another account",
     async (dataset) => {
       const foreignOwner = "99999999-9999-4999-8999-999999999999";
-      const rows = dataset === "compile"
-        ? { compile: [exportCompileRow("Compilation completed.", foreignOwner)] }
-        : { upload: [exportUploadRow(foreignOwner)] };
+      const rows =
+        dataset === "compile"
+          ? {
+              compile: [
+                exportCompileRow("Compilation completed.", foreignOwner),
+              ],
+            }
+          : { upload: [exportUploadRow(foreignOwner)] };
       const repository = createSupabaseIdentityRepository(
         repositoryEnv,
         "learner-token",
@@ -941,9 +1027,7 @@ describe("Supabase account export repository", () => {
   it("owner-validates a row before classifying its serialized-byte overflow", async () => {
     const progress = Array.from({ length: 64 }, (_, index) => ({
       ...exportProgressRow(index + 1),
-      user_id: index === 63
-        ? "99999999-9999-4999-8999-999999999999"
-        : userId,
+      user_id: index === 63 ? "99999999-9999-4999-8999-999999999999" : userId,
       code_snapshot: "P".repeat(65_536),
     }));
     const requests: { url: URL; init: RequestInit }[] = [];
@@ -958,7 +1042,9 @@ describe("Supabase account export repository", () => {
       message: "Supabase returned another owner's data.",
     });
     expect(
-      requests.some((request) => request.url.pathname === "/rest/v1/compile_jobs"),
+      requests.some(
+        (request) => request.url.pathname === "/rest/v1/compile_jobs",
+      ),
     ).toBe(false);
   });
 
@@ -985,25 +1071,27 @@ describe("Supabase origin pinning", () => {
     "https://abcdefghijklmnopqrst.supabase.co/?redirect=https://attacker.test",
     "https://supabase.attacker.test",
   ])("rejects credential-bearing requests to untrusted origin %s", (url) => {
-    expect(() => createSupabaseIdentityRepository(
-      { ...repositoryEnv, SUPABASE_URL: url },
-      "learner-token",
-    )).toThrow("Supabase is not configured.");
+    expect(() =>
+      createSupabaseIdentityRepository(
+        { ...repositoryEnv, SUPABASE_URL: url },
+        "learner-token",
+      ),
+    ).toThrow("Supabase is not configured.");
   });
 
   it("allows the explicit loopback development origin", () => {
-    expect(() => createSupabaseIdentityRepository(
-      repositoryEnv,
-      "learner-token",
-    )).not.toThrow();
+    expect(() =>
+      createSupabaseIdentityRepository(repositoryEnv, "learner-token"),
+    ).not.toThrow();
   });
 
   it("binds production credentials to the exact Supabase issuer before fetching", () => {
-    const tokenFor = (issuer: string) => [
-      btoa('{"alg":"none"}'),
-      btoa(JSON.stringify({ iss: issuer })),
-      "signature",
-    ].join(".");
+    const tokenFor = (issuer: string) =>
+      [
+        btoa('{"alg":"none"}'),
+        btoa(JSON.stringify({ iss: issuer })),
+        "signature",
+      ].join(".");
     const expectedOrigin = "https://abcdefghijklmnopqrst.supabase.co";
     const productionEnv = {
       ...repositoryEnv,
@@ -1012,14 +1100,21 @@ describe("Supabase origin pinning", () => {
       SUPABASE_PROJECT_REF: "abcdefghijklmnopqrst",
     } as unknown as Env;
 
-    expect(() => createSupabaseIdentityRepository(
-      productionEnv,
-      tokenFor(`${expectedOrigin}/auth/v1`),
-    )).not.toThrow();
-    expect(() => createSupabaseIdentityRepository(
-      { ...productionEnv, SUPABASE_URL: "https://zyxwvutsrqponmlkjihg.supabase.co" },
-      tokenFor(`${expectedOrigin}/auth/v1`),
-    )).toThrow("Supabase is not configured.");
+    expect(() =>
+      createSupabaseIdentityRepository(
+        productionEnv,
+        tokenFor(`${expectedOrigin}/auth/v1`),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      createSupabaseIdentityRepository(
+        {
+          ...productionEnv,
+          SUPABASE_URL: "https://zyxwvutsrqponmlkjihg.supabase.co",
+        },
+        tokenFor(`${expectedOrigin}/auth/v1`),
+      ),
+    ).toThrow("Supabase is not configured.");
   });
 });
 
@@ -1037,7 +1132,9 @@ describe("Supabase recent-session verification", () => {
       fetcher,
     );
 
-    await expect(repository.hasRecentSession(userId, sessionId)).resolves.toBe(true);
+    await expect(repository.hasRecentSession(userId, sessionId)).resolves.toBe(
+      true,
+    );
     expect(requests[0]?.url.pathname).toBe(
       "/rest/v1/rpc/firelight_has_recent_session",
     );
@@ -1155,79 +1252,89 @@ describe("Supabase admin operations repository", () => {
     const fetcher: RepositoryFetcher = vi.fn(async (url) => {
       if (url.pathname.endsWith("firelight_admin_list_kits")) {
         return Response.json({
-          items: [{
-            id: kitId,
-            batch: "pilot-a",
-            state: "claimed",
-            claimedBy: learnerId,
-            claimedAt: now,
-            revokedAt: null,
-            createdAt: now,
-            codeHash: "a".repeat(64),
-          }],
+          items: [
+            {
+              id: kitId,
+              batch: "pilot-a",
+              state: "claimed",
+              claimedBy: learnerId,
+              claimedAt: now,
+              revokedAt: null,
+              createdAt: now,
+              codeHash: "a".repeat(64),
+            },
+          ],
           hasMore: true,
         });
       }
       if (url.pathname.endsWith("firelight_admin_list_learners")) {
         return Response.json({
-          items: [{
-            id: learnerId,
-            email: "grace@example.com",
-            displayName: "Grace",
-            role: "learner",
-            accessSource: "code",
-            activationBatch: "pilot-a",
-            completedLessons: 1,
-            progressRecords: 2,
-            createdAt: now,
-            updatedAt: now,
-          }],
+          items: [
+            {
+              id: learnerId,
+              email: "grace@example.com",
+              displayName: "Grace",
+              role: "learner",
+              accessSource: "code",
+              activationBatch: "pilot-a",
+              completedLessons: 1,
+              progressRecords: 2,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
           hasMore: false,
         });
       }
       if (url.pathname.endsWith("firelight_admin_list_progress")) {
         return Response.json({
-          items: [{
-            lessonId: "first-spark",
-            lessonVersion: 1,
-            status: "completed",
-            currentStep: "complete",
-            percentage: 100,
-            completedAt: now,
-            updatedAt: now,
-            codeSnapshot: "must not leave the database projection",
-          }],
+          items: [
+            {
+              lessonId: "first-spark",
+              lessonVersion: 1,
+              status: "completed",
+              currentStep: "complete",
+              percentage: 100,
+              completedAt: now,
+              updatedAt: now,
+              codeSnapshot: "must not leave the database projection",
+            },
+          ],
           hasMore: false,
         });
       }
       if (url.pathname.endsWith("firelight_admin_list_compile_jobs")) {
         return Response.json({
-          items: [{
-            id: jobId,
-            userId: learnerId,
-            lessonId: "first-spark",
-            lessonVersion: 1,
-            state: "failed",
-            durationMs: 250,
-            safeErrorCode: "COMPILER_FAILED",
-            diagnosticSummary: "Expected a semicolon.",
-            createdAt: now,
-            finishedAt: now,
-            sourceHash: "a".repeat(64),
-          }],
+          items: [
+            {
+              id: jobId,
+              userId: learnerId,
+              lessonId: "first-spark",
+              lessonVersion: 1,
+              state: "failed",
+              durationMs: 250,
+              safeErrorCode: "COMPILER_FAILED",
+              diagnosticSummary: "Expected a semicolon.",
+              createdAt: now,
+              finishedAt: now,
+              sourceHash: "a".repeat(64),
+            },
+          ],
           hasMore: false,
         });
       }
       return Response.json({
-        items: [{
-          id: 1,
-          actorId: userId,
-          action: "kit.revoke",
-          targetType: "kit",
-          targetId: kitId,
-          metadata: { reason: "security" },
-          createdAt: now,
-        }],
+        items: [
+          {
+            id: 1,
+            actorId: userId,
+            action: "kit.revoke",
+            targetType: "kit",
+            targetId: kitId,
+            metadata: { reason: "security" },
+            createdAt: now,
+          },
+        ],
         hasMore: false,
       });
     });
@@ -1238,9 +1345,18 @@ describe("Supabase admin operations repository", () => {
     );
     const page = { limit: 10, offset: 20 };
 
-    const kits = await repository.listAdminKits(userId, "pilot", "claimed", page);
+    const kits = await repository.listAdminKits(
+      userId,
+      "pilot",
+      "claimed",
+      page,
+    );
     const learners = await repository.listAdminLearners(userId, "Grace", page);
-    const progress = await repository.listAdminProgress(userId, learnerId, page);
+    const progress = await repository.listAdminProgress(
+      userId,
+      learnerId,
+      page,
+    );
     const diagnostics = await repository.listAdminCompileDiagnostics(
       userId,
       "failed",
@@ -1251,7 +1367,10 @@ describe("Supabase admin operations repository", () => {
 
     expect(kits.nextOffset).toBe(30);
     expect(kits.items[0]).not.toHaveProperty("codeHash");
-    expect(learners.items[0]).toMatchObject({ id: learnerId, displayName: "Grace" });
+    expect(learners.items[0]).toMatchObject({
+      id: learnerId,
+      displayName: "Grace",
+    });
     expect(progress.items[0]).not.toHaveProperty("codeSnapshot");
     expect(diagnostics.items[0]).not.toHaveProperty("sourceHash");
     expect(audit.items[0]).toMatchObject({ action: "kit.revoke" });
@@ -1261,30 +1380,32 @@ describe("Supabase admin operations repository", () => {
     const repository = createSupabaseIdentityRepository(
       repositoryEnv,
       "admin-token",
-      vi.fn(async () => Response.json({
-        items: [{
-          id: "55555555-5555-4555-8555-555555555555",
-          userId,
-          lessonId: "first-spark",
-          lessonVersion: 1,
-          state: "failed",
-          durationMs: 60_001,
-          safeErrorCode: "COMPILER_FAILED",
-          diagnosticSummary: "bounded",
-          createdAt: now,
-          finishedAt: now,
-        }],
-        hasMore: false,
-      })),
+      vi.fn(async () =>
+        Response.json({
+          items: [
+            {
+              id: "55555555-5555-4555-8555-555555555555",
+              userId,
+              lessonId: "first-spark",
+              lessonVersion: 1,
+              state: "failed",
+              durationMs: 60_001,
+              safeErrorCode: "COMPILER_FAILED",
+              diagnosticSummary: "bounded",
+              createdAt: now,
+              finishedAt: now,
+            },
+          ],
+          hasMore: false,
+        }),
+      ),
     );
 
     await expect(
-      repository.listAdminCompileDiagnostics(
-        userId,
-        "failed",
-        null,
-        { limit: 10, offset: 0 },
-      ),
+      repository.listAdminCompileDiagnostics(userId, "failed", null, {
+        limit: 10,
+        offset: 0,
+      }),
     ).rejects.toMatchObject({ kind: "unavailable" });
   });
 });
