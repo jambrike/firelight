@@ -239,6 +239,8 @@ class ReleaseConfigurationTests(unittest.TestCase):
             ({"vpc_cidr": "10.42.0.0/24"}, "VPC_CIDR_INVALID"),
             ({"vpc_cidr": "10.44.0.0/20"}, "VPC_CIDR_INVALID"),
             ({"gateway_reserved_concurrency": 21}, "GATEWAY_CONCURRENCY_INVALID"),
+            ({"gateway_reserved_concurrency": 0}, "GATEWAY_CONCURRENCY_INVALID"),
+            ({"gateway_reserved_concurrency": -2}, "GATEWAY_CONCURRENCY_INVALID"),
             ({"gateway_reserved_concurrency": True}, "GATEWAY_CONCURRENCY_INVALID"),
             ({"compiler_desired_count": 1}, "COMPILER_COUNT_INVALID"),
             ({"compiler_desired_count": True}, "COMPILER_COUNT_INVALID"),

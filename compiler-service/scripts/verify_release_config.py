@@ -258,8 +258,9 @@ def _validate_release(
     if str(cidr) != CANONICAL_VPC_CIDRS[environment]:
         fail("VPC_CIDR_INVALID")
 
-    if type(variables["gateway_reserved_concurrency"]) is not int or not (
-        1 <= variables["gateway_reserved_concurrency"] <= 20
+    gateway_concurrency = variables["gateway_reserved_concurrency"]
+    if type(gateway_concurrency) is not int or not (
+        gateway_concurrency == -1 or 1 <= gateway_concurrency <= 20
     ):
         fail("GATEWAY_CONCURRENCY_INVALID")
     if type(variables["compiler_desired_count"]) is not int or not (

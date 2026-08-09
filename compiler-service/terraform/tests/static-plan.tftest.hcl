@@ -232,8 +232,8 @@ run "isolated_compiler_plan" {
   }
 
   assert {
-    condition     = aws_lambda_function.gateway.reserved_concurrent_executions == 5
-    error_message = "The gateway concurrency default must remain bounded."
+    condition     = aws_lambda_function.gateway.reserved_concurrent_executions == -1
+    error_message = "The gateway must use the bounded regional account quota until a higher quota is approved."
   }
 
   assert {

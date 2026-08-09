@@ -107,13 +107,16 @@ variable "vpc_cidr" {
 }
 
 variable "gateway_reserved_concurrency" {
-  description = "Maximum concurrent authenticated gateway invocations, bounding cost and ALB pressure."
+  description = "Reserved gateway concurrency, or -1 to use the account's regional concurrency quota."
   type        = number
-  default     = 5
+  default     = -1
 
   validation {
-    condition     = var.gateway_reserved_concurrency >= 1 && var.gateway_reserved_concurrency <= 20
-    error_message = "gateway_reserved_concurrency must be between 1 and 20."
+    condition = (
+      var.gateway_reserved_concurrency == -1 ||
+      (var.gateway_reserved_concurrency >= 1 && var.gateway_reserved_concurrency <= 20)
+    )
+    error_message = "gateway_reserved_concurrency must be -1 or between 1 and 20."
   }
 }
 

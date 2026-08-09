@@ -148,7 +148,7 @@ Codes are `COMPILER_UNAUTHORIZED`, `COMPILER_METHOD_NOT_ALLOWED`,
 | Intel HEX text                           |                                 128 KiB |
 | Unique/maximum application flash address |                      below 30,720 bytes |
 | JSON response                            |                                 192 KiB |
-| Gateway reserved concurrency             |         5 by default, configurable 1–20 |
+| Gateway reserved concurrency             | `-1` uses the regional account quota; configurable 1–20 after quota approval |
 | Fargate service                          | 2 tasks by default, 1 vCPU / 2 GiB each |
 
 The gateway stops waiting at 42 seconds so it can return a bounded error before

@@ -90,6 +90,7 @@ class MaterializeReleaseConfigurationTests(unittest.TestCase):
         variables = json.loads(self.variables_path.read_text(encoding="utf-8"))
         self.assertEqual(release.account_id, ACCOUNTS["staging"])
         self.assertEqual(variables["service_name"], "firelight-compiler-stg")
+        self.assertEqual(variables["gateway_reserved_concurrency"], -1)
         self.assertEqual(
             variables["deployment_role_name"],
             "FirelightCompilerStagingDeploy",
