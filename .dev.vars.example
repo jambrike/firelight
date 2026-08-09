@@ -1,0 +1,14 @@
+# Copy to .dev.vars, then replace the two key placeholders with values from:
+# supabase status -o env
+ENVIRONMENT=development
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_PROJECT_REF=local
+SUPABASE_PUBLISHABLE_KEY=copy-the-local-anon-or-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=copy-the-local-service-role-key
+KIT_CODE_PEPPER=firelight-local-kit-pepper
+# Use loopback for local development. Hosted environments use the exact
+# eu-west-1 Lambda Function URL and repeat its origin independently below.
+COMPILER_SERVICE_URL=http://127.0.0.1:9000/
+COMPILER_SERVICE_ORIGIN=http://127.0.0.1:9000
+COMPILER_SERVICE_HOST=127.0.0.1
+COMPILER_SERVICE_TOKEN=replace-with-at-least-32-random-characters

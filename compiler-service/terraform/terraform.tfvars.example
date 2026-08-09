@@ -1,0 +1,27 @@
+# Generic example shape only. Prefer the reviewed environment-specific examples
+# in environments/. A complete plan rejects this canonical sentinel digest; it
+# is valid only while targeting aws_ecr_repository.compiler and
+# aws_ecr_lifecycle_policy.compiler for the one-time bootstrap.
+environment          = "staging"
+aws_account_id       = "123456789012"
+service_name         = "firelight-compiler-stg"
+deployment_role_name = "FirelightCompilerStagingDeploy"
+
+image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+release_build_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# Create this outside Terraform so plaintext never enters configuration or state.
+# Only the Lambda gateway can read it; the Fargate task has no task role or secret.
+auth_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:firelight/compiler-auth-AbCdEf"
+
+# Set only when the secret uses a customer-managed KMS key.
+auth_secret_kms_key_arn = null
+
+# Terraform derives two non-overlapping subnets from this dedicated VPC CIDR.
+# It creates no IGW, NAT gateway, public subnet, or default route.
+vpc_cidr = "10.42.0.0/20"
+
+gateway_reserved_concurrency = 5
+compiler_desired_count       = 2
+enable_deletion_protection   = true
+log_retention_days           = 14

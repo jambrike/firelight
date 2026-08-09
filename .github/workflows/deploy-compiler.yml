@@ -1,0 +1,2201 @@
+name: Deploy compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected compiler environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      deploy_confirmation:
+        description: Type DEPLOY_STAGING_COMPILER or DEPLOY_PRODUCTION_COMPILER
+        required: true
+        type: string
+      ecr_bootstrap_confirmation:
+        description: Type BOOTSTRAP_STAGING_COMPILER_ECR or BOOTSTRAP_PRODUCTION_COMPILER_ECR only for an absent or partial bootstrap
+        required: false
+        type: string
+      staging_run_id:
+        description: Accepted staging compiler workflow run ID; required only for production
+        required: false
+        type: string
+      staging_evidence_sha256:
+        description: Exact accepted staging evidence JSON SHA-256; required only for production
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-compiler-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ github.sha }}
+
+jobs:
+  authorize-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require an exact manual release from the current main commit
+        shell: bash
+        env:
+          BOOTSTRAP_CONFIRMATION: ${{ inputs.ecr_bootstrap_confirmation }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+          STAGING_EVIDENCE_SHA256: ${{ inputs.staging_evidence_sha256 }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_ENVIRONMENT" in
+            staging)
+              expected_deploy="DEPLOY_STAGING_COMPILER"
+              expected_bootstrap="BOOTSTRAP_STAGING_COMPILER_ECR"
+              ;;
+            production)
+              expected_deploy="DEPLOY_PRODUCTION_COMPILER"
+              expected_bootstrap="BOOTSTRAP_PRODUCTION_COMPILER_ECR"
+              ;;
+            *)
+              echo "The compiler environment is not supported." >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$RELEASE_EVENT" != "workflow_dispatch" || "$DEPLOY_CONFIRMATION" != "$expected_deploy" ]]; then
+            echo "The compiler release confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ -n "$BOOTSTRAP_CONFIRMATION" && "$BOOTSTRAP_CONFIRMATION" != "$expected_bootstrap" ]]; then
+            echo "The compiler ECR bootstrap confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REPOSITORY" != "jambrike/firelight" || "$DEFAULT_BRANCH" != "main" || "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "Compiler releases must be dispatched from the canonical main branch." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The compiler release must resolve to one lowercase 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_ENVIRONMENT" == "staging" ]]; then
+            if [[ -n "$STAGING_RUN_ID" || -n "$STAGING_EVIDENCE_SHA256" ]]; then
+              echo "Staging releases cannot consume staging-promotion evidence." >&2
+              exit 1
+            fi
+          elif [[ ! "$STAGING_RUN_ID" =~ ^[1-9][0-9]{0,19}$ || ! "$STAGING_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Production requires one exact accepted staging run and evidence hash." >&2
+            exit 1
+          fi
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          current_main="$(git rev-parse FETCH_HEAD)"
+          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced after this compiler release was dispatched; start a new run." >&2
+            exit 1
+          fi
+
+  verify:
+    needs: authorize-release
+    uses: ./.github/workflows/ci.yml
+
+  promotion-evidence:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      staging_compiler_auth_secret_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_auth_secret_sha256 }}
+      staging_compiler_aws_account_id_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_aws_account_id_sha256 }}
+      staging_compiler_backend_location_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_backend_location_sha256 }}
+      staging_compiler_evidence_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_evidence_sha256 }}
+      staging_compiler_image_digest: ${{ steps.staging-evidence.outputs.staging_compiler_image_digest }}
+      staging_compiler_run_id: ${{ steps.staging-evidence.outputs.staging_compiler_run_id }}
+      staging_compiler_state_kms_key_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_state_kms_key_sha256 }}
+      staging_compiler_vpc_cidr_sha256: ${{ steps.staging-evidence.outputs.staging_compiler_vpc_cidr_sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Verify exact accepted staging evidence before any production AWS access
+        if: inputs.environment == 'production'
+        id: staging-evidence
+        shell: bash
+        env:
+          FIRELIGHT_COMPILER_ENVIRONMENT: production
+          FIRELIGHT_COMPILER_STAGING_EVIDENCE_SHA256: ${{ inputs.staging_evidence_sha256 }}
+          FIRELIGHT_COMPILER_STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-compiler-staging-evidence.mjs >> "$GITHUB_OUTPUT"
+
+  environment-isolation:
+    needs:
+      - verify
+      - promotion-evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: compiler-${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      auth_secret_sha256: ${{ steps.isolation.outputs.auth_secret_sha256 }}
+      aws_account_id_sha256: ${{ steps.isolation.outputs.aws_account_id_sha256 }}
+      backend_location_sha256: ${{ steps.isolation.outputs.backend_location_sha256 }}
+      state_kms_key_sha256: ${{ steps.isolation.outputs.state_kms_key_sha256 }}
+      vpc_cidr_sha256: ${{ steps.isolation.outputs.vpc_cidr_sha256 }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_ARN }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN }}
+      FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+      FIRELIGHT_COMPILER_VPC_CIDR: ${{ vars.FIRELIGHT_COMPILER_VPC_CIDR }}
+      FIRELIGHT_TERRAFORM_STATE_BUCKET: ${{ vars.FIRELIGHT_TERRAFORM_STATE_BUCKET }}
+      FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN: ${{ vars.FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Materialize and bind compiler isolation before any AWS access
+        id: isolation
+        shell: bash
+        env:
+          STAGING_AUTH_SECRET_SHA256: ${{ needs.promotion-evidence.outputs.staging_compiler_auth_secret_sha256 }}
+          STAGING_AWS_ACCOUNT_ID_SHA256: ${{ needs.promotion-evidence.outputs.staging_compiler_aws_account_id_sha256 }}
+          STAGING_BACKEND_LOCATION_SHA256: ${{ needs.promotion-evidence.outputs.staging_compiler_backend_location_sha256 }}
+          STAGING_STATE_KMS_KEY_SHA256: ${{ needs.promotion-evidence.outputs.staging_compiler_state_kms_key_sha256 }}
+          STAGING_VPC_CIDR_SHA256: ${{ needs.promotion-evidence.outputs.staging_compiler_vpc_cidr_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-isolation-config.XXXXXX")"
+          trap 'rm -rf -- "$config_dir"' EXIT
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/bootstrap.tfvars.json"
+          verification_path="$config_dir/verification.txt"
+          python3 compiler-service/scripts/materialize_release_config.py --ecr-bootstrap \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path" > /dev/null
+          peer_arguments=()
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then
+            peer_arguments=(
+              --peer-aws-account-id-sha256 "$STAGING_AWS_ACCOUNT_ID_SHA256"
+              --peer-backend-location-sha256 "$STAGING_BACKEND_LOCATION_SHA256"
+              --peer-state-kms-key-sha256 "$STAGING_STATE_KMS_KEY_SHA256"
+              --peer-auth-secret-sha256 "$STAGING_AUTH_SECRET_SHA256"
+              --peer-vpc-cidr-sha256 "$STAGING_VPC_CIDR_SHA256"
+            )
+          elif [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" != "staging" ]]; then
+            exit 1
+          fi
+          python3 compiler-service/scripts/verify_release_config.py --ecr-bootstrap \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --backend-config "$backend_path" \
+            --var-file "$variables_path" \
+            "${peer_arguments[@]}" \
+            > "$verification_path"
+          for name in aws_account_id_sha256 backend_location_sha256 state_kms_key_sha256 auth_secret_sha256 vpc_cidr_sha256; do
+            value="$(awk -F= -v expected="$name" '$1 == expected {print $2}' "$verification_path")"
+            if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "The compiler isolation fingerprint is invalid." >&2
+              exit 1
+            fi
+            echo "$name=$value" >> "$GITHUB_OUTPUT"
+          done
+
+  ecr-bootstrap-plan:
+    needs:
+      - verify
+      - promotion-evidence
+      - environment-isolation
+    if: inputs.ecr_bootstrap_confirmation != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: compiler-${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      backend_sha256: ${{ steps.bootstrap-plan.outputs.backend_sha256 }}
+      manifest_sha256: ${{ steps.bootstrap-plan.outputs.manifest_sha256 }}
+      plan_sha256: ${{ steps.bootstrap-plan.outputs.plan_sha256 }}
+      state_lineage: ${{ steps.bootstrap-plan.outputs.state_lineage }}
+      state_serial: ${{ steps.bootstrap-plan.outputs.state_serial }}
+      variables_sha256: ${{ steps.bootstrap-plan.outputs.variables_sha256 }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: eu-west-1
+      FIRELIGHT_COMPILER_AUTH_SECRET_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_ARN }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN }}
+      FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+      FIRELIGHT_COMPILER_VPC_CIDR: ${{ vars.FIRELIGHT_COMPILER_VPC_CIDR }}
+      FIRELIGHT_TERRAFORM_STATE_BUCKET: ${{ vars.FIRELIGHT_TERRAFORM_STATE_BUCKET }}
+      FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN: ${{ vars.FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Reject a stale main commit and an unexpected AWS target
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced before the compiler ECR plan." >&2
+            exit 1
+          fi
+          if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -n "${AWS_SECRET_ACCESS_KEY:-}" || -n "${AWS_SESSION_TOKEN:-}" || -n "${AWS_PROFILE:-}" ]]; then
+            echo "Pre-existing AWS credentials are forbidden; GitHub OIDC is required." >&2
+            exit 1
+          fi
+          case "$FIRELIGHT_COMPILER_ENVIRONMENT" in
+            staging) expected_role="FirelightCompilerStagingDeploy" ;;
+            production) expected_role="FirelightCompilerProductionDeploy" ;;
+            *) exit 1 ;;
+          esac
+          if [[ ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ || "$AWS_ACCOUNT_ID" =~ ^(000000000000|111111111111|123456789012|222222222222)$ ]]; then
+            echo "The protected AWS account ID is invalid." >&2
+            exit 1
+          fi
+          if [[ "$AWS_DEPLOY_ROLE_ARN" != "arn:aws:iam::$AWS_ACCOUNT_ID:role/$expected_role" ]]; then
+            echo "The protected AWS deploy role is not canonical." >&2
+            exit 1
+          fi
+      - name: Assume the environment deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true
+          role-session-name: firelight-${{ inputs.environment }}-${{ github.run_id }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          unset-current-credentials: true
+      - name: Prove the exact assumed role before Terraform init
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          identity_file="$RUNNER_TEMP/firelight-aws-identity.json"
+          aws sts get-caller-identity > "$identity_file"
+          python3 compiler-service/scripts/verify_aws_identity.py "$identity_file" \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --expected-account-id "$AWS_ACCOUNT_ID"
+          rm -- "$identity_file"
+      - name: Prove production can read the accepted staging image before bootstrap
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          ACCEPTED_STAGING_IMAGE_DIGEST: ${{ needs.promotion-evidence.outputs.staging_compiler_image_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ ! "$ACCEPTED_STAGING_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The accepted staging compiler digest is invalid." >&2
+            exit 1
+          fi
+          image_file="$RUNNER_TEMP/firelight-bootstrap-staging-image.json"
+          aws ecr describe-images \
+            --registry-id "$AWS_ACCOUNT_ID" \
+            --repository-name firelight-compiler-stg \
+            --image-ids "imageDigest=$ACCEPTED_STAGING_IMAGE_DIGEST" \
+            > "$image_file"
+          if ! jq -e --arg digest "$ACCEPTED_STAGING_IMAGE_DIGEST" --arg sha "$RELEASE_SHA" \
+            '.imageDetails | length == 1 and .[0].imageDigest == $digest and (.[0].imageTags | index($sha)) != null' \
+            "$image_file" > /dev/null; then
+            echo "The accepted staging digest is not bound to the canonical staging commit tag." >&2
+            exit 1
+          fi
+          rm -- "$image_file"
+      - name: Create and inspect the ECR-only saved plan
+        id: bootstrap-plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          EXPECTED_AUTH_SECRET_SHA256: ${{ needs.environment-isolation.outputs.auth_secret_sha256 }}
+          EXPECTED_AWS_ACCOUNT_ID_SHA256: ${{ needs.environment-isolation.outputs.aws_account_id_sha256 }}
+          EXPECTED_BACKEND_LOCATION_SHA256: ${{ needs.environment-isolation.outputs.backend_location_sha256 }}
+          EXPECTED_STATE_KMS_KEY_SHA256: ${{ needs.environment-isolation.outputs.state_kms_key_sha256 }}
+          EXPECTED_VPC_CIDR_SHA256: ${{ needs.environment-isolation.outputs.vpc_cidr_sha256 }}
+          HANDOFF_PREFIX: firelight/compiler/${{ inputs.environment }}/saved-plans/${{ github.run_id }}/${{ github.run_attempt }}/ecr-bootstrap
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-ecr-config.XXXXXX")"
+          handoff_dir="$(mktemp -d "$RUNNER_TEMP/firelight-ecr-plan.XXXXXX")"
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/bootstrap.tfvars.json"
+          plan_path="$handoff_dir/ecr-bootstrap.tfplan"
+          plan_stdout_path="$config_dir/terraform-plan.stdout"
+          plan_stderr_path="$config_dir/terraform-plan.stderr"
+          : > "$plan_stdout_path"
+          : > "$plan_stderr_path"
+          chmod 600 -- "$plan_stdout_path" "$plan_stderr_path"
+          python3 ../scripts/materialize_release_config.py --ecr-bootstrap \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path"
+          verification_path="$config_dir/verification.txt"
+          python3 ../scripts/verify_release_config.py --ecr-bootstrap \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --backend-config "$backend_path" \
+            --var-file "$variables_path" > "$verification_path"
+          for binding in \
+            "aws_account_id_sha256:$EXPECTED_AWS_ACCOUNT_ID_SHA256" \
+            "backend_location_sha256:$EXPECTED_BACKEND_LOCATION_SHA256" \
+            "state_kms_key_sha256:$EXPECTED_STATE_KMS_KEY_SHA256" \
+            "auth_secret_sha256:$EXPECTED_AUTH_SECRET_SHA256" \
+            "vpc_cidr_sha256:$EXPECTED_VPC_CIDR_SHA256"; do
+            name="${binding%%:*}"
+            expected="${binding#*:}"
+            current="$(awk -F= -v field="$name" '$1 == field {print $2}' "$verification_path")"
+            if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$current" != "$expected" ]]; then
+              echo "The protected compiler isolation snapshot changed before the ECR plan." >&2
+              exit 1
+            fi
+          done
+          backend_sha256="$(sha256sum "$backend_path" | cut -d' ' -f1)"
+          variables_sha256="$(sha256sum "$variables_path" | cut -d' ' -f1)"
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
+          state_file="$config_dir/state-before.json"
+          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt"; then
+            state_serial="$(jq -r '.serial' "$state_file")"
+            state_lineage="$(jq -r '.lineage' "$state_file")"
+            if [[ ! "$state_serial" =~ ^[0-9]+$ || ! "$state_lineage" =~ ^[0-9a-f-]{36}$ ]]; then
+              echo "The existing Terraform state identity is invalid." >&2
+              exit 1
+            fi
+          else
+            state_serial="absent"
+            state_lineage="absent"
+          fi
+          set +e
+          terraform plan -input=false -lock-timeout=5m \
+            -var-file="$variables_path" \
+            -target=aws_ecr_repository.compiler \
+            -target=aws_ecr_lifecycle_policy.compiler \
+            -out="$plan_path" > "$plan_stdout_path" 2> "$plan_stderr_path"
+          plan_status=$?
+          set -e
+          if [[ $plan_status -ne 0 ]]; then
+            echo "The resumable compiler ECR Terraform plan failed." >&2
+            exit "$plan_status"
+          fi
+          if ! terraform show -json "$plan_path" > "$config_dir/ecr-plan.json" 2>> "$plan_stderr_path"; then
+            echo "The compiler ECR Terraform plan could not be inspected." >&2
+            exit 1
+          fi
+          python3 ../scripts/verify_ecr_bootstrap_plan.py "$config_dir/ecr-plan.json"
+          if ! terraform show -no-color "$plan_path" > "$handoff_dir/plan.txt" 2>> "$plan_stderr_path"; then
+            echo "The compiler ECR Terraform plan could not be rendered." >&2
+            exit 1
+          fi
+          plan_sha256="$(sha256sum "$plan_path" | cut -d' ' -f1)"
+          plan_text_sha256="$(sha256sum "$handoff_dir/plan.txt" | cut -d' ' -f1)"
+          plan_size="$(stat -c '%s' "$plan_path")"
+          plan_text_size="$(stat -c '%s' "$handoff_dir/plan.txt")"
+          expected_prefix="firelight/compiler/$FIRELIGHT_COMPILER_ENVIRONMENT/saved-plans/$RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT/ecr-bootstrap"
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ || ! "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,9}$ || "$HANDOFF_PREFIX" != "$expected_prefix" ]]; then
+            echo "The ECR saved-plan handoff key is invalid." >&2
+            exit 1
+          fi
+          plan_object_key="$HANDOFF_PREFIX/plan.tfplan"
+          plan_text_object_key="$HANDOFF_PREFIX/plan.txt"
+          manifest_object_key="$HANDOFF_PREFIX/manifest.json"
+          jq -n \
+            --arg schema "firelight.compiler-ecr-plan" \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg commitSha "$RELEASE_SHA" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            --arg backendSha256 "$backend_sha256" \
+            --arg variablesSha256 "$variables_sha256" \
+            --arg stateSerial "$state_serial" \
+            --arg stateLineage "$state_lineage" \
+            --arg planSha256 "$plan_sha256" \
+            --arg planTextSha256 "$plan_text_sha256" \
+            --arg planObjectKey "$plan_object_key" \
+            --arg planTextObjectKey "$plan_text_object_key" \
+            --arg manifestObjectKey "$manifest_object_key" \
+            --argjson planSize "$plan_size" \
+            --argjson planTextSize "$plan_text_size" \
+            '{schema:$schema,version:2,environment:$environment,repository:$repository,commitSha:$commitSha,runId:$runId,runAttempt:$runAttempt,backendSha256:$backendSha256,variablesSha256:$variablesSha256,stateSerial:$stateSerial,stateLineage:$stateLineage,planSha256:$planSha256,planTextSha256:$planTextSha256,planSize:$planSize,planTextSize:$planTextSize,planObjectKey:$planObjectKey,planTextObjectKey:$planTextObjectKey,manifestObjectKey:$manifestObjectKey}' \
+            > "$handoff_dir/manifest.json"
+          manifest_sha256="$(sha256sum "$handoff_dir/manifest.json" | cut -d' ' -f1)"
+          put_immutable_object() {
+            local source_path="$1"
+            local object_key="$2"
+            local object_sha256="$3"
+            local object_kind="$4"
+            local content_type="$5"
+            local content_length
+            local head_path
+            local put_response_path
+            local version_id
+            content_length="$(stat -c '%s' "$source_path")"
+            head_path="$config_dir/head-$object_kind.json"
+            put_response_path="$config_dir/put-$object_kind.json"
+            aws s3api put-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --body "$source_path" \
+              --content-type "$content_type" \
+              --server-side-encryption aws:kms \
+              --ssekms-key-id "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --metadata "sha256=$object_sha256,kind=$object_kind,environment=$FIRELIGHT_COMPILER_ENVIRONMENT,run-id=$RELEASE_RUN_ID,run-attempt=$RELEASE_RUN_ATTEMPT" \
+              --if-none-match '*' \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$put_response_path"
+            version_id="$(jq -r 'select((.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024) | .VersionId' "$put_response_path")"
+            if [[ -z "$version_id" ]]; then
+              echo "The protected state bucket did not return an immutable object version." >&2
+              exit 1
+            fi
+            aws s3api head-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --version-id "$version_id" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$head_path"
+            jq -e \
+              --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --arg sha256 "$object_sha256" \
+              --arg kind "$object_kind" \
+              --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+              --arg runId "$RELEASE_RUN_ID" \
+              --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+              --arg versionId "$version_id" \
+              --argjson contentLength "$content_length" \
+              '.VersionId == $versionId and .ContentLength == $contentLength and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":$kind,"run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+              "$head_path" > /dev/null
+          }
+          put_immutable_object "$plan_path" "$plan_object_key" "$plan_sha256" ecr-bootstrap-plan application/octet-stream
+          put_immutable_object "$handoff_dir/plan.txt" "$plan_text_object_key" "$plan_text_sha256" ecr-bootstrap-plan-text text/plain
+          put_immutable_object "$handoff_dir/manifest.json" "$manifest_object_key" "$manifest_sha256" ecr-bootstrap-manifest application/json
+          {
+            echo "backend_sha256=$backend_sha256"
+            echo "manifest_sha256=$manifest_sha256"
+            echo "plan_sha256=$plan_sha256"
+            echo "state_lineage=$state_lineage"
+            echo "state_serial=$state_serial"
+            echo "variables_sha256=$variables_sha256"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Compiler ECR bootstrap plan"
+            echo
+            echo "Environment: \`$FIRELIGHT_COMPILER_ENVIRONMENT\`"
+            echo "Commit: \`$RELEASE_SHA\`"
+            echo "Plan SHA-256: \`$plan_sha256\`"
+            echo
+            echo "The independently protected bootstrap apply job consumes the exact resumable create/no-op, SSE-KMS saved plan from the protected state bucket."
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -rf -- "$config_dir" "$handoff_dir"
+
+  ecr-bootstrap-apply:
+    needs:
+      - verify
+      - ecr-bootstrap-plan
+    if: inputs.ecr_bootstrap_confirmation != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: compiler-${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: eu-west-1
+      FIRELIGHT_COMPILER_AUTH_SECRET_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_ARN }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN }}
+      FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+      FIRELIGHT_COMPILER_VPC_CIDR: ${{ vars.FIRELIGHT_COMPILER_VPC_CIDR }}
+      FIRELIGHT_TERRAFORM_STATE_BUCKET: ${{ vars.FIRELIGHT_TERRAFORM_STATE_BUCKET }}
+      FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN: ${{ vars.FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Recheck current main and the protected AWS target
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced before the compiler ECR apply." >&2
+            exit 1
+          fi
+          if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -n "${AWS_SECRET_ACCESS_KEY:-}" || -n "${AWS_SESSION_TOKEN:-}" || -n "${AWS_PROFILE:-}" ]]; then
+            echo "Pre-existing AWS credentials are forbidden; GitHub OIDC is required." >&2
+            exit 1
+          fi
+          case "$FIRELIGHT_COMPILER_ENVIRONMENT" in
+            staging) expected_role="FirelightCompilerStagingDeploy" ;;
+            production) expected_role="FirelightCompilerProductionDeploy" ;;
+            *) exit 1 ;;
+          esac
+          if [[ ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ || "$AWS_DEPLOY_ROLE_ARN" != "arn:aws:iam::$AWS_ACCOUNT_ID:role/$expected_role" ]]; then
+            echo "The protected AWS deploy target is invalid." >&2
+            exit 1
+          fi
+      - name: Assume the environment deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true
+          role-session-name: firelight-${{ inputs.environment }}-${{ github.run_id }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          unset-current-credentials: true
+      - name: Re-prove the exact assumed role before Terraform init
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          identity_file="$RUNNER_TEMP/firelight-aws-identity.json"
+          aws sts get-caller-identity > "$identity_file"
+          python3 compiler-service/scripts/verify_aws_identity.py "$identity_file" \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --expected-account-id "$AWS_ACCOUNT_ID"
+          rm -- "$identity_file"
+      - name: Download and verify only the exact reviewed ECR plan
+        id: approved-bootstrap-plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          EXPECTED_BACKEND_SHA256: ${{ needs.ecr-bootstrap-plan.outputs.backend_sha256 }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.ecr-bootstrap-plan.outputs.manifest_sha256 }}
+          EXPECTED_PLAN_SHA256: ${{ needs.ecr-bootstrap-plan.outputs.plan_sha256 }}
+          EXPECTED_STATE_LINEAGE: ${{ needs.ecr-bootstrap-plan.outputs.state_lineage }}
+          EXPECTED_STATE_SERIAL: ${{ needs.ecr-bootstrap-plan.outputs.state_serial }}
+          EXPECTED_VARIABLES_SHA256: ${{ needs.ecr-bootstrap-plan.outputs.variables_sha256 }}
+          HANDOFF_PREFIX: firelight/compiler/${{ inputs.environment }}/saved-plans/${{ github.run_id }}/${{ github.run_attempt }}/ecr-bootstrap
+          PLAN_DIRECTORY: ${{ runner.temp }}/firelight-reviewed-ecr-plan
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          expected_prefix="firelight/compiler/$FIRELIGHT_COMPILER_ENVIRONMENT/saved-plans/$RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT/ecr-bootstrap"
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ || ! "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,9}$ || "$HANDOFF_PREFIX" != "$expected_prefix" || -e "$PLAN_DIRECTORY" || -L "$PLAN_DIRECTORY" ]]; then
+            echo "The ECR saved-plan handoff location is invalid." >&2
+            exit 1
+          fi
+          mkdir -m 700 -- "$PLAN_DIRECTORY"
+          plan_path="$PLAN_DIRECTORY/ecr-bootstrap.tfplan"
+          plan_text_path="$PLAN_DIRECTORY/plan.txt"
+          manifest_path="$PLAN_DIRECTORY/manifest.json"
+          plan_object_key="$HANDOFF_PREFIX/plan.tfplan"
+          plan_text_object_key="$HANDOFF_PREFIX/plan.txt"
+          manifest_object_key="$HANDOFF_PREFIX/manifest.json"
+          manifest_head="$(mktemp "$RUNNER_TEMP/firelight-ecr-manifest-head.XXXXXX")"
+          aws s3api head-object \
+            --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+            --key "$manifest_object_key" \
+            --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+            > "$manifest_head"
+          jq -e \
+            --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+            --arg sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            '(.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024 and .ContentLength > 0 and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":"ecr-bootstrap-manifest","run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+            "$manifest_head" > /dev/null
+          manifest_version_id="$(jq -r '.VersionId' "$manifest_head")"
+          aws s3api get-object \
+            --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+            --key "$manifest_object_key" \
+            --version-id "$manifest_version_id" \
+            --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+            "$manifest_path" > /dev/null
+          manifest_sha256="$(sha256sum "$manifest_path" | cut -d' ' -f1)"
+          if [[ "$manifest_sha256" != "$EXPECTED_MANIFEST_SHA256" ]]; then
+            echo "The reviewed ECR plan manifest hash changed." >&2
+            exit 1
+          fi
+          expected_plan_text_sha256="$(jq -r '.planTextSha256' "$manifest_path")"
+          expected_plan_size="$(jq -r '.planSize' "$manifest_path")"
+          expected_plan_text_size="$(jq -r '.planTextSize' "$manifest_path")"
+          if [[ ! "$expected_plan_text_sha256" =~ ^[0-9a-f]{64}$ || ! "$expected_plan_size" =~ ^[1-9][0-9]*$ || ! "$expected_plan_text_size" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The reviewed ECR plan manifest object metadata is invalid." >&2
+            exit 1
+          fi
+          jq -e \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg commitSha "$RELEASE_SHA" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            --arg backendSha256 "$EXPECTED_BACKEND_SHA256" \
+            --arg variablesSha256 "$EXPECTED_VARIABLES_SHA256" \
+            --arg stateSerial "$EXPECTED_STATE_SERIAL" \
+            --arg stateLineage "$EXPECTED_STATE_LINEAGE" \
+            --arg planSha256 "$EXPECTED_PLAN_SHA256" \
+            --arg planTextSha256 "$expected_plan_text_sha256" \
+            --arg planObjectKey "$plan_object_key" \
+            --arg planTextObjectKey "$plan_text_object_key" \
+            --arg manifestObjectKey "$manifest_object_key" \
+            --argjson planSize "$expected_plan_size" \
+            --argjson planTextSize "$expected_plan_text_size" \
+            'keys == ["backendSha256","commitSha","environment","manifestObjectKey","planObjectKey","planSha256","planSize","planTextObjectKey","planTextSha256","planTextSize","repository","runAttempt","runId","schema","stateLineage","stateSerial","variablesSha256","version"] and .schema == "firelight.compiler-ecr-plan" and .version == 2 and .environment == $environment and .repository == $repository and .commitSha == $commitSha and .runId == $runId and .runAttempt == $runAttempt and .backendSha256 == $backendSha256 and .variablesSha256 == $variablesSha256 and .stateSerial == $stateSerial and .stateLineage == $stateLineage and .planSha256 == $planSha256 and .planTextSha256 == $planTextSha256 and .planSize == $planSize and .planTextSize == $planTextSize and .planObjectKey == $planObjectKey and .planTextObjectKey == $planTextObjectKey and .manifestObjectKey == $manifestObjectKey' \
+            "$manifest_path" > /dev/null
+          download_verified_object() {
+            local object_key="$1"
+            local destination_path="$2"
+            local object_sha256="$3"
+            local object_kind="$4"
+            local content_length="$5"
+            local head_path
+            local version_id
+            head_path="$(mktemp "$RUNNER_TEMP/firelight-ecr-object-head.XXXXXX")"
+            aws s3api head-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$head_path"
+            jq -e \
+              --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --arg sha256 "$object_sha256" \
+              --arg kind "$object_kind" \
+              --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+              --arg runId "$RELEASE_RUN_ID" \
+              --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+              --argjson contentLength "$content_length" \
+              '(.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024 and .ContentLength == $contentLength and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":$kind,"run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+              "$head_path" > /dev/null
+            version_id="$(jq -r '.VersionId' "$head_path")"
+            aws s3api get-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --version-id "$version_id" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              "$destination_path" > /dev/null
+            rm -- "$head_path"
+          }
+          download_verified_object "$plan_object_key" "$plan_path" "$EXPECTED_PLAN_SHA256" ecr-bootstrap-plan "$expected_plan_size"
+          download_verified_object "$plan_text_object_key" "$plan_text_path" "$expected_plan_text_sha256" ecr-bootstrap-plan-text "$expected_plan_text_size"
+          if [[ "$(find "$PLAN_DIRECTORY" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" != "3" || -n "$(find "$PLAN_DIRECTORY" -mindepth 1 -maxdepth 1 -type l -print -quit)" ]]; then
+            echo "The downloaded ECR saved-plan object shape is invalid." >&2
+            exit 1
+          fi
+          plan_sha256="$(sha256sum "$plan_path" | cut -d' ' -f1)"
+          plan_text_sha256="$(sha256sum "$plan_text_path" | cut -d' ' -f1)"
+          if [[ "$plan_sha256" != "$EXPECTED_PLAN_SHA256" || "$plan_text_sha256" != "$expected_plan_text_sha256" ]]; then
+            echo "The reviewed ECR saved-plan object hash changed." >&2
+            exit 1
+          fi
+          rm -- "$manifest_head"
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-ecr-apply-config.XXXXXX")"
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/bootstrap.tfvars.json"
+          python3 ../scripts/materialize_release_config.py --ecr-bootstrap \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path"
+          if [[ "$(sha256sum "$backend_path" | cut -d' ' -f1)" != "$EXPECTED_BACKEND_SHA256" || "$(sha256sum "$variables_path" | cut -d' ' -f1)" != "$EXPECTED_VARIABLES_SHA256" ]]; then
+            echo "The protected ECR bootstrap inputs changed after plan approval." >&2
+            exit 1
+          fi
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
+          state_file="$config_dir/state-before.json"
+          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt"; then
+            current_serial="$(jq -r '.serial' "$state_file")"
+            current_lineage="$(jq -r '.lineage' "$state_file")"
+          else
+            current_serial="absent"
+            current_lineage="absent"
+          fi
+          if [[ "$current_serial" != "$EXPECTED_STATE_SERIAL" || "$current_lineage" != "$EXPECTED_STATE_LINEAGE" ]]; then
+            echo "Terraform state changed after the ECR plan was approved." >&2
+            exit 1
+          fi
+          echo "plan_path=$plan_path" >> "$GITHUB_OUTPUT"
+          echo "config_dir=$config_dir" >> "$GITHUB_OUTPUT"
+      - name: Re-prove token parity immediately before the ECR bootstrap apply
+        shell: bash
+        env:
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_file="$(mktemp "$RUNNER_TEMP/firelight-ecr-apply-secret.XXXXXX")"
+          trap 'rm -f -- "$secret_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$FIRELIGHT_COMPILER_AUTH_SECRET_ARN" \
+            --version-stage AWSCURRENT \
+            --query SecretString \
+            --output json > "$secret_file"
+          SECRET_FILE="$secret_file" python3 -c 'import hmac, json, os, pathlib, sys; expected=os.environ.get("COMPILER_SERVICE_TOKEN", ""); actual=json.loads(pathlib.Path(os.environ["SECRET_FILE"]).read_text(encoding="utf-8")); actual_text=actual if isinstance(actual, str) else ""; actual_bytes=actual_text.encode(); expected_bytes=expected.encode(); actual_valid=isinstance(actual, str) and 32 <= len(actual_bytes) <= 512 and not any(c.isspace() for c in actual_text); expected_valid=32 <= len(expected_bytes) <= 512 and not any(c.isspace() for c in expected); matches=hmac.compare_digest(actual_bytes, expected_bytes); sys.exit(0 if actual_valid and expected_valid and matches else 1)'
+      - name: Apply only the exact reviewed ECR plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          APPLY_CONFIG_DIRECTORY: ${{ steps.approved-bootstrap-plan.outputs.config_dir }}
+          PLAN_PATH: ${{ steps.approved-bootstrap-plan.outputs.plan_path }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ "$PLAN_PATH" != "$RUNNER_TEMP/firelight-reviewed-ecr-plan/ecr-bootstrap.tfplan" || ! -f "$PLAN_PATH" || -L "$PLAN_PATH" || "$APPLY_CONFIG_DIRECTORY" != "$RUNNER_TEMP"/firelight-ecr-apply-config.* || ! -d "$APPLY_CONFIG_DIRECTORY" || -L "$APPLY_CONFIG_DIRECTORY" ]]; then
+            echo "The approved ECR saved plan is unavailable." >&2
+            exit 1
+          fi
+          apply_stdout_path="$APPLY_CONFIG_DIRECTORY/terraform-apply.stdout"
+          apply_stderr_path="$APPLY_CONFIG_DIRECTORY/terraform-apply.stderr"
+          : > "$apply_stdout_path"
+          : > "$apply_stderr_path"
+          chmod 600 -- "$apply_stdout_path" "$apply_stderr_path"
+          set +e
+          terraform apply -input=false -auto-approve "$PLAN_PATH" > "$apply_stdout_path" 2> "$apply_stderr_path"
+          apply_status=$?
+          set -e
+          if [[ $apply_status -ne 0 ]]; then
+            echo "The reviewed compiler ECR Terraform apply failed." >&2
+            exit "$apply_status"
+          fi
+
+          post_plan_path="$APPLY_CONFIG_DIRECTORY/ecr-post-apply.tfplan"
+          post_plan_json_path="$APPLY_CONFIG_DIRECTORY/ecr-post-apply.json"
+          post_plan_stdout_path="$APPLY_CONFIG_DIRECTORY/terraform-post-apply-plan.stdout"
+          post_plan_stderr_path="$APPLY_CONFIG_DIRECTORY/terraform-post-apply-plan.stderr"
+          : > "$post_plan_stdout_path"
+          : > "$post_plan_stderr_path"
+          chmod 600 -- "$post_plan_stdout_path" "$post_plan_stderr_path"
+          set +e
+          terraform plan -detailed-exitcode -input=false -lock-timeout=5m \
+            -var-file="$APPLY_CONFIG_DIRECTORY/bootstrap.tfvars.json" \
+            -target=aws_ecr_repository.compiler \
+            -target=aws_ecr_lifecycle_policy.compiler \
+            -out="$post_plan_path" > "$post_plan_stdout_path" 2> "$post_plan_stderr_path"
+          post_plan_status=$?
+          set -e
+          if [[ $post_plan_status -ne 0 ]]; then
+            echo "The compiler ECR bootstrap did not converge to zero drift." >&2
+            exit 1
+          fi
+          if ! terraform show -json "$post_plan_path" > "$post_plan_json_path" 2>> "$post_plan_stderr_path"; then
+            echo "The compiler ECR post-apply plan could not be inspected." >&2
+            exit 1
+          fi
+          python3 ../scripts/verify_ecr_bootstrap_plan.py --require-complete "$post_plan_json_path"
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          aws ecr describe-repositories --repository-names "$service_name" > "$APPLY_CONFIG_DIRECTORY/repository.json"
+          jq -e --arg name "$service_name" '
+            .repositories | length == 1 and
+            .[0].repositoryName == $name and
+            .[0].imageTagMutability == "IMMUTABLE" and
+            .[0].imageScanningConfiguration.scanOnPush == true and
+            .[0].encryptionConfiguration.encryptionType == "AES256"
+          ' "$APPLY_CONFIG_DIRECTORY/repository.json" > /dev/null
+          rm -rf -- "$APPLY_CONFIG_DIRECTORY" "$RUNNER_TEMP/firelight-reviewed-ecr-plan"
+
+  plan:
+    needs:
+      - verify
+      - promotion-evidence
+      - environment-isolation
+      - ecr-bootstrap-apply
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.promotion-evidence.result == 'success' &&
+      needs.environment-isolation.result == 'success' &&
+      (
+        (inputs.ecr_bootstrap_confirmation == '' && needs.ecr-bootstrap-apply.result == 'skipped') ||
+        (inputs.ecr_bootstrap_confirmation != '' && needs.ecr-bootstrap-apply.result == 'success')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: compiler-${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      backend_sha256: ${{ steps.full-plan.outputs.backend_sha256 }}
+      image_digest: ${{ steps.image.outputs.image_digest }}
+      manifest_sha256: ${{ steps.full-plan.outputs.manifest_sha256 }}
+      plan_sha256: ${{ steps.full-plan.outputs.plan_sha256 }}
+      plan_text_sha256: ${{ steps.full-plan.outputs.plan_text_sha256 }}
+      state_lineage: ${{ steps.full-plan.outputs.state_lineage }}
+      state_serial: ${{ steps.full-plan.outputs.state_serial }}
+      variables_sha256: ${{ steps.full-plan.outputs.variables_sha256 }}
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: eu-west-1
+      FIRELIGHT_COMPILER_AUTH_SECRET_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_ARN }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN }}
+      FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+      FIRELIGHT_COMPILER_VPC_CIDR: ${{ vars.FIRELIGHT_COMPILER_VPC_CIDR }}
+      FIRELIGHT_TERRAFORM_STATE_BUCKET: ${{ vars.FIRELIGHT_TERRAFORM_STATE_BUCKET }}
+      FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN: ${{ vars.FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Recheck current main and reject ambient AWS credentials
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced before the compiler plan." >&2
+            exit 1
+          fi
+          if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -n "${AWS_SECRET_ACCESS_KEY:-}" || -n "${AWS_SESSION_TOKEN:-}" || -n "${AWS_PROFILE:-}" ]]; then
+            echo "Pre-existing AWS credentials are forbidden; GitHub OIDC is required." >&2
+            exit 1
+          fi
+          case "$FIRELIGHT_COMPILER_ENVIRONMENT" in
+            staging) expected_role="FirelightCompilerStagingDeploy" ;;
+            production) expected_role="FirelightCompilerProductionDeploy" ;;
+            *) exit 1 ;;
+          esac
+          if [[ ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ || "$AWS_DEPLOY_ROLE_ARN" != "arn:aws:iam::$AWS_ACCOUNT_ID:role/$expected_role" ]]; then
+            echo "The protected AWS deploy target is invalid." >&2
+            exit 1
+          fi
+      - name: Export the exact six release fixtures
+        shell: bash
+        env:
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-lesson-sketches
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
+      - name: Re-prove the protected compiler snapshot before AWS access
+        shell: bash
+        env:
+          EXPECTED_AUTH_SECRET_SHA256: ${{ needs.environment-isolation.outputs.auth_secret_sha256 }}
+          EXPECTED_AWS_ACCOUNT_ID_SHA256: ${{ needs.environment-isolation.outputs.aws_account_id_sha256 }}
+          EXPECTED_BACKEND_LOCATION_SHA256: ${{ needs.environment-isolation.outputs.backend_location_sha256 }}
+          EXPECTED_STATE_KMS_KEY_SHA256: ${{ needs.environment-isolation.outputs.state_kms_key_sha256 }}
+          EXPECTED_VPC_CIDR_SHA256: ${{ needs.environment-isolation.outputs.vpc_cidr_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-plan-isolation.XXXXXX")"
+          trap 'rm -rf -- "$config_dir"' EXIT
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/bootstrap.tfvars.json"
+          verification_path="$config_dir/verification.txt"
+          python3 compiler-service/scripts/materialize_release_config.py --ecr-bootstrap \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path" > /dev/null
+          python3 compiler-service/scripts/verify_release_config.py --ecr-bootstrap \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --backend-config "$backend_path" \
+            --var-file "$variables_path" > "$verification_path"
+          for binding in \
+            "aws_account_id_sha256:$EXPECTED_AWS_ACCOUNT_ID_SHA256" \
+            "backend_location_sha256:$EXPECTED_BACKEND_LOCATION_SHA256" \
+            "state_kms_key_sha256:$EXPECTED_STATE_KMS_KEY_SHA256" \
+            "auth_secret_sha256:$EXPECTED_AUTH_SECRET_SHA256" \
+            "vpc_cidr_sha256:$EXPECTED_VPC_CIDR_SHA256"; do
+            name="${binding%%:*}"
+            expected="${binding#*:}"
+            current="$(awk -F= -v field="$name" '$1 == field {print $2}' "$verification_path")"
+            if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$current" != "$expected" ]]; then
+              echo "The protected compiler isolation snapshot changed before AWS access." >&2
+              exit 1
+            fi
+          done
+      - name: Assume the environment deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true
+          role-session-name: firelight-${{ inputs.environment }}-${{ github.run_id }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          unset-current-credentials: true
+      - name: Prove the exact assumed role before any AWS write
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          identity_file="$RUNNER_TEMP/firelight-aws-identity.json"
+          aws sts get-caller-identity > "$identity_file"
+          python3 compiler-service/scripts/verify_aws_identity.py "$identity_file" \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --expected-account-id "$AWS_ACCOUNT_ID"
+          rm -- "$identity_file"
+      - name: Prove the canonical ECR repository is already bound to this Terraform state
+        shell: bash
+        working-directory: compiler-service/terraform
+        run: |
+          set -euo pipefail
+          umask 077
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-ecr-state-proof.XXXXXX")"
+          trap 'rm -rf -- "$config_dir"' EXIT
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/bootstrap.tfvars.json"
+          python3 ../scripts/materialize_release_config.py --ecr-bootstrap \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path"
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
+          terraform state show -no-color terraform_data.operator_gate > "$config_dir/operator-gate-state.txt"
+          terraform state show -no-color aws_ecr_repository.compiler > "$config_dir/repository-state.txt"
+          terraform state show -no-color aws_ecr_lifecycle_policy.compiler > "$config_dir/lifecycle-state.txt"
+          state_list="$config_dir/state-list.txt"
+          terraform state list > "$state_list"
+          if [[ "$(grep -Fx 'terraform_data.operator_gate' "$state_list" | wc -l | tr -d ' ')" != "1" || "$(grep -Fx 'aws_ecr_repository.compiler' "$state_list" | wc -l | tr -d ' ')" != "1" || "$(grep -Fx 'aws_ecr_lifecycle_policy.compiler' "$state_list" | wc -l | tr -d ' ')" != "1" ]]; then
+            echo "The canonical ECR resources are not uniquely bound to this Terraform state." >&2
+            exit 1
+          fi
+      - name: Resolve the immutable canonical compiler image before any build
+        id: canonical-image
+        shell: bash
+        env:
+          ACCEPTED_STAGING_IMAGE_DIGEST: ${{ needs.promotion-evidence.outputs.staging_compiler_image_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          existing_file="$RUNNER_TEMP/firelight-prebuild-existing-image.json"
+          existing_error="$RUNNER_TEMP/firelight-prebuild-existing-image.error"
+          trap 'rm -f -- "$existing_file" "$existing_error"' EXIT
+          set +e
+          aws ecr describe-images \
+            --repository-name "$service_name" \
+            --image-ids "imageTag=$RELEASE_SHA" \
+            > "$existing_file" 2> "$existing_error"
+          existing_status=$?
+          set -e
+          if [[ $existing_status -eq 0 ]]; then
+            existing_digest="$(jq -r '.imageDetails[0].imageDigest' "$existing_file")"
+            if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || ! jq -e \
+              --arg digest "$existing_digest" \
+              --arg sha "$RELEASE_SHA" \
+              '.imageDetails | length == 1 and .[0].imageDigest == $digest and ((.[0].imageTags // []) | index($sha)) != null' \
+              "$existing_file" > /dev/null; then
+              echo "The immutable canonical ECR image is invalid." >&2
+              exit 1
+            fi
+            if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" && "$existing_digest" != "$ACCEPTED_STAGING_IMAGE_DIGEST" ]]; then
+              echo "The existing production commit tag does not match accepted staging." >&2
+              exit 1
+            fi
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$existing_digest" >> "$GITHUB_OUTPUT"
+          elif grep -q 'ImageNotFoundException' "$existing_error"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The canonical ECR commit tag could not be inspected before the build." >&2
+            exit 1
+          fi
+      - name: Build and test a missing staging linux/amd64 compiler image
+        if: inputs.environment == 'staging' && steps.canonical-image.outputs.exists == 'false'
+        shell: bash
+        env:
+          IMAGE_TAG: firelight-compiler:${{ github.sha }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-lesson-sketches
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --tag "$IMAGE_TAG" compiler-service
+          if [[ "$(docker image inspect "$IMAGE_TAG" --format '{{.Os}}/{{.Architecture}}')" != "linux/amd64" ]]; then
+            echo "The compiler image architecture is not linux/amd64." >&2
+            exit 1
+          fi
+          docker run --rm \
+            --platform linux/amd64 \
+            --network none \
+            --user 1000:1000 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 2g \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=536870912,mode=1777 \
+            --mount "type=bind,src=${LESSON_FIXTURES},dst=/fixtures,readonly" \
+            --entrypoint /var/lang/bin/python3 \
+            "$IMAGE_TAG" \
+            /var/task/verify_lesson_sketches.py --root /fixtures
+      - name: Prove token parity before any compiler ECR write
+        shell: bash
+        env:
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_file="$(mktemp "$RUNNER_TEMP/firelight-pre-ecr-secret.XXXXXX")"
+          trap 'rm -f -- "$secret_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$FIRELIGHT_COMPILER_AUTH_SECRET_ARN" \
+            --version-stage AWSCURRENT \
+            --query SecretString \
+            --output json > "$secret_file"
+          SECRET_FILE="$secret_file" python3 -c 'import hmac, json, os, pathlib, sys; expected=os.environ.get("COMPILER_SERVICE_TOKEN", ""); actual=json.loads(pathlib.Path(os.environ["SECRET_FILE"]).read_text(encoding="utf-8")); actual_text=actual if isinstance(actual, str) else ""; actual_bytes=actual_text.encode(); expected_bytes=expected.encode(); actual_valid=isinstance(actual, str) and 32 <= len(actual_bytes) <= 512 and not any(c.isspace() for c in actual_text); expected_valid=32 <= len(expected_bytes) <= 512 and not any(c.isspace() for c in expected); matches=hmac.compare_digest(actual_bytes, expected_bytes); sys.exit(0 if actual_valid and expected_valid and matches else 1)'
+      - name: Reuse or promote, test, scan, and bind the exact registry digest
+        id: image
+        shell: bash
+        env:
+          ACCEPTED_STAGING_IMAGE_DIGEST: ${{ needs.promotion-evidence.outputs.staging_compiler_image_digest }}
+          EXPECTED_CANONICAL_DIGEST: ${{ steps.canonical-image.outputs.digest }}
+          EXPECTED_CANONICAL_EXISTS: ${{ steps.canonical-image.outputs.exists }}
+          IMAGE_TAG: firelight-compiler:${{ github.sha }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-lesson-sketches
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          repository_file="$RUNNER_TEMP/firelight-ecr-repository.json"
+          source_file="$RUNNER_TEMP/firelight-staging-source-image.json"
+          candidate_file="$RUNNER_TEMP/firelight-candidate-image.json"
+          candidate_error="$RUNNER_TEMP/firelight-candidate-image.error"
+          existing_file="$RUNNER_TEMP/firelight-existing-image.json"
+          existing_error="$RUNNER_TEMP/firelight-existing-image.error"
+          image_file="$RUNNER_TEMP/firelight-registry-image.json"
+          scan_file="$RUNNER_TEMP/firelight-ecr-scan.json"
+          scan_start_file="$RUNNER_TEMP/firelight-ecr-scan-start.json"
+          scan_start_error="$RUNNER_TEMP/firelight-ecr-scan-start.error"
+          manifest_response="$RUNNER_TEMP/firelight-candidate-manifest-response.json"
+          manifest_file="$RUNNER_TEMP/firelight-candidate-manifest.json"
+          put_image_file="$RUNNER_TEMP/firelight-put-image.json"
+          put_image_error="$RUNNER_TEMP/firelight-put-image.error"
+          skopeo_auth_dir=""
+          cleanup() {
+            rm -f -- \
+              "$repository_file" "$source_file" \
+              "$candidate_file" "$candidate_error" \
+              "$existing_file" "$existing_error" \
+              "$image_file" "$scan_file" \
+              "$scan_start_file" "$scan_start_error" \
+              "$manifest_response" "$manifest_file" \
+              "$put_image_file" "$put_image_error"
+            if [[ -n "$skopeo_auth_dir" && "$skopeo_auth_dir" == "$RUNNER_TEMP"/firelight-skopeo-auth.* && -d "$skopeo_auth_dir" && ! -L "$skopeo_auth_dir" ]]; then
+              rm -rf -- "$skopeo_auth_dir"
+            fi
+          }
+          trap cleanup EXIT
+          aws ecr describe-repositories --repository-names "$service_name" > "$repository_file"
+          repository_url="$(jq -r '.repositories[0].repositoryUri' "$repository_file")"
+          expected_url="$AWS_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/$service_name"
+          if [[ "$repository_url" != "$expected_url" ]]; then
+            echo "The ECR repository does not match the protected release target." >&2
+            exit 1
+          fi
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" && ! "$ACCEPTED_STAGING_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Production does not have a verified accepted staging image digest." >&2
+            exit 1
+          fi
+          case "$EXPECTED_CANONICAL_EXISTS" in
+            true)
+              if [[ ! "$EXPECTED_CANONICAL_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "The pre-build canonical compiler digest is invalid." >&2
+                exit 1
+              fi
+              ;;
+            false)
+              if [[ -n "$EXPECTED_CANONICAL_DIGEST" ]]; then
+                echo "The pre-build canonical compiler result is inconsistent." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "The pre-build canonical compiler result is missing." >&2
+              exit 1
+              ;;
+          esac
+          registry_host="${repository_url%%/*}"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry_host" > /dev/null
+          promotion_image=""
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then
+            staging_repository_url="$AWS_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/firelight-compiler-stg"
+            aws ecr describe-images \
+              --registry-id "$AWS_ACCOUNT_ID" \
+              --repository-name firelight-compiler-stg \
+              --image-ids "imageDigest=$ACCEPTED_STAGING_IMAGE_DIGEST" > "$source_file"
+            if ! jq -e --arg digest "$ACCEPTED_STAGING_IMAGE_DIGEST" --arg sha "$RELEASE_SHA" \
+              '.imageDetails | length == 1 and .[0].imageDigest == $digest and ((.[0].imageTags // []) | index($sha)) != null' \
+              "$source_file" > /dev/null; then
+              echo "The accepted staging digest is not bound to the canonical staging commit tag." >&2
+              exit 1
+            fi
+            promotion_image="$staging_repository_url@$ACCEPTED_STAGING_IMAGE_DIGEST"
+          fi
+
+          set +e
+          aws ecr describe-images \
+            --repository-name "$service_name" \
+            --image-ids "imageTag=$RELEASE_SHA" \
+            > "$existing_file" 2> "$existing_error"
+          existing_status=$?
+          set -e
+          reuse_existing=false
+          if [[ $existing_status -eq 0 ]]; then
+            existing_digest="$(jq -r '.imageDetails[0].imageDigest' "$existing_file")"
+            if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || ! jq -e \
+              --arg digest "$existing_digest" \
+              --arg sha "$RELEASE_SHA" \
+              '.imageDetails | length == 1 and .[0].imageDigest == $digest and ((.[0].imageTags // []) | index($sha)) != null' \
+              "$existing_file" > /dev/null; then
+              echo "The existing immutable commit tag is invalid." >&2
+              exit 1
+            fi
+            if [[ "$EXPECTED_CANONICAL_EXISTS" == "true" && "$existing_digest" != "$EXPECTED_CANONICAL_DIGEST" ]]; then
+              echo "The immutable canonical digest changed after the pre-build check." >&2
+              exit 1
+            fi
+            if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" && "$existing_digest" != "$ACCEPTED_STAGING_IMAGE_DIGEST" ]]; then
+              echo "The existing production commit tag does not match accepted staging." >&2
+              exit 1
+            fi
+            candidate_digest="$existing_digest"
+            reuse_existing=true
+          elif grep -q 'ImageNotFoundException' "$existing_error"; then
+            if [[ "$EXPECTED_CANONICAL_EXISTS" == "true" ]]; then
+              echo "The immutable canonical image disappeared after the pre-build check." >&2
+              exit 1
+            fi
+            candidate_tag="candidate-$RELEASE_SHA-$RELEASE_RUN_ID-$RELEASE_RUN_ATTEMPT"
+            set +e
+            aws ecr describe-images \
+              --repository-name "$service_name" \
+              --image-ids "imageTag=$candidate_tag" \
+              > "$candidate_file" 2> "$candidate_error"
+            candidate_status=$?
+            set -e
+            if [[ $candidate_status -ne 0 ]]; then
+              if ! grep -q 'ImageNotFoundException' "$candidate_error"; then
+                echo "The immutable ECR candidate tag could not be inspected." >&2
+                exit 1
+              fi
+              if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then
+                # Docker may rewrite a pulled manifest. Skopeo must preserve the
+                # accepted registry digest byte-for-byte or fail the release.
+                if ! command -v skopeo > /dev/null; then
+                  echo "The exact image-copy tool is unavailable." >&2
+                  exit 1
+                fi
+                skopeo_help="$(skopeo copy --help)"
+                if [[ "$skopeo_help" != *"--preserve-digests"* ]]; then
+                  echo "The image-copy tool cannot preserve registry digests." >&2
+                  exit 1
+                fi
+                skopeo_auth_dir="$(mktemp -d "$RUNNER_TEMP/firelight-skopeo-auth.XXXXXX")"
+                skopeo_auth_file="$skopeo_auth_dir/auth.json"
+                aws ecr get-login-password | skopeo login \
+                  --authfile "$skopeo_auth_file" \
+                  --username AWS \
+                  --password-stdin \
+                  "$registry_host" > /dev/null
+                skopeo copy \
+                  --authfile "$skopeo_auth_file" \
+                  --preserve-digests \
+                  "docker://$promotion_image" \
+                  "docker://$repository_url:$candidate_tag" > /dev/null
+              else
+                promotion_image_id="$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')"
+                if [[ ! "$promotion_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                  echo "The tested staging compiler image ID is invalid." >&2
+                  exit 1
+                fi
+                docker tag "$IMAGE_TAG" "$repository_url:$candidate_tag"
+                docker push "$repository_url:$candidate_tag" > /dev/null
+              fi
+              aws ecr describe-images \
+                --repository-name "$service_name" \
+                --image-ids "imageTag=$candidate_tag" \
+                > "$candidate_file"
+            fi
+            candidate_digest="$(jq -r '.imageDetails[0].imageDigest' "$candidate_file")"
+            if [[ ! "$candidate_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || ! jq -e \
+              --arg digest "$candidate_digest" \
+              --arg tag "$candidate_tag" \
+              '.imageDetails | length == 1 and .[0].imageDigest == $digest and ((.[0].imageTags // []) | index($tag)) != null' \
+              "$candidate_file" > /dev/null; then
+              echo "ECR did not report one immutable candidate digest." >&2
+              exit 1
+            fi
+            if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" && "$candidate_digest" != "$ACCEPTED_STAGING_IMAGE_DIGEST" ]]; then
+              echo "The production candidate digest does not match accepted staging; the immutable commit tag remains unused." >&2
+              exit 1
+            fi
+          else
+            echo "The canonical ECR commit tag could not be inspected." >&2
+            exit 1
+          fi
+
+          registry_image="$repository_url@$candidate_digest"
+          docker pull --platform linux/amd64 "$registry_image" > /dev/null
+          registry_image_id="$(docker image inspect "$registry_image" --format '{{.Id}}')"
+          registry_platform="$(docker image inspect "$registry_image" --format '{{.Os}}/{{.Architecture}}')"
+          if [[ ! "$registry_image_id" =~ ^sha256:[0-9a-f]{64}$ || "$registry_platform" != "linux/amd64" ]]; then
+            echo "The registry compiler image is not a valid linux/amd64 image." >&2
+            exit 1
+          fi
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "staging" && "$reuse_existing" != "true" ]]; then
+            promotion_image_id="$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')"
+          else
+            promotion_image_id="$registry_image_id"
+          fi
+          if [[ "$registry_image_id" != "$promotion_image_id" ]]; then
+            echo "The registry candidate is not the exact tested promotion image." >&2
+            exit 1
+          fi
+          docker run --rm \
+            --platform linux/amd64 \
+            --network none \
+            --user 1000:1000 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 2g \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=536870912,mode=1777 \
+            --mount "type=bind,src=${LESSON_FIXTURES},dst=/fixtures,readonly" \
+            --entrypoint /var/lang/bin/python3 \
+            "$registry_image" \
+            /var/task/verify_lesson_sketches.py --root /fixtures
+          if [[ "$reuse_existing" == "true" ]]; then
+            set +e
+            aws ecr start-image-scan \
+              --repository-name "$service_name" \
+              --image-id "imageDigest=$candidate_digest" \
+              > "$scan_start_file" 2> "$scan_start_error"
+            scan_start_status=$?
+            set -e
+            if [[ $scan_start_status -ne 0 ]] && ! grep -q 'LimitExceededException' "$scan_start_error"; then
+              echo "The reused immutable image could not start a fresh ECR scan." >&2
+              exit 1
+            fi
+          fi
+          aws ecr wait image-scan-complete --repository-name "$service_name" --image-id "imageDigest=$candidate_digest"
+          aws ecr describe-image-scan-findings --repository-name "$service_name" --image-id "imageDigest=$candidate_digest" > "$scan_file"
+          scan_status="$(jq -r '.imageScanStatus.status' "$scan_file")"
+          high="$(jq -r '.imageScanFindings.findingSeverityCounts.HIGH // 0' "$scan_file")"
+          critical="$(jq -r '.imageScanFindings.findingSeverityCounts.CRITICAL // 0' "$scan_file")"
+          if [[ "$scan_status" != "COMPLETE" || ! "$high" =~ ^[0-9]+$ || ! "$critical" =~ ^[0-9]+$ || "$high" != "0" || "$critical" != "0" ]]; then
+            echo "The exact ECR image scan did not clear the HIGH/CRITICAL release gate." >&2
+            exit 1
+          fi
+
+          if [[ "$reuse_existing" != "true" ]]; then
+            # Retag the exact tested manifest. A second Docker push could
+            # reserialize it and produce a different registry digest.
+            aws ecr batch-get-image \
+              --repository-name "$service_name" \
+              --image-ids "imageDigest=$candidate_digest" \
+              --accepted-media-types \
+                application/vnd.docker.distribution.manifest.v2+json \
+                application/vnd.oci.image.manifest.v1+json \
+              > "$manifest_response"
+            if ! jq -e --arg digest "$candidate_digest" \
+              '.failures == [] and (.images | length) == 1 and .images[0].imageId.imageDigest == $digest and (.images[0].imageManifest | type) == "string"' \
+              "$manifest_response" > /dev/null; then
+              echo "ECR did not return the exact tested candidate manifest." >&2
+              exit 1
+            fi
+            manifest_media_type="$(jq -r '.images[0].imageManifestMediaType' "$manifest_response")"
+            case "$manifest_media_type" in
+              application/vnd.docker.distribution.manifest.v2+json|application/vnd.oci.image.manifest.v1+json) ;;
+              *)
+                echo "The tested candidate manifest media type is unsupported." >&2
+                exit 1
+                ;;
+            esac
+            jq -j '.images[0].imageManifest' "$manifest_response" > "$manifest_file"
+            if [[ ! -s "$manifest_file" ]] || ! jq -e 'type == "object"' "$manifest_file" > /dev/null; then
+              echo "The tested candidate manifest is invalid." >&2
+              exit 1
+            fi
+            manifest_digest="sha256:$(sha256sum "$manifest_file" | cut -d' ' -f1)"
+            if [[ "$manifest_digest" != "$candidate_digest" ]]; then
+              echo "The retrieved candidate manifest bytes do not match the tested digest." >&2
+              exit 1
+            fi
+            set +e
+            aws ecr put-image \
+              --repository-name "$service_name" \
+              --image-manifest "file://$manifest_file" \
+              --image-manifest-media-type "$manifest_media_type" \
+              --image-digest "$candidate_digest" \
+              --image-tag "$RELEASE_SHA" \
+              > "$put_image_file" 2> "$put_image_error"
+            put_image_status=$?
+            set -e
+            if [[ $put_image_status -eq 0 ]]; then
+              if ! jq -e --arg digest "$candidate_digest" --arg sha "$RELEASE_SHA" \
+                '.image.imageId.imageDigest == $digest and .image.imageId.imageTag == $sha' \
+                "$put_image_file" > /dev/null; then
+                echo "ECR did not bind the canonical tag to the exact candidate manifest." >&2
+                exit 1
+              fi
+            elif ! grep -Eq 'ImageAlreadyExistsException|ImageTagAlreadyExistsException' "$put_image_error"; then
+              echo "The exact candidate manifest could not receive the canonical tag." >&2
+              exit 1
+            fi
+          fi
+
+          aws ecr describe-images --repository-name "$service_name" --image-ids "imageTag=$RELEASE_SHA" > "$image_file"
+          image_digest="$(jq -r '.imageDetails[0].imageDigest' "$image_file")"
+          if [[ ! "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ECR did not report one immutable sha256 image digest." >&2
+            exit 1
+          fi
+          if [[ "$image_digest" != "$candidate_digest" || ( "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" && "$image_digest" != "$ACCEPTED_STAGING_IMAGE_DIGEST" ) ]]; then
+            echo "The canonical ECR commit tag does not match the tested promotion digest." >&2
+            exit 1
+          fi
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
+      - name: Materialize, validate, and save the complete Terraform plan
+        id: full-plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          EXPECTED_AUTH_SECRET_SHA256: ${{ needs.environment-isolation.outputs.auth_secret_sha256 }}
+          EXPECTED_AWS_ACCOUNT_ID_SHA256: ${{ needs.environment-isolation.outputs.aws_account_id_sha256 }}
+          EXPECTED_BACKEND_LOCATION_SHA256: ${{ needs.environment-isolation.outputs.backend_location_sha256 }}
+          EXPECTED_STATE_KMS_KEY_SHA256: ${{ needs.environment-isolation.outputs.state_kms_key_sha256 }}
+          EXPECTED_VPC_CIDR_SHA256: ${{ needs.environment-isolation.outputs.vpc_cidr_sha256 }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          HANDOFF_PREFIX: firelight/compiler/${{ inputs.environment }}/saved-plans/${{ github.run_id }}/${{ github.run_attempt }}/full
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-plan-config.XXXXXX")"
+          handoff_dir="$(mktemp -d "$RUNNER_TEMP/firelight-full-plan.XXXXXX")"
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/release.tfvars.json"
+          verification_path="$config_dir/verification.txt"
+          plan_path="$handoff_dir/compiler.tfplan"
+          plan_stdout_path="$config_dir/terraform-plan.stdout"
+          plan_stderr_path="$config_dir/terraform-plan.stderr"
+          : > "$plan_stdout_path"
+          : > "$plan_stderr_path"
+          chmod 600 -- "$plan_stdout_path" "$plan_stderr_path"
+          python3 ../scripts/materialize_release_config.py \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path"
+          python3 ../scripts/verify_release_config.py \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --backend-config "$backend_path" \
+            --var-file "$variables_path" > "$verification_path"
+          for binding in \
+            "aws_account_id_sha256:$EXPECTED_AWS_ACCOUNT_ID_SHA256" \
+            "backend_location_sha256:$EXPECTED_BACKEND_LOCATION_SHA256" \
+            "state_kms_key_sha256:$EXPECTED_STATE_KMS_KEY_SHA256" \
+            "auth_secret_sha256:$EXPECTED_AUTH_SECRET_SHA256" \
+            "vpc_cidr_sha256:$EXPECTED_VPC_CIDR_SHA256"; do
+            name="${binding%%:*}"
+            expected="${binding#*:}"
+            current="$(awk -F= -v field="$name" '$1 == field {print $2}' "$verification_path")"
+            if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$current" != "$expected" ]]; then
+              echo "The protected compiler isolation snapshot changed before the complete plan." >&2
+              exit 1
+            fi
+          done
+          backend_sha256="$(awk -F= '$1 == "backend_config_sha256" {print $2}' "$verification_path")"
+          variables_sha256="$(awk -F= '$1 == "variable_file_sha256" {print $2}' "$verification_path")"
+          if [[ ! "$backend_sha256" =~ ^[0-9a-f]{64}$ || ! "$variables_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "The compiler release input fingerprints are invalid." >&2
+            exit 1
+          fi
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
+          state_path="$config_dir/state-before.json"
+          terraform state pull > "$state_path"
+          state_serial="$(jq -r '.serial' "$state_path")"
+          state_lineage="$(jq -r '.lineage' "$state_path")"
+          if [[ ! "$state_serial" =~ ^[0-9]+$ || ! "$state_lineage" =~ ^[0-9a-f-]{36}$ ]]; then
+            echo "The Terraform state identity is invalid." >&2
+            exit 1
+          fi
+          set +e
+          terraform plan -detailed-exitcode -input=false -lock-timeout=5m -var-file="$variables_path" -out="$plan_path" > "$plan_stdout_path" 2> "$plan_stderr_path"
+          plan_status=$?
+          set -e
+          if [[ $plan_status -ne 0 && $plan_status -ne 2 ]]; then
+            echo "The complete compiler Terraform plan failed." >&2
+            exit "$plan_status"
+          fi
+          if ! terraform show -no-color "$plan_path" > "$handoff_dir/plan.txt" 2>> "$plan_stderr_path"; then
+            echo "The complete compiler Terraform plan could not be rendered." >&2
+            exit 1
+          fi
+          plan_sha256="$(sha256sum "$plan_path" | cut -d' ' -f1)"
+          plan_text_sha256="$(sha256sum "$handoff_dir/plan.txt" | cut -d' ' -f1)"
+          plan_size="$(stat -c '%s' "$plan_path")"
+          plan_text_size="$(stat -c '%s' "$handoff_dir/plan.txt")"
+          expected_prefix="firelight/compiler/$FIRELIGHT_COMPILER_ENVIRONMENT/saved-plans/$RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT/full"
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ || ! "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,9}$ || "$HANDOFF_PREFIX" != "$expected_prefix" ]]; then
+            echo "The complete saved-plan handoff key is invalid." >&2
+            exit 1
+          fi
+          plan_object_key="$HANDOFF_PREFIX/plan.tfplan"
+          plan_text_object_key="$HANDOFF_PREFIX/plan.txt"
+          manifest_object_key="$HANDOFF_PREFIX/manifest.json"
+          jq -n \
+            --arg schema "firelight.compiler-plan" \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg commitSha "$RELEASE_SHA" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            --arg imageDigest "$FIRELIGHT_COMPILER_IMAGE_DIGEST" \
+            --arg backendSha256 "$backend_sha256" \
+            --arg variablesSha256 "$variables_sha256" \
+            --arg stateSerial "$state_serial" \
+            --arg stateLineage "$state_lineage" \
+            --arg planSha256 "$plan_sha256" \
+            --arg planTextSha256 "$plan_text_sha256" \
+            --arg planObjectKey "$plan_object_key" \
+            --arg planTextObjectKey "$plan_text_object_key" \
+            --arg manifestObjectKey "$manifest_object_key" \
+            --argjson planSize "$plan_size" \
+            --argjson planTextSize "$plan_text_size" \
+            '{schema:$schema,version:2,environment:$environment,repository:$repository,commitSha:$commitSha,runId:$runId,runAttempt:$runAttempt,imageDigest:$imageDigest,backendSha256:$backendSha256,variablesSha256:$variablesSha256,stateSerial:$stateSerial,stateLineage:$stateLineage,planSha256:$planSha256,planTextSha256:$planTextSha256,planSize:$planSize,planTextSize:$planTextSize,planObjectKey:$planObjectKey,planTextObjectKey:$planTextObjectKey,manifestObjectKey:$manifestObjectKey,ecrScan:{high:0,critical:0}}' \
+            > "$handoff_dir/manifest.json"
+          manifest_sha256="$(sha256sum "$handoff_dir/manifest.json" | cut -d' ' -f1)"
+          put_immutable_object() {
+            local source_path="$1"
+            local object_key="$2"
+            local object_sha256="$3"
+            local object_kind="$4"
+            local content_type="$5"
+            local content_length
+            local head_path
+            local put_response_path
+            local version_id
+            content_length="$(stat -c '%s' "$source_path")"
+            head_path="$config_dir/head-$object_kind.json"
+            put_response_path="$config_dir/put-$object_kind.json"
+            aws s3api put-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --body "$source_path" \
+              --content-type "$content_type" \
+              --server-side-encryption aws:kms \
+              --ssekms-key-id "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --metadata "sha256=$object_sha256,kind=$object_kind,environment=$FIRELIGHT_COMPILER_ENVIRONMENT,run-id=$RELEASE_RUN_ID,run-attempt=$RELEASE_RUN_ATTEMPT" \
+              --if-none-match '*' \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$put_response_path"
+            version_id="$(jq -r 'select((.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024) | .VersionId' "$put_response_path")"
+            if [[ -z "$version_id" ]]; then
+              echo "The protected state bucket did not return an immutable object version." >&2
+              exit 1
+            fi
+            aws s3api head-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --version-id "$version_id" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$head_path"
+            jq -e \
+              --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --arg sha256 "$object_sha256" \
+              --arg kind "$object_kind" \
+              --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+              --arg runId "$RELEASE_RUN_ID" \
+              --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+              --arg versionId "$version_id" \
+              --argjson contentLength "$content_length" \
+              '.VersionId == $versionId and .ContentLength == $contentLength and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":$kind,"run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+              "$head_path" > /dev/null
+          }
+          put_immutable_object "$plan_path" "$plan_object_key" "$plan_sha256" full-plan application/octet-stream
+          put_immutable_object "$handoff_dir/plan.txt" "$plan_text_object_key" "$plan_text_sha256" full-plan-text text/plain
+          put_immutable_object "$handoff_dir/manifest.json" "$manifest_object_key" "$manifest_sha256" full-plan-manifest application/json
+          {
+            echo "backend_sha256=$backend_sha256"
+            echo "manifest_sha256=$manifest_sha256"
+            echo "plan_sha256=$plan_sha256"
+            echo "plan_text_sha256=$plan_text_sha256"
+            echo "state_lineage=$state_lineage"
+            echo "state_serial=$state_serial"
+            echo "variables_sha256=$variables_sha256"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Complete compiler plan awaiting independent apply approval"
+            echo
+            echo "Environment: \`$FIRELIGHT_COMPILER_ENVIRONMENT\`"
+            echo "Commit: \`$RELEASE_SHA\`"
+            echo "Image digest: \`$FIRELIGHT_COMPILER_IMAGE_DIGEST\`"
+            echo "Plan SHA-256: \`$plan_sha256\`"
+            echo "State serial: \`$state_serial\`"
+            echo
+            echo "Review the immutable, SSE-KMS plan text through the protected state-bucket read path before approving apply."
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -rf -- "$config_dir" "$handoff_dir"
+      - name: Remove the temporary ECR login
+        if: always()
+        shell: bash
+        run: docker logout "$AWS_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com" >/dev/null 2>&1 || true
+
+  apply:
+    needs:
+      - verify
+      - plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment:
+      name: compiler-${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: eu-west-1
+      FIRELIGHT_COMPILER_AUTH_SECRET_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_ARN }}
+      FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN: ${{ vars.FIRELIGHT_COMPILER_AUTH_SECRET_KMS_KEY_ARN }}
+      FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+      FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ needs.plan.outputs.image_digest }}
+      FIRELIGHT_COMPILER_VPC_CIDR: ${{ vars.FIRELIGHT_COMPILER_VPC_CIDR }}
+      FIRELIGHT_TERRAFORM_STATE_BUCKET: ${{ vars.FIRELIGHT_TERRAFORM_STATE_BUCKET }}
+      FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN: ${{ vars.FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Recheck current main and the protected AWS target
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced after the compiler plan was approved." >&2
+            exit 1
+          fi
+          if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -n "${AWS_SECRET_ACCESS_KEY:-}" || -n "${AWS_SESSION_TOKEN:-}" || -n "${AWS_PROFILE:-}" ]]; then
+            echo "Pre-existing AWS credentials are forbidden; GitHub OIDC is required." >&2
+            exit 1
+          fi
+          case "$FIRELIGHT_COMPILER_ENVIRONMENT" in
+            staging) expected_role="FirelightCompilerStagingDeploy" ;;
+            production) expected_role="FirelightCompilerProductionDeploy" ;;
+            *) exit 1 ;;
+          esac
+          if [[ ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ || "$AWS_DEPLOY_ROLE_ARN" != "arn:aws:iam::$AWS_ACCOUNT_ID:role/$expected_role" ]]; then
+            echo "The protected AWS deploy target is invalid." >&2
+            exit 1
+          fi
+      - name: Install dependencies and export release fixtures before credential access
+        shell: bash
+        env:
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-deployment-probe-sketches
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
+      - name: Assume the environment deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-region: eu-west-1
+          mask-aws-account-id: true
+          role-session-name: firelight-${{ inputs.environment }}-${{ github.run_id }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          unset-current-credentials: true
+      - name: Re-prove the exact assumed role before Terraform init
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          identity_file="$RUNNER_TEMP/firelight-aws-identity.json"
+          aws sts get-caller-identity > "$identity_file"
+          python3 compiler-service/scripts/verify_aws_identity.py "$identity_file" \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --expected-account-id "$AWS_ACCOUNT_ID"
+          rm -- "$identity_file"
+      - name: Download and recheck commit, digest, inputs, state, and exact saved plan
+        id: approved-plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          EXPECTED_BACKEND_SHA256: ${{ needs.plan.outputs.backend_sha256 }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.plan.outputs.manifest_sha256 }}
+          EXPECTED_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+          EXPECTED_PLAN_TEXT_SHA256: ${{ needs.plan.outputs.plan_text_sha256 }}
+          EXPECTED_STATE_LINEAGE: ${{ needs.plan.outputs.state_lineage }}
+          EXPECTED_STATE_SERIAL: ${{ needs.plan.outputs.state_serial }}
+          EXPECTED_VARIABLES_SHA256: ${{ needs.plan.outputs.variables_sha256 }}
+          HANDOFF_PREFIX: firelight/compiler/${{ inputs.environment }}/saved-plans/${{ github.run_id }}/${{ github.run_attempt }}/full
+          PLAN_DIRECTORY: ${{ runner.temp }}/firelight-reviewed-plan
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ ! "$FIRELIGHT_COMPILER_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The approved image digest is invalid." >&2
+            exit 1
+          fi
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          image_file="$RUNNER_TEMP/firelight-approved-image.json"
+          aws ecr describe-images --repository-name "$service_name" --image-ids "imageTag=$RELEASE_SHA" > "$image_file"
+          current_digest="$(jq -r '.imageDetails[0].imageDigest' "$image_file")"
+          if [[ "$current_digest" != "$FIRELIGHT_COMPILER_IMAGE_DIGEST" ]]; then
+            echo "The commit tag no longer resolves to the approved registry digest." >&2
+            exit 1
+          fi
+          aws ecr wait image-scan-complete --repository-name "$service_name" --image-id "imageDigest=$current_digest"
+          scan_file="$RUNNER_TEMP/firelight-approved-scan.json"
+          aws ecr describe-image-scan-findings --repository-name "$service_name" --image-id "imageDigest=$current_digest" > "$scan_file"
+          if ! jq -e '.imageScanStatus.status == "COMPLETE" and (.imageScanFindings.findingSeverityCounts.HIGH // 0) == 0 and (.imageScanFindings.findingSeverityCounts.CRITICAL // 0) == 0' "$scan_file" > /dev/null; then
+            echo "The approved image no longer clears the HIGH/CRITICAL scan gate." >&2
+            exit 1
+          fi
+          expected_prefix="firelight/compiler/$FIRELIGHT_COMPILER_ENVIRONMENT/saved-plans/$RELEASE_RUN_ID/$RELEASE_RUN_ATTEMPT/full"
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ || ! "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,9}$ || "$HANDOFF_PREFIX" != "$expected_prefix" || -e "$PLAN_DIRECTORY" || -L "$PLAN_DIRECTORY" ]]; then
+            echo "The complete saved-plan handoff location is invalid." >&2
+            exit 1
+          fi
+          mkdir -m 700 -- "$PLAN_DIRECTORY"
+          plan_path="$PLAN_DIRECTORY/compiler.tfplan"
+          plan_text_path="$PLAN_DIRECTORY/plan.txt"
+          manifest_path="$PLAN_DIRECTORY/manifest.json"
+          plan_object_key="$HANDOFF_PREFIX/plan.tfplan"
+          plan_text_object_key="$HANDOFF_PREFIX/plan.txt"
+          manifest_object_key="$HANDOFF_PREFIX/manifest.json"
+          manifest_head="$(mktemp "$RUNNER_TEMP/firelight-plan-manifest-head.XXXXXX")"
+          aws s3api head-object \
+            --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+            --key "$manifest_object_key" \
+            --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+            > "$manifest_head"
+          jq -e \
+            --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+            --arg sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            '(.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024 and .ContentLength > 0 and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":"full-plan-manifest","run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+            "$manifest_head" > /dev/null
+          manifest_version_id="$(jq -r '.VersionId' "$manifest_head")"
+          aws s3api get-object \
+            --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+            --key "$manifest_object_key" \
+            --version-id "$manifest_version_id" \
+            --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+            "$manifest_path" > /dev/null
+          manifest_sha256="$(sha256sum "$manifest_path" | cut -d' ' -f1)"
+          if [[ "$manifest_sha256" != "$EXPECTED_MANIFEST_SHA256" ]]; then
+            echo "The reviewed compiler plan manifest hash changed." >&2
+            exit 1
+          fi
+          expected_plan_size="$(jq -r '.planSize' "$manifest_path")"
+          expected_plan_text_size="$(jq -r '.planTextSize' "$manifest_path")"
+          if [[ ! "$expected_plan_size" =~ ^[1-9][0-9]*$ || ! "$expected_plan_text_size" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The reviewed compiler plan manifest object metadata is invalid." >&2
+            exit 1
+          fi
+          jq -e \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg commitSha "$RELEASE_SHA" \
+            --arg runId "$RELEASE_RUN_ID" \
+            --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+            --arg imageDigest "$FIRELIGHT_COMPILER_IMAGE_DIGEST" \
+            --arg backendSha256 "$EXPECTED_BACKEND_SHA256" \
+            --arg variablesSha256 "$EXPECTED_VARIABLES_SHA256" \
+            --arg stateSerial "$EXPECTED_STATE_SERIAL" \
+            --arg stateLineage "$EXPECTED_STATE_LINEAGE" \
+            --arg planSha256 "$EXPECTED_PLAN_SHA256" \
+            --arg planTextSha256 "$EXPECTED_PLAN_TEXT_SHA256" \
+            --arg planObjectKey "$plan_object_key" \
+            --arg planTextObjectKey "$plan_text_object_key" \
+            --arg manifestObjectKey "$manifest_object_key" \
+            --argjson planSize "$expected_plan_size" \
+            --argjson planTextSize "$expected_plan_text_size" \
+            'keys == ["backendSha256","commitSha","ecrScan","environment","imageDigest","manifestObjectKey","planObjectKey","planSha256","planSize","planTextObjectKey","planTextSha256","planTextSize","repository","runAttempt","runId","schema","stateLineage","stateSerial","variablesSha256","version"] and .schema == "firelight.compiler-plan" and .version == 2 and .environment == $environment and .repository == $repository and .commitSha == $commitSha and .runId == $runId and .runAttempt == $runAttempt and .imageDigest == $imageDigest and .backendSha256 == $backendSha256 and .variablesSha256 == $variablesSha256 and .stateSerial == $stateSerial and .stateLineage == $stateLineage and .planSha256 == $planSha256 and .planTextSha256 == $planTextSha256 and .planSize == $planSize and .planTextSize == $planTextSize and .planObjectKey == $planObjectKey and .planTextObjectKey == $planTextObjectKey and .manifestObjectKey == $manifestObjectKey and .ecrScan == {"high":0,"critical":0}' \
+            "$manifest_path" > /dev/null
+          download_verified_object() {
+            local object_key="$1"
+            local destination_path="$2"
+            local object_sha256="$3"
+            local object_kind="$4"
+            local content_length="$5"
+            local head_path
+            local version_id
+            head_path="$(mktemp "$RUNNER_TEMP/firelight-plan-object-head.XXXXXX")"
+            aws s3api head-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              > "$head_path"
+            jq -e \
+              --arg kmsKey "$FIRELIGHT_TERRAFORM_STATE_KMS_KEY_ARN" \
+              --arg sha256 "$object_sha256" \
+              --arg kind "$object_kind" \
+              --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+              --arg runId "$RELEASE_RUN_ID" \
+              --arg runAttempt "$RELEASE_RUN_ATTEMPT" \
+              --argjson contentLength "$content_length" \
+              '(.VersionId | type) == "string" and (.VersionId | length) > 0 and (.VersionId | length) <= 1024 and .ContentLength == $contentLength and .ServerSideEncryption == "aws:kms" and .SSEKMSKeyId == $kmsKey and .Metadata == {"environment":$environment,"kind":$kind,"run-attempt":$runAttempt,"run-id":$runId,"sha256":$sha256}' \
+              "$head_path" > /dev/null
+            version_id="$(jq -r '.VersionId' "$head_path")"
+            aws s3api get-object \
+              --bucket "$FIRELIGHT_TERRAFORM_STATE_BUCKET" \
+              --key "$object_key" \
+              --version-id "$version_id" \
+              --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+              "$destination_path" > /dev/null
+            rm -- "$head_path"
+          }
+          download_verified_object "$plan_object_key" "$plan_path" "$EXPECTED_PLAN_SHA256" full-plan "$expected_plan_size"
+          download_verified_object "$plan_text_object_key" "$plan_text_path" "$EXPECTED_PLAN_TEXT_SHA256" full-plan-text "$expected_plan_text_size"
+          if [[ "$(find "$PLAN_DIRECTORY" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" != "3" || -n "$(find "$PLAN_DIRECTORY" -mindepth 1 -maxdepth 1 -type l -print -quit)" ]]; then
+            echo "The downloaded compiler saved-plan object shape is invalid." >&2
+            exit 1
+          fi
+          plan_sha256="$(sha256sum "$plan_path" | cut -d' ' -f1)"
+          plan_text_sha256="$(sha256sum "$plan_text_path" | cut -d' ' -f1)"
+          if [[ "$plan_sha256" != "$EXPECTED_PLAN_SHA256" || "$plan_text_sha256" != "$EXPECTED_PLAN_TEXT_SHA256" ]]; then
+            echo "The reviewed compiler saved-plan object hash changed." >&2
+            exit 1
+          fi
+          rm -- "$manifest_head"
+          config_dir="$(mktemp -d "$RUNNER_TEMP/firelight-apply-config.XXXXXX")"
+          backend_path="$config_dir/backend.hcl"
+          variables_path="$config_dir/release.tfvars.json"
+          verification_path="$config_dir/verification.txt"
+          python3 ../scripts/materialize_release_config.py \
+            --backend-output "$backend_path" \
+            --variables-output "$variables_path"
+          python3 ../scripts/verify_release_config.py \
+            --environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --backend-config "$backend_path" \
+            --var-file "$variables_path" > "$verification_path"
+          current_backend_sha256="$(awk -F= '$1 == "backend_config_sha256" {print $2}' "$verification_path")"
+          current_variables_sha256="$(awk -F= '$1 == "variable_file_sha256" {print $2}' "$verification_path")"
+          if [[ "$current_backend_sha256" != "$EXPECTED_BACKEND_SHA256" || "$current_variables_sha256" != "$EXPECTED_VARIABLES_SHA256" ]]; then
+            echo "The protected compiler inputs changed after plan approval." >&2
+            exit 1
+          fi
+          terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
+          state_path="$config_dir/state-before.json"
+          terraform state pull > "$state_path"
+          current_serial="$(jq -r '.serial' "$state_path")"
+          current_lineage="$(jq -r '.lineage' "$state_path")"
+          if [[ "$current_serial" != "$EXPECTED_STATE_SERIAL" || "$current_lineage" != "$EXPECTED_STATE_LINEAGE" ]]; then
+            echo "Terraform state changed after the complete plan was approved." >&2
+            exit 1
+          fi
+          echo "plan_path=$plan_path" >> "$GITHUB_OUTPUT"
+          echo "config_dir=$config_dir" >> "$GITHUB_OUTPUT"
+          rm -f -- "$image_file" "$scan_file"
+      - name: Re-prove token parity immediately before the complete Terraform apply
+        shell: bash
+        env:
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_file="$(mktemp "$RUNNER_TEMP/firelight-full-apply-secret.XXXXXX")"
+          trap 'rm -f -- "$secret_file"' EXIT
+          aws secretsmanager get-secret-value \
+            --secret-id "$FIRELIGHT_COMPILER_AUTH_SECRET_ARN" \
+            --version-stage AWSCURRENT \
+            --query SecretString \
+            --output json > "$secret_file"
+          SECRET_FILE="$secret_file" python3 -c 'import hmac, json, os, pathlib, sys; expected=os.environ.get("COMPILER_SERVICE_TOKEN", ""); actual=json.loads(pathlib.Path(os.environ["SECRET_FILE"]).read_text(encoding="utf-8")); actual_text=actual if isinstance(actual, str) else ""; actual_bytes=actual_text.encode(); expected_bytes=expected.encode(); actual_valid=isinstance(actual, str) and 32 <= len(actual_bytes) <= 512 and not any(c.isspace() for c in actual_text); expected_valid=32 <= len(expected_bytes) <= 512 and not any(c.isspace() for c in expected); matches=hmac.compare_digest(actual_bytes, expected_bytes); sys.exit(0 if actual_valid and expected_valid and matches else 1)'
+      - name: Apply the exact saved plan
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          PLAN_PATH: ${{ steps.approved-plan.outputs.plan_path }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ "$PLAN_PATH" != "$RUNNER_TEMP/firelight-reviewed-plan/compiler.tfplan" || ! -f "$PLAN_PATH" || -L "$PLAN_PATH" ]]; then
+            echo "The approved complete saved plan is unavailable." >&2
+            exit 1
+          fi
+          apply_stdout_path="$(mktemp "$RUNNER_TEMP/firelight-full-terraform-apply.stdout.XXXXXX")"
+          apply_stderr_path="$(mktemp "$RUNNER_TEMP/firelight-full-terraform-apply.stderr.XXXXXX")"
+          trap 'rm -f -- "$apply_stdout_path" "$apply_stderr_path"' EXIT
+          chmod 600 -- "$apply_stdout_path" "$apply_stderr_path"
+          set +e
+          terraform apply -input=false -auto-approve "$PLAN_PATH" > "$apply_stdout_path" 2> "$apply_stderr_path"
+          apply_status=$?
+          set -e
+          if [[ $apply_status -ne 0 ]]; then
+            echo "The reviewed complete compiler Terraform apply failed." >&2
+            exit "$apply_status"
+          fi
+      - name: Wait for ECS and verify the deployed ECS and Lambda digest
+        shell: bash
+        working-directory: compiler-service/terraform
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          repository_policy_file="$RUNNER_TEMP/firelight-ecr-repository-policy.json"
+          aws ecr get-repository-policy --repository-name "$service_name" > "$repository_policy_file"
+          expected_gateway_arn="arn:aws:lambda:eu-west-1:$AWS_ACCOUNT_ID:function:$service_name-gateway"
+          jq -e \
+            --arg account "$AWS_ACCOUNT_ID" \
+            --arg repository "$service_name" \
+            --arg gatewayArn "$expected_gateway_arn" '
+            .registryId == $account and .repositoryName == $repository and
+            (.policyText | fromjson) as $policy |
+            ($policy | keys) == ["Statement","Version"] and
+            $policy.Version == "2012-10-17" and
+            ($policy.Statement | type) == "array" and
+            ($policy.Statement | length) == 1 and
+            ($policy.Statement[0] | keys) == ["Action","Condition","Effect","Principal","Resource","Sid"] and
+            $policy.Statement[0].Sid == "LambdaECRImageRetrievalPolicy" and
+            $policy.Statement[0].Effect == "Allow" and
+            ($policy.Statement[0].Action | sort) == ["ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"] and
+            $policy.Statement[0].Resource == "*" and
+            $policy.Statement[0].Principal == {"Service":"lambda.amazonaws.com"} and
+            ($policy.Statement[0].Condition | keys) == ["ArnEquals","StringEquals"] and
+            $policy.Statement[0].Condition.ArnEquals == {"aws:SourceArn":$gatewayArn} and
+            $policy.Statement[0].Condition.StringEquals == {"aws:SourceAccount":$account}
+          ' "$repository_policy_file" > /dev/null
+          repository_url="$AWS_ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/$service_name"
+          expected_image="$repository_url@$FIRELIGHT_COMPILER_IMAGE_DIGEST"
+          cluster_name="$(terraform output -raw compiler_cluster_name)"
+          ecs_service_name="$(terraform output -raw compiler_service_name)"
+          if [[ "$cluster_name" != "$service_name" || "$ecs_service_name" != "$service_name" ]]; then
+            echo "Terraform returned an unexpected ECS target." >&2
+            exit 1
+          fi
+          aws ecs wait services-stable --cluster "$cluster_name" --services "$ecs_service_name"
+          service_file="$RUNNER_TEMP/firelight-ecs-service.json"
+          aws ecs describe-services --cluster "$cluster_name" --services "$ecs_service_name" > "$service_file"
+          jq -e '
+            (.failures == []) and (.services | length == 1) and
+            (.services[0].desiredCount >= 2) and
+            (.services[0].runningCount == .services[0].desiredCount) and
+            (.services[0].pendingCount == 0) and
+            (.services[0].deployments | length == 1) and
+            ([.services[0].deployments[] | select(.status == "PRIMARY" and .rolloutState == "COMPLETED")] | length == 1)
+          ' "$service_file" > /dev/null
+          desired_count="$(jq -r '.services[0].desiredCount' "$service_file")"
+          task_definition="$(jq -r '.services[0].taskDefinition' "$service_file")"
+          target_group="$(jq -r '.services[0].loadBalancers[0].targetGroupArn' "$service_file")"
+          task_definition_file="$RUNNER_TEMP/firelight-task-definition.json"
+          aws ecs describe-task-definition --task-definition "$task_definition" > "$task_definition_file"
+          jq -e --arg image "$expected_image" '
+            .taskDefinition.taskRoleArn == null and
+            ([.taskDefinition.containerDefinitions[] | select(.name == "compiler" and .image == $image and (.environment | length) == 0 and (.secrets | length) == 0)] | length == 1)
+          ' "$task_definition_file" > /dev/null
+          tasks_file="$RUNNER_TEMP/firelight-task-list.json"
+          aws ecs list-tasks --cluster "$cluster_name" --service-name "$ecs_service_name" --desired-status RUNNING > "$tasks_file"
+          mapfile -t task_arns < <(jq -r '.taskArns[]' "$tasks_file")
+          if (( ${#task_arns[@]} < desired_count )); then
+            echo "Too few compiler tasks are running." >&2
+            exit 1
+          fi
+          running_file="$RUNNER_TEMP/firelight-running-tasks.json"
+          aws ecs describe-tasks --cluster "$cluster_name" --tasks "${task_arns[@]}" > "$running_file"
+          jq -e --arg digest "$FIRELIGHT_COMPILER_IMAGE_DIGEST" --argjson desired "$desired_count" '
+            .failures == [] and (.tasks | length) == $desired and
+            ([.tasks[].containers[] | select(.name == "compiler" and .imageDigest == $digest)] | length) == $desired
+          ' "$running_file" > /dev/null
+          healthy=false
+          target_file="$RUNNER_TEMP/firelight-target-health.json"
+          for _ in {1..30}; do
+            aws elbv2 describe-target-health --target-group-arn "$target_group" > "$target_file"
+            if jq -e --argjson desired "$desired_count" '(.TargetHealthDescriptions | length) == $desired and ([.TargetHealthDescriptions[] | select(.TargetHealth.State == "healthy")] | length) == $desired' "$target_file" > /dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$healthy" != "true" ]]; then
+            echo "The internal compiler targets did not all become healthy." >&2
+            exit 1
+          fi
+          gateway_version="$(terraform output -raw gateway_lambda_version)"
+          if [[ ! "$gateway_version" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Terraform returned an invalid immutable Lambda version." >&2
+            exit 1
+          fi
+          gateway_function="$service_name-gateway"
+          aws lambda wait function-updated-v2 --function-name "$gateway_function" --qualifier "$gateway_version"
+          alias_version="$(aws lambda get-alias --function-name "$gateway_function" --name live --query FunctionVersion --output text)"
+          if [[ "$alias_version" != "$gateway_version" ]]; then
+            echo "The live Lambda alias does not address the approved immutable version." >&2
+            exit 1
+          fi
+          resolved_image="$(aws lambda get-function --function-name "$gateway_function" --qualifier "$gateway_version" --query Code.ResolvedImageUri --output text)"
+          if [[ "$resolved_image" != "$expected_image" ]]; then
+            echo "Lambda did not resolve the approved compiler image digest." >&2
+            exit 1
+          fi
+          lambda_config="$RUNNER_TEMP/firelight-lambda-config.json"
+          aws lambda get-function-configuration --function-name "$gateway_function" --qualifier "$gateway_version" > "$lambda_config"
+          jq -e \
+            --arg build "$FIRELIGHT_COMPILER_RELEASE_BUILD_ID" \
+            --arg digest "$FIRELIGHT_COMPILER_IMAGE_DIGEST" \
+            --arg environment "$FIRELIGHT_COMPILER_ENVIRONMENT" \
+            --arg secret "$FIRELIGHT_COMPILER_AUTH_SECRET_ARN" \
+            --arg service "$service_name" '
+            .Environment.Variables.FIRELIGHT_COMPILER_BUILD_ID == $build and
+            .Environment.Variables.FIRELIGHT_COMPILER_ENVIRONMENT == $environment and
+            .Environment.Variables.FIRELIGHT_COMPILER_IMAGE_DIGEST == $digest and
+            .Environment.Variables.FIRELIGHT_COMPILER_SECRET_ARN == $secret and
+            .Environment.Variables.FIRELIGHT_COMPILER_SERVICE_NAME == $service and
+            (.Environment.Variables.FIRELIGHT_INTERNAL_COMPILER_URL |
+              test("^http://[^/]+\\.eu-west-1\\.elb\\.amazonaws\\.com/compile$")) and
+            (.Environment.Variables | keys | sort) == [
+              "FIRELIGHT_COMPILER_BUILD_ID",
+              "FIRELIGHT_COMPILER_ENVIRONMENT",
+              "FIRELIGHT_COMPILER_IMAGE_DIGEST",
+              "FIRELIGHT_COMPILER_SECRET_ARN",
+              "FIRELIGHT_COMPILER_SERVICE_NAME",
+              "FIRELIGHT_INTERNAL_COMPILER_URL"
+            ]
+          ' "$lambda_config" > /dev/null
+          rm -f -- "$repository_policy_file" "$service_file" "$task_definition_file" "$tasks_file" "$running_file" "$target_file" "$lambda_config"
+      - name: Capture and mask the live Function URL
+        shell: bash
+        working-directory: compiler-service/terraform
+        run: |
+          set -euo pipefail
+          umask 077
+          gateway_url="$(terraform output -raw compiler_gateway_function_url)"
+          echo "::add-mask::$gateway_url"
+          runtime_file="$RUNNER_TEMP/firelight-compiler-runtime.json"
+          GATEWAY_URL="$gateway_url" RUNTIME_FILE="$runtime_file" python3 -c 'import json, os, pathlib, re, urllib.parse; url=os.environ["GATEWAY_URL"]; parsed=urllib.parse.urlsplit(url); host=parsed.hostname or ""; valid=(parsed.scheme=="https" and parsed.username is None and parsed.password is None and parsed.port is None and re.fullmatch(r"[a-z0-9]{10,64}\.lambda-url\.eu-west-1\.on\.aws", host) and parsed.path in ("", "/") and not parsed.query and not parsed.fragment); valid or (_ for _ in ()).throw(SystemExit("invalid Function URL")); pathlib.Path(os.environ["RUNTIME_FILE"]).write_text(json.dumps({"url":f"https://{host}/","origin":f"https://{host}","host":host}), encoding="utf-8")'
+          gateway_url="$(jq -r '.url' "$runtime_file")"
+          gateway_origin="$(jq -r '.origin' "$runtime_file")"
+          gateway_host="$(jq -r '.host' "$runtime_file")"
+          echo "::add-mask::$gateway_url"
+          echo "::add-mask::$gateway_origin"
+          echo "::add-mask::$gateway_host"
+          service_name="firelight-compiler-stg"
+          if [[ "$FIRELIGHT_COMPILER_ENVIRONMENT" == "production" ]]; then service_name="firelight-compiler-prd"; fi
+          url_config="$RUNNER_TEMP/firelight-function-url-config.json"
+          aws lambda get-function-url-config --function-name "$service_name-gateway" --qualifier live > "$url_config"
+          jq -e --arg url "$gateway_url" '.FunctionUrl == $url and .AuthType == "NONE" and .InvokeMode == "BUFFERED"' "$url_config" > /dev/null
+          policy_file="$RUNNER_TEMP/firelight-function-url-policy.json"
+          aws lambda get-policy --function-name "$service_name-gateway" --qualifier live > "$policy_file"
+          expected_resource="arn:aws:lambda:eu-west-1:$AWS_ACCOUNT_ID:function:$service_name-gateway:live"
+          jq -e --arg resource "$expected_resource" '
+            def actions: if (.Action | type) == "array" then .Action else [.Action] end;
+            def public_principal:
+              .Principal == "*" or
+              ((.Principal | type) == "object" and .Principal.AWS == "*");
+            (.Policy | fromjson) as $policy |
+            [$policy.Statement[] |
+              select(.Effect == "Allow" and public_principal and .Resource == $resource)
+            ] as $public |
+            ($public | length) == 2 and
+            ([$public[] | select(
+              actions == ["lambda:InvokeFunctionUrl"] and
+              .Condition.StringEquals."lambda:FunctionUrlAuthType" == "NONE"
+            )] | length) == 1 and
+            ([$public[] | select(
+              actions == ["lambda:InvokeFunction"] and
+              (.Condition.Bool."lambda:InvokedViaFunctionUrl" == "true" or
+               .Condition.Bool."lambda:InvokedViaFunctionUrl" == true)
+            )] | length) == 1
+          ' "$policy_file" > /dev/null
+          {
+            echo "COMPILER_SERVICE_URL=$gateway_url"
+            echo "COMPILER_SERVICE_ORIGIN=$gateway_origin"
+            echo "COMPILER_SERVICE_HOST=$gateway_host"
+          } >> "$GITHUB_ENV"
+          rm -f -- "$runtime_file" "$url_config" "$policy_file"
+      - name: Prove the protected token matches the AWS secret without logging either value
+        shell: bash
+        env:
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_file="$RUNNER_TEMP/firelight-compiler-secret.json"
+          aws secretsmanager get-secret-value \
+            --secret-id "$FIRELIGHT_COMPILER_AUTH_SECRET_ARN" \
+            --version-stage AWSCURRENT \
+            --query SecretString \
+            --output json > "$secret_file"
+          SECRET_FILE="$secret_file" python3 -c 'import hmac, json, os, pathlib, sys; expected=os.environ.get("COMPILER_SERVICE_TOKEN", ""); actual=json.loads(pathlib.Path(os.environ["SECRET_FILE"]).read_text(encoding="utf-8")); actual_text=actual if isinstance(actual, str) else ""; actual_bytes=actual_text.encode(); expected_bytes=expected.encode(); actual_valid=isinstance(actual, str) and 32 <= len(actual_bytes) <= 512 and not any(c.isspace() for c in actual_text); expected_valid=32 <= len(expected_bytes) <= 512 and not any(c.isspace() for c in expected); matches=hmac.compare_digest(actual_bytes, expected_bytes); sys.exit(0 if actual_valid and expected_valid and matches else 1)'
+          rm -- "$secret_file"
+      - name: Probe the complete deployed compiler path with the pre-exported First Spark fixture
+        shell: bash
+        env:
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-deployment-probe-sketches
+        run: |
+          set -euo pipefail
+          python3 compiler-service/scripts/probe_deployment.py \
+            --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Capture the accepted staging compiler promotion evidence
+        if: inputs.environment == 'staging'
+        id: staging-acceptance
+        shell: bash
+        env:
+          APPLY_CONFIG_DIRECTORY: ${{ steps.approved-plan.outputs.config_dir }}
+          FIRELIGHT_COMPILER_STAGING_EVIDENCE_PATH: ${{ runner.temp }}/firelight-compiler-staging-evidence.json
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ "$APPLY_CONFIG_DIRECTORY" != "$RUNNER_TEMP"/firelight-apply-config.* || ! -d "$APPLY_CONFIG_DIRECTORY" || -L "$APPLY_CONFIG_DIRECTORY" ]]; then
+            echo "The approved staging compiler configuration is unavailable." >&2
+            exit 1
+          fi
+          verification_path="$(mktemp "$RUNNER_TEMP/firelight-staging-isolation.XXXXXX")"
+          trap 'rm -f -- "$verification_path"' EXIT
+          python3 compiler-service/scripts/verify_release_config.py \
+            --environment staging \
+            --backend-config "$APPLY_CONFIG_DIRECTORY/backend.hcl" \
+            --var-file "$APPLY_CONFIG_DIRECTORY/release.tfvars.json" \
+            > "$verification_path"
+          export FIRELIGHT_COMPILER_BACKEND_LOCATION_SHA256="$(awk -F= '$1 == "backend_location_sha256" {print $2}' "$verification_path")"
+          export FIRELIGHT_COMPILER_AWS_ACCOUNT_ID_SHA256="$(awk -F= '$1 == "aws_account_id_sha256" {print $2}' "$verification_path")"
+          export FIRELIGHT_COMPILER_STATE_KMS_KEY_SHA256="$(awk -F= '$1 == "state_kms_key_sha256" {print $2}' "$verification_path")"
+          export FIRELIGHT_COMPILER_AUTH_SECRET_SHA256="$(awk -F= '$1 == "auth_secret_sha256" {print $2}' "$verification_path")"
+          export FIRELIGHT_COMPILER_VPC_CIDR_SHA256="$(awk -F= '$1 == "vpc_cidr_sha256" {print $2}' "$verification_path")"
+          node scripts/capture-compiler-staging-evidence.mjs >> "$GITHUB_OUTPUT"
+      - name: Retain the accepted staging compiler evidence
+        if: inputs.environment == 'staging'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.staging-acceptance.outputs.artifact_name }}
+          path: ${{ steps.staging-acceptance.outputs.evidence_path }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record the staging promotion tuple
+        if: inputs.environment == 'staging'
+        shell: bash
+        env:
+          EVIDENCE_SHA256: ${{ steps.staging-acceptance.outputs.evidence_sha256 }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ || ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "The staging promotion tuple is invalid." >&2
+            exit 1
+          fi
+          {
+            echo "### Accepted staging compiler promotion evidence"
+            echo
+            echo "Staging run ID: \`$RELEASE_RUN_ID\`"
+            echo "Evidence JSON SHA-256: \`$EVIDENCE_SHA256\`"
+            echo "Image digest: \`$FIRELIGHT_COMPILER_IMAGE_DIGEST\`"
+            echo
+            echo "Production must supply this exact run ID and evidence hash and must promote the identical registry digest."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Record the protected Worker secret handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Compiler deployment accepted"
+            echo
+            echo "The immutable ECS/Lambda digest, live alias, target health, AWS token parity, and First Spark compile probe passed."
+            echo
+            echo "**Protected external handoff still required:** an authorized operator must copy the sensitive Terraform Function URL, derived origin/host, exact approved image digest, and the same compiler token into only the matching Worker GitHub environment. The workflow's GITHUB_TOKEN intentionally cannot administer environment secrets."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove ephemeral release material
+        if: always()
+        shell: bash
+        env:
+          APPLY_CONFIG_DIRECTORY: ${{ steps.approved-plan.outputs.config_dir }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APPLY_CONFIG_DIRECTORY" && "$APPLY_CONFIG_DIRECTORY" == "$RUNNER_TEMP"/firelight-apply-config.* && -d "$APPLY_CONFIG_DIRECTORY" && ! -L "$APPLY_CONFIG_DIRECTORY" ]]; then
+            rm -rf -- "$APPLY_CONFIG_DIRECTORY"
+          fi
+          rm -rf -- \
+            "$RUNNER_TEMP/firelight-reviewed-plan" \
+            "$RUNNER_TEMP/firelight-deployment-probe-sketches"
+          rm -f -- \
+            "$RUNNER_TEMP/firelight-compiler-secret.json" \
+            "$RUNNER_TEMP/firelight-compiler-runtime.json" \
+            "$RUNNER_TEMP/firelight-function-url-config.json" \
+            "$RUNNER_TEMP/firelight-compiler-staging-evidence.json"

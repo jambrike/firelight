@@ -1,0 +1,225 @@
+name: Configure Supabase Auth
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Hosted Supabase Auth environment to configure
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Type APPLY_STAGING_AUTH_CONFIG or APPLY_PRODUCTION_AUTH_CONFIG
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Auth policy/templates are part of release acceptance. Serialize their
+  # mutation with the matching web deployment so the accepted hash cannot race.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require the environment-specific confirmation from main
+        shell: bash
+        env:
+          AUTH_ENVIRONMENT: ${{ inputs.environment }}
+          AUTH_CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          expected="APPLY_${AUTH_ENVIRONMENT^^}_AUTH_CONFIG"
+          if [[ "$AUTH_CONFIRMATION" != "$expected" ]]; then
+            echo "The Supabase Auth configuration confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "Hosted Auth configuration must be dispatched from main." >&2
+            exit 1
+          fi
+
+  release-anchors:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      anchor-set-sha256: ${{ steps.anchors.outputs.anchor_set_sha256 }}
+      organization-identity-hash: ${{ steps.anchors.outputs.organization_identity_hash }}
+      staging-project-ref-identity-hash: ${{ steps.anchors.outputs.staging_project_ref_identity_hash }}
+      production-project-ref-identity-hash: ${{ steps.anchors.outputs.production_project_ref_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Load the source-pinned Supabase environment anchors
+        id: anchors
+        run: >-
+          node scripts/verify-release-environment-anchors.mjs
+          .github/supabase-project-anchors.json >> "$GITHUB_OUTPUT"
+
+  snapshot-staging-project:
+    needs:
+      - authorize
+      - release-anchors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: staging-auth-config
+    outputs:
+      project-identity-hash: ${{ steps.project.outputs.project_identity_hash }}
+      organization-identity-hash: ${{ steps.project.outputs.organization_identity_hash }}
+      project-ref-identity-hash: ${{ steps.project.outputs.project_ref_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Capture the protected staging Supabase project snapshot
+        id: project
+        env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+
+  snapshot-production-project:
+    needs:
+      - authorize
+      - release-anchors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: production-auth-config
+    outputs:
+      project-identity-hash: ${{ steps.project.outputs.project_identity_hash }}
+      organization-identity-hash: ${{ steps.project.outputs.organization_identity_hash }}
+      project-ref-identity-hash: ${{ steps.project.outputs.project_ref_identity_hash }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Capture the protected production Supabase project snapshot
+        id: project
+        env:
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+
+  apply:
+    needs:
+      - authorize
+      - release-anchors
+      - snapshot-staging-project
+      - snapshot-production-project
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment == 'production' && 'production-auth-config' || 'staging-auth-config' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Require the dispatched Auth configuration commit to remain current main
+        shell: bash
+        env:
+          CONFIGURATION_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CONFIGURATION_SHA" =~ ^[0-9a-f]{40}$ || "$(git rev-parse HEAD)" != "$CONFIGURATION_SHA" ]]; then
+            echo "The Auth configuration commit is invalid." >&2
+            exit 1
+          fi
+          git fetch --force --no-tags --depth=1 origin refs/heads/main
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$CONFIGURATION_SHA" ]]; then
+            echo "Main advanced while Auth configuration awaited approval; dispatch a fresh run." >&2
+            exit 1
+          fi
+      - name: Require same-organization distinct-project Auth snapshots
+        shell: bash
+        env:
+          CANONICAL_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          CANONICAL_PRODUCTION_PROJECT_REF_IDENTITY_HASH: ${{ needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          STAGING_ORGANIZATION_IDENTITY_HASH: ${{ needs.snapshot-staging-project.outputs.organization-identity-hash }}
+          PRODUCTION_ORGANIZATION_IDENTITY_HASH: ${{ needs.snapshot-production-project.outputs.organization-identity-hash }}
+          STAGING_PROJECT_REF_IDENTITY_HASH: ${{ needs.snapshot-staging-project.outputs.project-ref-identity-hash }}
+          PRODUCTION_PROJECT_REF_IDENTITY_HASH: ${{ needs.snapshot-production-project.outputs.project-ref-identity-hash }}
+        run: |
+          set -euo pipefail
+          for fingerprint in \
+            "$CANONICAL_ORGANIZATION_IDENTITY_HASH" \
+            "$CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH" \
+            "$CANONICAL_PRODUCTION_PROJECT_REF_IDENTITY_HASH" \
+            "$STAGING_ORGANIZATION_IDENTITY_HASH" \
+            "$PRODUCTION_ORGANIZATION_IDENTITY_HASH" \
+            "$STAGING_PROJECT_REF_IDENTITY_HASH" \
+            "$PRODUCTION_PROJECT_REF_IDENTITY_HASH"; do
+            if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "The protected Supabase project snapshot is invalid." >&2
+              exit 1
+            fi
+          done
+          if [[ "$STAGING_ORGANIZATION_IDENTITY_HASH" != "$CANONICAL_ORGANIZATION_IDENTITY_HASH" || "$PRODUCTION_ORGANIZATION_IDENTITY_HASH" != "$CANONICAL_ORGANIZATION_IDENTITY_HASH" ]]; then
+            echo "Staging and production Supabase projects must match the source-pinned organization." >&2
+            exit 1
+          fi
+          if [[ "$STAGING_PROJECT_REF_IDENTITY_HASH" != "$CANONICAL_STAGING_PROJECT_REF_IDENTITY_HASH" || "$PRODUCTION_PROJECT_REF_IDENTITY_HASH" != "$CANONICAL_PRODUCTION_PROJECT_REF_IDENTITY_HASH" || "$STAGING_PROJECT_REF_IDENTITY_HASH" == "$PRODUCTION_PROJECT_REF_IDENTITY_HASH" ]]; then
+            echo "Staging and production Auth projects must match their distinct source-pinned labels." >&2
+            exit 1
+          fi
+      - name: Recheck the selected protected Supabase project immediately before changing Auth
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ inputs.environment == 'production' && needs.snapshot-production-project.outputs.project-identity-hash || needs.snapshot-staging-project.outputs.project-identity-hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ needs.release-anchors.outputs.organization-identity-hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && needs.release-anchors.outputs.production-project-ref-identity-hash || needs.release-anchors.outputs.staging-project-ref-identity-hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && needs.release-anchors.outputs.staging-project-ref-identity-hash || needs.release-anchors.outputs.production-project-ref-identity-hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
+      - name: Apply and read back the exact hosted Auth configuration
+        env:
+          FIRELIGHT_EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_AUTH_CONFIG_CONFIRMATION: ${{ inputs.confirmation }}
+          FIRELIGHT_EXPECTED_SMTP_HOST: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_HOST }}
+          FIRELIGHT_EXPECTED_SMTP_PORT: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_PORT }}
+          FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_ADMIN_EMAIL }}
+          FIRELIGHT_EXPECTED_SMTP_USER: ${{ secrets.FIRELIGHT_EXPECTED_SMTP_USER }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SMTP_PASSWORD: ${{ secrets.SUPABASE_SMTP_PASSWORD }}
+        run: node scripts/apply-supabase-auth-config.mjs

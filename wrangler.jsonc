@@ -1,5 +1,102 @@
 {
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "firelight",
-  "compatibility_date": "2026-07-07",
-  "pages_build_output_dir": "./dist"
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true,
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "BUILD_ID": "local",
+  },
+  "secrets": {
+    "required": [
+      "SUPABASE_URL",
+      "SUPABASE_PROJECT_REF",
+      "SUPABASE_PUBLISHABLE_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "KIT_CODE_PEPPER",
+      "COMPILER_SERVICE_URL",
+      "COMPILER_SERVICE_ORIGIN",
+      "COMPILER_SERVICE_HOST",
+      "COMPILER_SERVICE_TOKEN",
+    ],
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false,
+    },
+    "traces": {
+      "enabled": false,
+      "head_sampling_rate": 0,
+    },
+  },
+  "env": {
+    "staging": {
+      "name": "firelight-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "staging.firelight.ie",
+          "custom_domain": true,
+        },
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "BUILD_ID": "staging",
+      },
+      "secrets": {
+        "required": [
+          "SUPABASE_URL",
+          "SUPABASE_PROJECT_REF",
+          "SUPABASE_PUBLISHABLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY",
+          "KIT_CODE_PEPPER",
+          "COMPILER_SERVICE_URL",
+          "COMPILER_SERVICE_ORIGIN",
+          "COMPILER_SERVICE_HOST",
+          "COMPILER_SERVICE_TOKEN",
+        ],
+      },
+    },
+    "production": {
+      "name": "firelight-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          // Preserve the legacy Pages hostname as the rollback origin. This
+          // route overlays its existing proxied DNS record during cutover.
+          "pattern": "firelight.ie/*",
+          "zone_name": "firelight.ie",
+        },
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "BUILD_ID": "production",
+      },
+      "secrets": {
+        "required": [
+          "SUPABASE_URL",
+          "SUPABASE_PROJECT_REF",
+          "SUPABASE_PUBLISHABLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY",
+          "KIT_CODE_PEPPER",
+          "COMPILER_SERVICE_URL",
+          "COMPILER_SERVICE_ORIGIN",
+          "COMPILER_SERVICE_HOST",
+          "COMPILER_SERVICE_TOKEN",
+        ],
+      },
+    },
+  },
 }

@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Camp</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --night: #030611;
+      --cream: #fff2ce;
+      --muted: rgba(255, 242, 206, 0.76);
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --wood: #7b421c;
+      --wood-dark: #2e1305;
+      --teal: #24575a;
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      background: #000;
+      color: var(--cream);
+      font-family: var(--pixel);
+      letter-spacing: 0;
+    }
+
+    a,
+    button {
+      color: inherit;
+      font: inherit;
+      text-decoration: none;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .site {
+      position: relative;
+      min-height: 100vh;
+      isolation: isolate;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 50% 72%, rgba(255, 122, 24, 0.18), transparent 23rem),
+        linear-gradient(#050714 0%, #071120 50%, #0c1b1c 100%);
+    }
+
+    .scene-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      opacity: 1;
+      image-rendering: pixelated;
+      transform: scale(1.03);
+    }
+
+    .ambient-vignette {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 66%, transparent 0 18rem, rgba(1, 2, 7, 0.28) 34rem),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.55), transparent 20%, transparent 80%, rgba(0, 0, 0, 0.58)),
+        linear-gradient(transparent 0 65%, rgba(0, 0, 0, 0.5));
+    }
+
+    .shell {
+      position: relative;
+      z-index: 2;
+      width: min(1180px, calc(100vw - 1.4rem));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 0 0 3rem;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      min-height: 5rem;
+      padding: 0.85rem 0;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      color: #fff7df;
+      font-size: clamp(0.78rem, 1.8vw, 1.05rem);
+      text-shadow: 0 0 1rem rgba(255, 122, 24, 0.42);
+    }
+
+    .brand-mark {
+      width: 1.9rem;
+      height: 1.9rem;
+      image-rendering: pixelated;
+      background:
+        linear-gradient(45deg, transparent 0 30%, var(--ember) 30% 70%, transparent 70%),
+        linear-gradient(135deg, transparent 0 30%, var(--gold) 30% 72%, transparent 72%);
+      filter: drop-shadow(0 0 0.65rem rgba(255, 122, 24, 0.7));
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.7rem;
+    }
+
+    .pixel-button {
+      min-height: 3rem;
+      display: inline-grid;
+      place-items: center;
+      padding: 0.72rem 0.95rem;
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid var(--wood-dark);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02,
+        0 0 1.35rem rgba(255, 122, 24, 0.18);
+      font-size: clamp(0.56rem, 1.25vw, 0.72rem);
+      line-height: 1.45;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .pixel-button.secondary {
+      color: rgba(255, 242, 206, 0.92);
+      background: rgba(8, 18, 22, 0.78);
+      border-color: rgba(255, 198, 64, 0.32);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.32),
+        inset 4px 4px 0 rgba(255, 198, 64, 0.1),
+        0 4px 0 #1f0c02;
+    }
+
+    .pixel-button:focus-visible,
+    .trail-sign:focus-visible {
+      outline: 3px solid var(--gold);
+      outline-offset: 4px;
+    }
+
+    .pixel-button:active,
+    .trail-sign:active {
+      transform: translateY(3px);
+    }
+
+    .signed-out-only {
+      display: none;
+    }
+
+    body.demo-mode .account-only {
+      display: none;
+    }
+
+    body.demo-mode .signed-out-only {
+      display: inline-grid;
+    }
+
+    .demo-banner {
+      display: none;
+      width: fit-content;
+      margin: 0 0 0.8rem;
+      padding: 0.75rem 0.9rem;
+      color: #ffe0a1;
+      background: rgba(26, 11, 2, 0.78);
+      border: 3px solid rgba(255, 198, 64, 0.36);
+      box-shadow: inset -4px -4px 0 rgba(0, 0, 0, 0.26);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1rem, 2.4vw, 1.3rem);
+    }
+
+    body.demo-mode .demo-banner {
+      display: block;
+    }
+
+    .camp-hero {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.48fr);
+      gap: 1rem;
+      align-items: stretch;
+      margin-top: clamp(0.4rem, 2vh, 1.1rem);
+    }
+
+    .camp-board,
+    .status-board,
+    .path-board {
+      position: relative;
+      background:
+        linear-gradient(rgba(46, 28, 16, 0.94), rgba(8, 12, 18, 0.91)),
+        repeating-linear-gradient(90deg, rgba(255, 138, 32, 0.08) 0 2px, transparent 2px 18px);
+      border: 4px solid #8b4c1f;
+      box-shadow:
+        0 0 0 4px rgba(22, 8, 2, 0.86),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.34),
+        inset 5px 5px 0 rgba(255, 198, 106, 0.13),
+        0 1rem 3.2rem rgba(0, 0, 0, 0.52),
+        0 0 2.4rem rgba(255, 122, 24, 0.13);
+      image-rendering: pixelated;
+    }
+
+    .camp-board {
+      min-height: clamp(22rem, 48vh, 32rem);
+      display: grid;
+      align-content: center;
+      gap: 1.15rem;
+      padding: clamp(1rem, 3vw, 1.55rem);
+      transform: rotate(-0.35deg);
+    }
+
+    .camp-board::before,
+    .camp-board::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      width: 0.9rem;
+      height: 4.2rem;
+      background: #5d2a0d;
+      box-shadow: inset -0.25rem 0 0 #2e1305;
+    }
+
+    .camp-board::before {
+      left: 12%;
+    }
+
+    .camp-board::after {
+      right: 12%;
+    }
+
+    .kicker,
+    .eyebrow {
+      margin: 0;
+      color: #ffc46a;
+      font-size: clamp(0.55rem, 1.2vw, 0.72rem);
+      line-height: 1.7;
+      text-shadow: 0 0 1rem rgba(255, 122, 24, 0.45);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      color: #fff4d3;
+      font-size: clamp(1.7rem, 5vw, 4.3rem);
+      line-height: 1.05;
+      text-shadow:
+        0 4px 0 #2b0f00,
+        0 0 1.7rem rgba(255, 122, 24, 0.45);
+    }
+
+    h2 {
+      color: #fff4d3;
+      font-size: clamp(1rem, 2.7vw, 1.7rem);
+      line-height: 1.35;
+      text-shadow: 0 3px 0 #2b0f00;
+    }
+
+    h3 {
+      color: #ffd27a;
+      font-size: clamp(0.72rem, 1.8vw, 1.05rem);
+      line-height: 1.5;
+    }
+
+    .readable {
+      color: var(--muted);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.28rem, 3vw, 1.75rem);
+      line-height: 1.03;
+      text-shadow: 0 0 1.2rem rgba(0, 0, 0, 0.82);
+    }
+
+    .progress-plank {
+      width: min(31rem, 100%);
+      display: grid;
+      gap: 0.65rem;
+      padding: 0.85rem;
+      background: rgba(3, 6, 10, 0.64);
+      border: 3px solid #1c3441;
+      box-shadow:
+        inset 4px 4px 0 rgba(0, 0, 0, 0.36),
+        inset -4px -4px 0 rgba(74, 111, 109, 0.15);
+    }
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      color: #ffe0a1;
+      font-size: clamp(0.52rem, 1.15vw, 0.68rem);
+      line-height: 1.5;
+    }
+
+    .bar {
+      height: 0.9rem;
+      overflow: hidden;
+      background: #07080c;
+      border: 2px solid #482108;
+      box-shadow: inset 3px 3px 0 rgba(0, 0, 0, 0.45);
+    }
+
+    .bar span {
+      display: block;
+      width: 42%;
+      height: 100%;
+      background:
+        linear-gradient(90deg, #ff7a18, #ffc640),
+        repeating-linear-gradient(90deg, transparent 0 9px, rgba(255, 255, 255, 0.16) 9px 11px);
+      box-shadow: 0 0 1rem rgba(255, 122, 24, 0.45);
+      transition: width 420ms steps(8, end);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.2rem;
+    }
+
+    .status-board {
+      min-height: clamp(22rem, 48vh, 32rem);
+      display: grid;
+      align-content: space-between;
+      gap: 1rem;
+      padding: 1rem;
+      transform: rotate(0.45deg);
+    }
+
+    .mini-camp {
+      position: relative;
+      min-height: 13.6rem;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 72%, rgba(255, 122, 24, 0.18), transparent 8rem),
+        linear-gradient(#071120 0%, #0b201d 100%);
+      border: 3px solid #1c3441;
+      box-shadow: inset -4px -4px 0 rgba(0, 0, 0, 0.35);
+    }
+
+    .mini-mountain,
+    .mini-tree,
+    .mini-fire,
+    .mini-board,
+    .mini-wire {
+      position: absolute;
+      image-rendering: pixelated;
+    }
+
+    .mini-mountain {
+      bottom: 4.6rem;
+      width: 9rem;
+      height: 7rem;
+      opacity: 0.7;
+      background:
+        linear-gradient(135deg, transparent 0 49%, rgba(95, 167, 160, 0.28) 49% 54%, transparent 54%),
+        linear-gradient(45deg, transparent 0 48%, rgba(40, 92, 89, 0.42) 48% 55%, transparent 55%);
+    }
+
+    .mini-mountain.left {
+      left: -1rem;
+    }
+
+    .mini-mountain.right {
+      right: -1rem;
+      transform: scale(1.15);
+    }
+
+    .mini-tree {
+      bottom: 0.8rem;
+      width: 0;
+      height: 0;
+      border-left: 2rem solid transparent;
+      border-right: 2rem solid transparent;
+      border-bottom: 5.4rem solid rgba(13, 48, 43, 0.9);
+      filter: drop-shadow(0 2rem 0 rgba(9, 34, 32, 0.95));
+    }
+
+    .mini-tree.one {
+      left: 1rem;
+    }
+
+    .mini-tree.two {
+      right: 1.2rem;
+      transform: scale(0.9);
+    }
+
+    .mini-board {
+      left: 50%;
+      bottom: 2.2rem;
+      width: 7.5rem;
+      height: 3.6rem;
+      transform: translateX(-50%);
+      background: linear-gradient(180deg, #39a0a1, #1f666a);
+      border: 3px solid #113b3f;
+      box-shadow: 0 0 1.2rem rgba(57, 160, 161, 0.18);
+    }
+
+    .mini-board::after {
+      content: "NANO";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 0.35rem 0.45rem;
+      color: #dcfff6;
+      background: #061012;
+      font-size: 0.48rem;
+    }
+
+    .mini-wire {
+      left: 50%;
+      bottom: 6.3rem;
+      width: 0.35rem;
+      height: 3.5rem;
+      background: #ffc640;
+      box-shadow: 0 0 1rem rgba(255, 198, 64, 0.36);
+    }
+
+    .mini-fire {
+      left: 50%;
+      bottom: 7.9rem;
+      width: 2rem;
+      height: 2.7rem;
+      transform: translateX(-50%);
+      background:
+        linear-gradient(45deg, transparent 0 28%, #ff7a18 28% 70%, transparent 70%),
+        linear-gradient(135deg, transparent 0 26%, #ffc640 26% 68%, transparent 68%);
+      filter: drop-shadow(0 0 1.3rem rgba(255, 122, 24, 0.85));
+      animation: flameDance 780ms steps(2, end) infinite;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+      min-height: 3rem;
+      padding: 0 0.75rem;
+      color: var(--muted);
+      background: rgba(2, 5, 12, 0.62);
+      border: 2px solid rgba(95, 167, 160, 0.4);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.08rem, 2.7vw, 1.35rem);
+      line-height: 1;
+    }
+
+    .status-row strong {
+      color: #fff4d3;
+      font-family: var(--pixel);
+      font-size: clamp(0.5rem, 1.15vw, 0.68rem);
+      line-height: 1.55;
+    }
+
+    .state {
+      color: #ffc46a;
+      white-space: nowrap;
+    }
+
+    .path-links {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.9rem;
+      margin-top: 1rem;
+    }
+
+    .trail-sign {
+      position: relative;
+      min-height: 12rem;
+      display: grid;
+      align-content: space-between;
+      gap: 1rem;
+      padding: 1rem;
+      color: #fff3d2;
+      background:
+        linear-gradient(rgba(36, 22, 13, 0.94), rgba(8, 12, 18, 0.9)),
+        repeating-linear-gradient(90deg, rgba(255, 138, 32, 0.08) 0 2px, transparent 2px 18px);
+      border: 4px solid #8b4c1f;
+      box-shadow:
+        0 0 0 4px rgba(22, 8, 2, 0.84),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.32),
+        inset 4px 4px 0 rgba(255, 198, 106, 0.12),
+        0 0 2rem rgba(255, 122, 24, 0.09);
+      text-align: left;
+    }
+
+    .trail-sign::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 100%;
+      width: 0.8rem;
+      height: 2.8rem;
+      transform: translateX(-50%);
+      background: #5d2a0d;
+      box-shadow: inset -0.2rem 0 0 #2e1305;
+    }
+
+    .trail-sign p {
+      color: var(--muted);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.05rem, 2.5vw, 1.35rem);
+      line-height: 1.02;
+    }
+
+    .sign-number {
+      width: 2.7rem;
+      height: 2.7rem;
+      display: grid;
+      place-items: center;
+      color: #1d0f00;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid #5b2706;
+      box-shadow:
+        inset -3px -3px 0 #8d3a08,
+        inset 3px 3px 0 #ffd06b;
+      font-size: 0.68rem;
+    }
+
+    .next-lab {
+      display: none;
+      gap: 1rem;
+      margin-top: clamp(1rem, 5vh, 2rem);
+      scroll-margin-top: 1rem;
+    }
+
+    body.core-complete .next-lab,
+    body.demo-mode .next-lab {
+      display: grid;
+    }
+
+    .path-board {
+      padding: clamp(1rem, 3vw, 1.35rem);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .unlock-note {
+      color: #ff8a20;
+      font-size: clamp(0.5rem, 1.05vw, 0.66rem);
+      line-height: 1.6;
+      text-shadow: 0 0 0.8rem rgba(255, 122, 24, 0.75);
+      white-space: nowrap;
+    }
+
+    .skill-grid,
+    .project-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.9rem;
+    }
+
+    .project-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .skill-card,
+    .project-card {
+      position: relative;
+      min-height: 14rem;
+      display: grid;
+      align-content: space-between;
+      gap: 1rem;
+      padding: 0.95rem;
+      background: rgba(2, 5, 12, 0.72);
+      border: 3px solid #1c3441;
+      box-shadow:
+        inset 4px 4px 0 rgba(0, 0, 0, 0.42),
+        inset -4px -4px 0 rgba(74, 111, 109, 0.18);
+    }
+
+    .skill-card::before,
+    .project-card::before {
+      content: "";
+      width: 3rem;
+      height: 3rem;
+      display: block;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid #5b2706;
+      box-shadow:
+        inset -3px -3px 0 #8d3a08,
+        inset 3px 3px 0 #ffd06b,
+        0 0 1.3rem rgba(255, 122, 24, 0.2);
+    }
+
+    .skill-card.coding::before {
+      clip-path: polygon(0 0, 76% 0, 100% 26%, 100% 100%, 0 100%);
+    }
+
+    .skill-card.electronics::before {
+      background: linear-gradient(#7edcd5, #238b8a);
+      box-shadow:
+        inset -3px -3px 0 #105456,
+        inset 3px 3px 0 #b9fff7,
+        0 0 1.3rem rgba(126, 220, 213, 0.22);
+    }
+
+    .skill-card.tools::before {
+      background: linear-gradient(#9bd88d, #5d9b54);
+      box-shadow:
+        inset -3px -3px 0 #315c2d,
+        inset 3px 3px 0 #d7ffd3,
+        0 0 1.3rem rgba(155, 216, 141, 0.2);
+    }
+
+    .skill-card.projects::before {
+      background: linear-gradient(#c780d7, #714190);
+      box-shadow:
+        inset -3px -3px 0 #3f2459,
+        inset 3px 3px 0 #efb8ff,
+        0 0 1.3rem rgba(199, 128, 215, 0.18);
+    }
+
+    .skill-card p,
+    .project-card p {
+      color: var(--muted);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.05rem, 2.4vw, 1.35rem);
+      line-height: 1.02;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+
+    .pill {
+      padding: 0.45rem 0.5rem;
+      color: #ffe0a1;
+      background: rgba(26, 11, 2, 0.7);
+      border: 2px solid rgba(255, 198, 64, 0.25);
+      font-family: var(--readable-pixel);
+      font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .project-board {
+      margin-top: 1rem;
+    }
+
+    .project-card {
+      min-height: 12rem;
+    }
+
+    .project-chip {
+      width: fit-content;
+      padding: 0.45rem 0.5rem;
+      color: #1d0f00;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 3px solid #5b2706;
+      box-shadow:
+        inset -3px -3px 0 #8d3a08,
+        inset 3px 3px 0 #ffd06b;
+      font-size: 0.5rem;
+      line-height: 1.4;
+    }
+
+    @keyframes flameDance {
+      0%,
+      100% {
+        transform: translateX(-50%) translateY(0);
+      }
+
+      50% {
+        transform: translateX(-50%) translateY(-0.18rem) scaleX(1.08);
+      }
+    }
+
+    @media (max-width: 960px) {
+      .camp-hero,
+      .path-links,
+      .skill-grid,
+      .project-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .section-head,
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .status-board,
+      .camp-board {
+        min-height: auto;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .shell {
+        width: min(100vw - 0.8rem, 1180px);
+      }
+
+      .top-actions,
+      .hero-actions {
+        width: 100%;
+      }
+
+      .pixel-button {
+        width: 100%;
+      }
+
+      .camp-board::before,
+      .camp-board::after,
+      .trail-sign::after {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body class="demo-mode">
+  <main class="site" aria-label="Firelight camp">
+    <canvas class="scene-canvas" id="scene-canvas" aria-hidden="true"></canvas>
+    <div class="ambient-vignette" aria-hidden="true"></div>
+
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="./index.html" aria-label="Firelight home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>Firelight</span>
+        </a>
+
+        <div class="top-actions">
+          <a class="pixel-button secondary" href="./product.html">Buy a Kit</a>
+          <button class="pixel-button secondary account-only" id="sign-out" type="button">Sign out</button>
+          <a class="pixel-button signed-out-only" href="./index.html">Sign in</a>
+        </div>
+      </header>
+
+      <p class="demo-banner">Demo camp is showing sample progress.</p>
+
+      <section class="camp-hero" aria-label="Firelight progress">
+        <article class="camp-board">
+          <p class="kicker" id="time-greeting">Good Afternoon</p>
+          <h1 id="hero-title">Ready to build?</h1>
+          <p class="readable" id="hero-copy">Your next build is waiting by the campfire.</p>
+
+          <div class="progress-plank">
+            <div class="progress-label">
+              <span id="build-name">Morse Code</span>
+              <span id="build-percent">42%</span>
+            </div>
+            <div class="bar"><span id="build-bar"></span></div>
+          </div>
+
+          <div class="hero-actions">
+            <a class="pixel-button" id="continue-action" href="./second-tutorial/">Keep Building</a>
+            <a class="pixel-button secondary" href="./learn.html">Open Trail</a>
+          </div>
+        </article>
+
+        <aside class="status-board" aria-label="Camp status">
+          <div class="mini-camp" aria-hidden="true">
+            <span class="mini-mountain left"></span>
+            <span class="mini-mountain right"></span>
+            <span class="mini-tree one"></span>
+            <span class="mini-tree two"></span>
+            <span class="mini-board"></span>
+            <span class="mini-wire"></span>
+            <span class="mini-fire"></span>
+          </div>
+
+          <div class="status-list" id="camp-status">
+            <div class="status-row"><strong>Arduino Nano</strong><span class="state">Connected</span></div>
+            <div class="status-row"><strong>Morse Code</strong><span class="state">Next</span></div>
+            <div class="status-row"><strong>LED</strong><span class="state">Ready</span></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="path-links" aria-label="Main camp paths">
+        <a class="trail-sign" href="./learn.html">
+          <span class="sign-number">1</span>
+          <div>
+            <h2>Learn</h2>
+            <p>Walk the trail one tiny build at a time.</p>
+          </div>
+        </a>
+
+        <a class="trail-sign" href="./tutorial.html">
+          <span class="sign-number">2</span>
+          <div>
+            <h2>Code</h2>
+            <p>Open the builder and send sketches to the Nano.</p>
+          </div>
+        </a>
+
+        <a class="trail-sign" href="./product.html">
+          <span class="sign-number">3</span>
+          <div>
+            <h2>Kit</h2>
+            <p>See the parts in your Firelight box.</p>
+          </div>
+        </a>
+      </section>
+
+      <section class="next-lab" id="next-lab" aria-label="Next Firelight paths">
+        <article class="path-board">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Starter trail complete</p>
+              <h2>Choose your next camp</h2>
+            </div>
+            <span class="unlock-note">Unlocked after Morse</span>
+          </div>
+
+          <div class="skill-grid">
+            <article class="skill-card coding">
+              <h3>Coding</h3>
+              <p>Make sketches less scary: loops, functions, buttons, and clean little blocks.</p>
+              <div class="pill-row">
+                <span class="pill">loops</span>
+                <span class="pill">functions</span>
+                <span class="pill">buttons</span>
+              </div>
+            </article>
+
+            <article class="skill-card electronics">
+              <h3>Electronics</h3>
+              <p>Learn what the parts actually do and why the circuit works.</p>
+              <div class="pill-row">
+                <span class="pill">resistors</span>
+                <span class="pill">breadboard</span>
+                <span class="pill">sensors</span>
+              </div>
+            </article>
+
+            <article class="skill-card tools">
+              <h3>Solder + Multimeter</h3>
+              <p>Practice headers, check voltage, and find broken connections.</p>
+              <div class="pill-row">
+                <span class="pill">solder</span>
+                <span class="pill">voltage</span>
+                <span class="pill">continuity</span>
+              </div>
+            </article>
+
+            <article class="skill-card projects">
+              <h3>Demo Projects</h3>
+              <p>Small builds that feel real, from alarms to moving robots.</p>
+              <div class="pill-row">
+                <span class="pill">build</span>
+                <span class="pill">test</span>
+                <span class="pill">show</span>
+              </div>
+            </article>
+          </div>
+        </article>
+
+        <article class="path-board project-board">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Demo projects</p>
+              <h2>Pick a thing to build next</h2>
+            </div>
+            <span class="unlock-note">Coming soon</span>
+          </div>
+
+          <div class="project-grid">
+            <article class="project-card">
+              <span class="project-chip">LED + button</span>
+              <h3>Reaction Timer</h3>
+              <p>Wait for the flash, press the button, and measure your speed.</p>
+            </article>
+
+            <article class="project-card">
+              <span class="project-chip">Sensor + buzzer</span>
+              <h3>Desk Guard</h3>
+              <p>Use distance sensing to spot movement and trigger a tiny alarm.</p>
+            </article>
+
+            <article class="project-card">
+              <span class="project-chip">Motors + driver</span>
+              <h3>Mini Rover</h3>
+              <p>Turn code into motion with wheels, motors, and a driving brain.</p>
+            </article>
+          </div>
+        </article>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    window.FIRELIGHT_CONFIG = {
+      supabaseUrl: "",
+      supabaseAnonKey: ""
+    };
+  </script>
+  <script src="/config"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const firelightConfig = window.FIRELIGHT_CONFIG || {};
+    const supabaseClient = firelightConfig.supabaseUrl && firelightConfig.supabaseAnonKey && window.supabase
+      ? window.supabase.createClient(firelightConfig.supabaseUrl, firelightConfig.supabaseAnonKey)
+      : null;
+
+    const body = document.body;
+    const timeGreeting = document.getElementById("time-greeting");
+    const heroTitle = document.getElementById("hero-title");
+    const heroCopy = document.getElementById("hero-copy");
+    const buildName = document.getElementById("build-name");
+    const buildPercent = document.getElementById("build-percent");
+    const buildBar = document.getElementById("build-bar");
+    const continueAction = document.getElementById("continue-action");
+    const campStatus = document.getElementById("camp-status");
+    const signOutButton = document.getElementById("sign-out");
+
+    function partOfDay() {
+      const hour = new Date().getHours();
+      if (hour < 12) return "Good Morning";
+      if (hour < 18) return "Good Afternoon";
+      return "Good Evening";
+    }
+
+    function titleName(value) {
+      const clean = String(value || "James").trim();
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+
+    function hasAccess() {
+      return window.localStorage.getItem("firelight-kit-unlocked") === "true";
+    }
+
+    function isDone(key) {
+      return window.localStorage.getItem(key) === "true";
+    }
+
+    function rememberSession(user) {
+      if (!user) return;
+      window.localStorage.setItem("firelight-kit-unlocked", "true");
+      if (user.email) window.localStorage.setItem("firelight-student-email", user.email);
+      if (user.user_metadata?.name) window.localStorage.setItem("firelight-student-name", user.user_metadata.name);
+    }
+
+    function clearSession() {
+      [
+        "firelight-kit-unlocked",
+        "firelight-kit-code",
+        "firelight-local-password",
+        "firelight-student-email",
+        "firelight-student-name",
+        "firelight-started-build-path",
+        "firelight-first-tutorial-complete",
+        "firelight-second-tutorial-complete"
+      ].forEach((key) => window.localStorage.removeItem(key));
+    }
+
+    function renderShell() {
+      const unlocked = hasAccess();
+      const firstDone = isDone("firelight-first-tutorial-complete");
+      const morseDone = isDone("firelight-second-tutorial-complete");
+      const greeting = partOfDay();
+      const name = titleName(window.localStorage.getItem("firelight-student-name"));
+      const showNextCamp = morseDone || !unlocked;
+
+      body.classList.toggle("demo-mode", !unlocked);
+      body.classList.toggle("core-complete", showNextCamp);
+      timeGreeting.textContent = greeting;
+      heroTitle.textContent = unlocked ? `${greeting}, ${name}.` : "Ready by the fire?";
+      heroCopy.textContent = morseDone
+        ? "Starter trail complete. The next camps are open."
+        : unlocked
+          ? "Your next build is waiting by the campfire."
+          : "This is the Firelight camp after the first two builds.";
+
+      let current = {
+        name: "Blink LED",
+        percent: 24,
+        href: "./tutorial.html",
+        label: "Keep Building"
+      };
+
+      if (firstDone && !morseDone) {
+        current = {
+          name: "Morse Code",
+          percent: 42,
+          href: "./second-tutorial/",
+          label: "Keep Building"
+        };
+      }
+
+      if (showNextCamp) {
+        current = {
+          name: "Starter Trail",
+          percent: 100,
+          href: "#next-lab",
+          label: "Choose Next Camp"
+        };
+      }
+
+      buildName.textContent = current.name;
+      buildPercent.textContent = `${current.percent}%`;
+      buildBar.style.width = `${current.percent}%`;
+      continueAction.href = current.href;
+      continueAction.textContent = current.label;
+
+      campStatus.innerHTML = [
+        ["Arduino Nano", "Connected"],
+        [showNextCamp ? "Morse Code" : current.name, showNextCamp ? "Done" : "Next"],
+        [showNextCamp ? "Next Camps" : "LED", showNextCamp ? "Open" : "Ready"]
+      ].map(([label, state]) => `
+        <div class="status-row"><strong>${label}</strong><span class="state">${state}</span></div>
+      `).join("");
+    }
+
+    async function hydrateSession() {
+      if (supabaseClient) {
+        const result = await supabaseClient.auth.getSession();
+        rememberSession(result.data?.session?.user);
+      }
+      renderShell();
+    }
+
+    signOutButton?.addEventListener("click", async () => {
+      if (supabaseClient) await supabaseClient.auth.signOut();
+      clearSession();
+      renderShell();
+    });
+
+    function setupSceneCanvas() {
+      const canvas = document.getElementById("scene-canvas");
+      const ctx = canvas.getContext("2d");
+      const baseWidth = 360;
+      const baseHeight = 202;
+      let animation = 0;
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
+        draw();
+      }
+
+      function px(x, y, w, h, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      }
+
+      function poly(points, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      function tree(x, y, scale, dark) {
+        const trunk = dark ? "#27180e" : "#3a2416";
+        const leaf1 = dark ? "#092220" : "#123b34";
+        const leaf2 = dark ? "#0d302b" : "#1b4f41";
+        px(x - 2 * scale, y - 24 * scale, 4 * scale, 28 * scale, trunk);
+        poly([[x, y - 66 * scale], [x - 22 * scale, y - 28 * scale], [x + 22 * scale, y - 28 * scale]], leaf1);
+        poly([[x, y - 52 * scale], [x - 27 * scale, y - 12 * scale], [x + 27 * scale, y - 12 * scale]], leaf2);
+        poly([[x, y - 34 * scale], [x - 20 * scale, y + 4 * scale], [x + 20 * scale, y + 4 * scale]], leaf1);
+      }
+
+      function drawComputer(x, y) {
+        px(x, y, 25, 18, "#8d98a8");
+        px(x + 3, y + 3, 19, 12, "#1b2028");
+        px(x + 6, y + 5, 13, 8, "#283b4a");
+        px(x + 5, y + 20, 17, 6, "#6b7482");
+        px(x + 1, y + 26, 26, 6, "#55606e");
+        px(x + 22, y + 28, 3, 3, "#a760bc");
+      }
+
+      function drawTent(x, y) {
+        poly([[x, y], [x + 38, y - 35], [x + 76, y]], "#6d331b");
+        poly([[x + 8, y - 2], [x + 38, y - 29], [x + 68, y - 2]], "#c06125");
+        poly([[x + 28, y], [x + 42, y - 20], [x + 52, y]], "#211410");
+        px(x + 11, y - 6, 4, 4, "#f29b2d");
+        px(x + 61, y - 6, 4, 4, "#f29b2d");
+      }
+
+      function drawBench(x, y, flip) {
+        const direction = flip ? -1 : 1;
+        px(x, y, 48 * direction, 5, "#7a431f");
+        px(x + 4 * direction, y + 6, 42 * direction, 4, "#4b2a18");
+        px(x + 10 * direction, y + 10, 4 * direction, 14, "#29170e");
+        px(x + 35 * direction, y + 10, 4 * direction, 14, "#29170e");
+      }
+
+      function drawBackpack(x, y) {
+        px(x, y, 19, 27, "#8f4026");
+        px(x + 3, y - 6, 13, 8, "#6e2f20");
+        px(x + 4, y + 7, 11, 7, "#b7562c");
+        px(x + 15, y + 9, 5, 12, "#4b2719");
+      }
+
+      function drawCampfire(x, y) {
+        px(x - 18, y + 9, 36, 5, "#2d180c");
+        px(x - 22, y + 12, 18, 4, "#5b2c12");
+        px(x + 4, y + 12, 18, 4, "#5b2c12");
+        px(x - 2, y - 9 + Math.round(Math.sin(animation / 10) * 2), 5, 17, "#fff0a6");
+        px(x - 8, y - 4 + Math.round(Math.cos(animation / 9) * 2), 8, 18, "#ff8a19");
+        px(x + 2, y - 2 + Math.round(Math.sin(animation / 8) * 2), 8, 16, "#f44313");
+        px(x - 4, y - 17, 7, 10, "#ffc93f");
+      }
+
+      function draw() {
+        const scale = Math.max(canvas.width / baseWidth, canvas.height / baseHeight);
+        const width = canvas.width / scale;
+        const height = canvas.height / scale;
+        const offsetX = (baseWidth - width) / 2;
+        const offsetY = (baseHeight - height) / 2;
+
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(scale, 0, 0, scale, -offsetX * scale, -offsetY * scale);
+        ctx.clearRect(0, 0, baseWidth, baseHeight);
+
+        const gradient = ctx.createLinearGradient(0, 0, 0, baseHeight);
+        gradient.addColorStop(0, "#050918");
+        gradient.addColorStop(0.52, "#102b46");
+        gradient.addColorStop(1, "#101410");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, baseWidth, baseHeight);
+
+        for (let i = 0; i < 74; i += 1) {
+          const x = (i * 47) % baseWidth;
+          const y = 8 + ((i * 29) % 73);
+          const twinkle = (i + Math.floor(animation / 18)) % 5 === 0;
+          px(x, y, twinkle ? 2 : 1, twinkle ? 2 : 1, twinkle ? "#fff0bd" : "#5b7392");
+        }
+
+        poly([[0, 108], [42, 48], [87, 110]], "#0b2133");
+        poly([[58, 118], [124, 44], [184, 118]], "#12314d");
+        poly([[145, 112], [213, 58], [276, 112]], "#0d2942");
+        poly([[238, 116], [314, 44], [382, 116]], "#102d45");
+        poly([[42, 48], [54, 67], [32, 67]], "#284d62");
+        poly([[124, 44], [141, 66], [105, 66]], "#315d70");
+        poly([[314, 44], [330, 68], [294, 68]], "#2b5367");
+
+        px(0, 108, 360, 94, "#0c1e1b");
+        poly([[0, 139], [70, 124], [134, 135], [202, 119], [280, 132], [360, 120], [360, 202], [0, 202]], "#173b32");
+        poly([[0, 160], [44, 147], [102, 154], [181, 143], [252, 154], [360, 145], [360, 202], [0, 202]], "#244a3c");
+        poly([[0, 178], [83, 168], [151, 177], [225, 163], [288, 174], [360, 166], [360, 202], [0, 202]], "#1b332c");
+
+        tree(14, 142, 0.78, true);
+        tree(49, 136, 0.7, true);
+        tree(314, 142, 0.85, true);
+        tree(342, 137, 0.65, true);
+        tree(276, 136, 0.56, false);
+        tree(112, 138, 0.46, false);
+
+        drawTent(29, 154);
+        drawComputer(41, 158);
+        drawBench(104, 161, false);
+        drawBench(255, 161, true);
+        drawBackpack(306, 158);
+        drawCampfire(180, 161);
+
+        px(0, 195, baseWidth, 7, "#030509");
+        ctx.restore();
+      }
+
+      function animate() {
+        animation += 1;
+        draw();
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      animate();
+    }
+
+    setupSceneCanvas();
+    hydrateSession();
+  </script>
+</body>
+</html>

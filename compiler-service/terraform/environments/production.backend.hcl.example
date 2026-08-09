@@ -1,0 +1,9 @@
+# Copy outside version control and replace every FIRELIGHT_* placeholder.
+# Production must have an independently protected state object and approval.
+bucket              = "FIRELIGHT_PRODUCTION_STATE_BUCKET"
+key                 = "firelight/compiler/production/terraform.tfstate"
+region              = "eu-west-1"
+encrypt             = true
+use_lockfile        = true
+kms_key_id          = "arn:aws:kms:eu-west-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+allowed_account_ids = ["222222222222"]

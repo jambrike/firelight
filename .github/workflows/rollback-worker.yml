@@ -1,0 +1,237 @@
+name: Roll back Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      version_id:
+        description: Previously verified Cloudflare Worker version ID
+        required: true
+        type: string
+      expected_build_id:
+        description: Commit SHA persisted on the selected Worker version
+        required: true
+        type: string
+      release_run_id:
+        description: Exact successful release workflow run that accepted this Worker version
+        required: true
+        type: string
+      confirmation:
+        description: Type ROLLBACK to confirm
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require an explicit rollback from main
+        shell: bash
+        env:
+          ROLLBACK_CONFIRMATION: ${{ inputs.confirmation }}
+          ROLLBACK_REF: ${{ github.ref }}
+          ROLLBACK_SHA: ${{ github.sha }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$ROLLBACK_CONFIRMATION" != "ROLLBACK" ]]; then
+            echo "The Worker rollback confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$ROLLBACK_REF" != "refs/heads/main" ]]; then
+            echo "Worker rollbacks must be dispatched from main." >&2
+            exit 1
+          fi
+          if [[ ! "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The Worker rollback must resolve to one lowercase commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]; then
+            echo "The accepted release run ID is invalid." >&2
+            exit 1
+          fi
+
+  rollback:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind the rollback implementation to its dispatched commit
+        shell: bash
+        env:
+          ROLLBACK_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ROLLBACK_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ || "$(git rev-parse HEAD)" != "$ROLLBACK_WORKFLOW_SHA" ]]; then
+            echo "The Worker rollback workflow commit is invalid." >&2
+            exit 1
+          fi
+      - name: Check out current main for rollback ancestry proof
+        id: rollback-main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: refs/heads/main
+          path: rollback-main
+          persist-credentials: false
+      - name: Require a valid release commit already present on current main
+        working-directory: rollback-main
+        env:
+          EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+          ROLLBACK_MAIN_SHA: ${{ steps.rollback-main.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$ROLLBACK_MAIN_SHA" =~ ^[0-9a-f]{40}$ || "$(git rev-parse HEAD)" != "$ROLLBACK_MAIN_SHA" ]]; then
+            echo "The rollback ancestry checkout is invalid." >&2
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_BUILD_ID" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The rollback build must be one lowercase commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${EXPECTED_BUILD_ID}^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BUILD_ID" "$ROLLBACK_MAIN_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prepare the source-pinned rollback compiler fixture
+        env:
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-rollback-lesson-fixtures
+        run: node scripts/export-lesson-sketches.mjs "$LESSON_FIXTURES"
+      - name: Load the source-pinned Supabase environment anchors
+        id: release-anchors
+        run: >-
+          node scripts/verify-release-environment-anchors.mjs
+          .github/supabase-project-anchors.json >> "$GITHUB_OUTPUT"
+      - name: Prove the selected protected Supabase rollback target
+        id: current-project
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && steps.release-anchors.outputs.production_project_ref_identity_hash || steps.release-anchors.outputs.staging_project_ref_identity_hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ steps.release-anchors.outputs.organization_identity_hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && steps.release-anchors.outputs.staging_project_ref_identity_hash || steps.release-anchors.outputs.production_project_ref_identity_hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs >> "$GITHUB_OUTPUT"
+      - name: Find the successful accepted release run
+        id: accepted-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FIRELIGHT_RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_RELEASE_BUILD_ID: ${{ inputs.expected_build_id }}
+          FIRELIGHT_RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: node scripts/verify-release-run.mjs >> "$GITHUB_OUTPUT"
+      - name: Download the accepted release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: firelight-release-evidence-${{ inputs.environment }}-${{ inputs.expected_build_id }}
+          path: ${{ runner.temp }}/firelight-release-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.accepted-release.outputs.release_run_id }}
+      - name: Bind the requested version to accepted release evidence
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FIRELIGHT_RELEASE_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_RELEASE_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          FIRELIGHT_RELEASE_BUILD_ID: ${{ inputs.expected_build_id }}
+          FIRELIGHT_RELEASE_EVIDENCE_PATH: ${{ runner.temp }}/firelight-release-artifact/firelight-release-evidence.json
+          FIRELIGHT_SUPABASE_ANCHOR_SET_SHA256: ${{ steps.release-anchors.outputs.anchor_set_sha256 }}
+          FIRELIGHT_SUPABASE_PROJECT_REF_IDENTITY_SHA256: ${{ steps.current-project.outputs.project_ref_identity_hash }}
+          FIRELIGHT_SUPABASE_ORGANIZATION_IDENTITY_SHA256: ${{ steps.current-project.outputs.organization_identity_hash }}
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+        run: node scripts/verify-release-artifact.mjs
+      - name: Verify the requested version in the exact Worker inventory
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+          ROLLBACK_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          ROLLBACK_EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+        run: node scripts/verify-worker-version.mjs
+      - name: Check out the accepted release content for its canary
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.expected_build_id }}
+          path: rollback-target
+          persist-credentials: false
+      - name: Probe the current compatible compiler before rollback traffic changes
+        shell: bash
+        env:
+          COMPILER_SERVICE_URL: ${{ secrets.COMPILER_SERVICE_URL }}
+          COMPILER_SERVICE_ORIGIN: ${{ secrets.COMPILER_SERVICE_ORIGIN }}
+          COMPILER_SERVICE_HOST: ${{ secrets.COMPILER_SERVICE_HOST }}
+          COMPILER_SERVICE_TOKEN: ${{ secrets.COMPILER_SERVICE_TOKEN }}
+          FIRELIGHT_COMPILER_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_COMPILER_RELEASE_BUILD_ID: ${{ secrets.COMPILER_SERVICE_BUILD_ID }}
+          FIRELIGHT_COMPILER_IMAGE_DIGEST: ${{ secrets.COMPILER_SERVICE_IMAGE_DIGEST }}
+          LESSON_FIXTURES: ${{ runner.temp }}/firelight-rollback-lesson-fixtures
+        run: |
+          set -euo pipefail
+          python3 compiler-service/scripts/probe_deployment.py \
+            --source-file "$LESSON_FIXTURES/first_spark/first_spark.ino"
+      - name: Recheck the protected Supabase target immediately before rollback
+        env:
+          FIRELIGHT_EXPECTED_PROJECT_IDENTITY_HASH: ${{ steps.current-project.outputs.project_identity_hash }}
+          FIRELIGHT_EXPECTED_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && steps.release-anchors.outputs.production_project_ref_identity_hash || steps.release-anchors.outputs.staging_project_ref_identity_hash }}
+          FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH: ${{ steps.release-anchors.outputs.organization_identity_hash }}
+          FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH: ${{ inputs.environment == 'production' && steps.release-anchors.outputs.staging_project_ref_identity_hash || steps.release-anchors.outputs.production_project_ref_identity_hash }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_ORGANIZATION_ID: ${{ secrets.SUPABASE_ORGANIZATION_ID }}
+          SUPABASE_PROJECT_NAME: ${{ secrets.SUPABASE_PROJECT_NAME }}
+        run: node scripts/verify-supabase-project.mjs
+      - name: Roll back to the verified Worker version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+          ROLLBACK_WORKER_NAME: ${{ inputs.environment == 'production' && 'firelight-production' || 'firelight-staging' }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+        run: >-
+          npx wrangler rollback "$ROLLBACK_VERSION_ID"
+          --env "$ROLLBACK_ENVIRONMENT"
+          --name "$ROLLBACK_WORKER_NAME"
+          --message "Approved incident rollback from GitHub Actions"
+          --yes
+      - name: Verify rolled-back identity and compiler dependencies
+        env:
+          FIRELIGHT_BASE_URL: ${{ inputs.environment == 'production' && 'https://firelight.ie' || 'https://staging.firelight.ie' }}
+          FIRELIGHT_EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
+          FIRELIGHT_EXPECTED_BUILD_ID: ${{ inputs.expected_build_id }}
+          FIRELIGHT_EXPECTED_SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          FIRELIGHT_CANARY_EMAIL: ${{ secrets.FIRELIGHT_CANARY_EMAIL }}
+          FIRELIGHT_CANARY_PASSWORD: ${{ secrets.FIRELIGHT_CANARY_PASSWORD }}
+          FIRELIGHT_CANARY_REPOSITORY_ROOT: ${{ github.workspace }}/rollback-target
+        run: node scripts/postdeploy-canary.mjs

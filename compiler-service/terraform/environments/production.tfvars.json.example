@@ -1,0 +1,15 @@
+{
+  "environment": "production",
+  "aws_account_id": "222222222222",
+  "service_name": "firelight-compiler-prd",
+  "deployment_role_name": "FirelightCompilerProductionDeploy",
+  "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "release_build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "auth_secret_arn": "arn:aws:secretsmanager:eu-west-1:222222222222:secret:firelight/production/compiler-auth-AbCdEf",
+  "auth_secret_kms_key_arn": null,
+  "vpc_cidr": "10.43.0.0/20",
+  "gateway_reserved_concurrency": 5,
+  "compiler_desired_count": 2,
+  "enable_deletion_protection": true,
+  "log_retention_days": 14
+}

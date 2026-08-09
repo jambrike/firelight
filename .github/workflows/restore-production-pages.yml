@@ -1,0 +1,116 @@
+name: Restore production Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      current_worker_version_id:
+        description: Current firelight-production Worker version UUID
+        required: true
+        type: string
+      current_worker_build_id:
+        description: Commit SHA embedded in that Worker version
+        required: true
+        type: string
+      confirmation:
+        description: Type RESTORE_FIRELIGHT_IE_PAGES to remove only the overlay route
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require an explicit Pages restore from main
+        shell: bash
+        env:
+          RESTORE_CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$RESTORE_CONFIRMATION" != "RESTORE_FIRELIGHT_IE_PAGES" ]]; then
+            echo "The production Pages restore confirmation did not match." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "Production Pages restore must be dispatched from main." >&2
+            exit 1
+          fi
+
+  restore:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://firelight.ie
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Bind the restore implementation to its dispatched main commit
+        shell: bash
+        env:
+          RESTORE_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RESTORE_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ || "$(git rev-parse HEAD)" != "$RESTORE_WORKFLOW_SHA" ]]; then
+            echo "The production restore workflow commit is invalid." >&2
+            exit 1
+          fi
+      - name: Require the Worker build to be a commit already on main
+        shell: bash
+        env:
+          EXPECTED_BUILD_ID: ${{ inputs.current_worker_build_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_BUILD_ID" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The current Worker build must be one lowercase commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${EXPECTED_BUILD_ID}^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_BUILD_ID" origin/main
+      - name: Prove the retained Pages deployment before removing the route
+        id: pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FIRELIGHT_EXPECTED_PAGES_DEPLOYMENT_ID: 06b4410d-37ff-4526-ac71-5fc4e65bee91
+          FIRELIGHT_EXPECTED_PAGES_COMMIT_SHA: 38e05a32af5e8506e5f4f5d3b516b1f3c405d2c7
+          FIRELIGHT_EXPECTED_LEGACY_PAGES_EVIDENCE_HASH: 02b573aae8d9cfa71312a4e968d0e1f0cab049341519cc782128f5a68e989b4e
+          FIRELIGHT_LEGACY_PAGES_PUBLIC_MODE: deployment-only
+        run: node scripts/verify-legacy-pages.mjs >> "$GITHUB_OUTPUT"
+      - name: Remove only the verified production Worker overlay route
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FIRELIGHT_RESTORE_CONFIRMATION: ${{ inputs.confirmation }}
+          FIRELIGHT_RESTORE_VERSION_ID: ${{ inputs.current_worker_version_id }}
+          FIRELIGHT_RESTORE_EXPECTED_BUILD_ID: ${{ inputs.current_worker_build_id }}
+        run: node scripts/restore-production-pages.mjs
+      - name: Prove the exact retained Pages deployment now owns production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          FIRELIGHT_EXPECTED_PAGES_DEPLOYMENT_ID: 06b4410d-37ff-4526-ac71-5fc4e65bee91
+          FIRELIGHT_EXPECTED_PAGES_COMMIT_SHA: 38e05a32af5e8506e5f4f5d3b516b1f3c405d2c7
+          FIRELIGHT_EXPECTED_LEGACY_PAGES_EVIDENCE_HASH: ${{ steps.pages.outputs.legacy_pages_evidence_hash }}
+          FIRELIGHT_LEGACY_PAGES_PUBLIC_MODE: matched
+        run: node scripts/verify-legacy-pages.mjs

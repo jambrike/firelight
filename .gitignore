@@ -1,8 +1,16 @@
 dist/
 node_modules/
 .wrangler/
+.coverage/
+coverage/
+*.tsbuildinfo
 .dev.vars
+.dev.vars.*
 .env
 .env.*
 !.env.example
 supabase/.temp/
+worker-startup.cpuprofile
+*.candidate.json
+playwright-report/
+test-results/

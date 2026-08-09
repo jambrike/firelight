@@ -1,0 +1,2774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firelight Morse Tutorial</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --cream: #fff2ce;
+      --soft-cream: rgba(255, 242, 206, 0.82);
+      --ember: #ff7a18;
+      --gold: #ffc640;
+      --wood: #7b421c;
+      --wood-dark: #2e1305;
+      --moss: #7aa36a;
+      --berry: #c4606e;
+      --sky-glass: #5fa7a0;
+      --ink: #05070d;
+      --panel: rgba(6, 10, 16, 0.9);
+      --teal: #285c59;
+      --pixel: "Press Start 2P", "Courier New", monospace;
+      --readable-pixel: "VT323", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: var(--cream);
+      font-family: var(--pixel);
+      letter-spacing: 0;
+    }
+
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .site {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 50% 78%, rgba(255, 122, 24, 0.18), transparent 22rem),
+        linear-gradient(#050714 0%, #071120 48%, #0d1918 100%);
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+    }
+
+    .vignette {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 60%, transparent 0 15rem, rgba(0, 0, 0, 0.32) 35rem),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.6), transparent 22%, transparent 78%, rgba(0, 0, 0, 0.64)),
+        linear-gradient(rgba(0, 0, 0, 0.12), transparent 34%, rgba(0, 0, 0, 0.62));
+    }
+
+    .back {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      z-index: 8;
+      display: inline-grid;
+      place-items: center;
+      min-height: 2.8rem;
+      padding: 0 0.85rem;
+      color: #241100;
+      background: linear-gradient(#f4b945, #e89122);
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+      text-decoration: none;
+      font-size: 0.58rem;
+    }
+
+    .back:active,
+    .pixel-button:active,
+    .soft-button:active {
+      transform: translateY(3px);
+    }
+
+    .deck,
+    .workshop {
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+      display: grid;
+      place-items: center;
+      padding: 4.8rem 1.25rem 1.25rem;
+    }
+
+    .slide-card,
+    .mission-card {
+      background:
+        linear-gradient(rgba(45, 25, 13, 0.94), rgba(5, 9, 15, 0.92)),
+        repeating-linear-gradient(90deg, rgba(255, 188, 92, 0.05) 0 3px, transparent 3px 18px);
+      border: 4px solid var(--wood);
+      box-shadow:
+        0 0 0 4px rgba(28, 12, 4, 0.96),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.36),
+        inset 5px 5px 0 rgba(255, 195, 100, 0.14),
+        0 1.4rem 4rem rgba(0, 0, 0, 0.55),
+        0 0 3rem rgba(255, 122, 24, 0.16);
+    }
+
+    .slide-card {
+      width: min(54rem, calc(100vw - 2.5rem));
+      min-height: 30rem;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 1rem;
+      padding: 1rem;
+    }
+
+    .slide-top,
+    .mission-top,
+    .code-top,
+    .terminal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      min-width: 0;
+    }
+
+    .kicker,
+    .slide-kicker {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.62rem;
+      line-height: 1.65;
+    }
+
+    .spark-track {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .spark-dot {
+      width: 0.58rem;
+      height: 0.58rem;
+      background: rgba(255, 242, 206, 0.2);
+      box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.3);
+    }
+
+    .spark-dot.done,
+    .spark-dot.active {
+      background: #ffb13b;
+      box-shadow: 0 0 0.8rem rgba(255, 122, 24, 0.58);
+    }
+
+    .spark-dot.active {
+      background: #fff0a6;
+    }
+
+    .slide-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 12rem;
+      gap: 1rem;
+      align-items: center;
+      min-height: 0;
+    }
+
+    .slide-title {
+      margin: 0.3rem 0 0;
+      color: #fff4d3;
+      font-size: 1.55rem;
+      line-height: 1.28;
+      text-shadow: 0 0 1.2rem rgba(255, 122, 24, 0.32);
+    }
+
+    .slide-copy,
+    .panel-copy,
+    .status {
+      margin: 0.85rem 0 0;
+      color: var(--soft-cream);
+      font-family: var(--readable-pixel);
+      font-size: 1.55rem;
+      line-height: 1.05;
+    }
+
+    .slide-art {
+      min-height: 18rem;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+    }
+
+    .coach {
+      position: relative;
+      width: 5.8rem;
+      height: 6.4rem;
+      image-rendering: pixelated;
+      filter: drop-shadow(0 0 1rem rgba(255, 122, 24, 0.32));
+    }
+
+    .coach::before {
+      content: "";
+      position: absolute;
+      left: 1.55rem;
+      top: 0.1rem;
+      width: 2.6rem;
+      height: 2.35rem;
+      background: #ffd292;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        -0.65rem -0.15rem 0 #5b2a16,
+        0.65rem -0.15rem 0 #5b2a16,
+        inset 0.35rem 0 0 rgba(255, 255, 255, 0.24);
+    }
+
+    .coach::after {
+      content: "";
+      position: absolute;
+      left: 1rem;
+      top: 2.45rem;
+      width: 3.6rem;
+      height: 3rem;
+      background: #d8572c;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -0.42rem -0.42rem 0 #8d2d18,
+        inset 0.36rem 0.36rem 0 #ff8f45;
+    }
+
+    .coach-face {
+      position: absolute;
+      left: 2.15rem;
+      top: 1.15rem;
+      z-index: 1;
+      width: 0.28rem;
+      height: 0.28rem;
+      background: var(--wood-dark);
+      box-shadow: 1rem 0 0 var(--wood-dark), 0.5rem 0.65rem 0 #a9482a;
+    }
+
+    .lamp-art,
+    .ready-art {
+      position: relative;
+      width: 10rem;
+      height: 10rem;
+    }
+
+    .lamp-stand {
+      position: absolute;
+      left: 4.5rem;
+      bottom: 1.8rem;
+      width: 1rem;
+      height: 4.8rem;
+      background: #5b2c12;
+      border: 3px solid var(--wood-dark);
+    }
+
+    .lamp-light {
+      position: absolute;
+      left: 2.7rem;
+      top: 1.6rem;
+      width: 4.6rem;
+      height: 4.1rem;
+      background: #ffc640;
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -0.65rem -0.65rem 0 #f08218,
+        inset 0.45rem 0.45rem 0 #fff0a6,
+        0 0 2.2rem rgba(255, 198, 64, 0.6);
+    }
+
+    .signal-beam {
+      position: absolute;
+      left: -1.3rem;
+      top: 3.1rem;
+      width: 2.2rem;
+      height: 0.7rem;
+      background: #fff0a6;
+      box-shadow:
+        3.1rem -1.35rem 0 #ffb13b,
+        6.1rem 0.55rem 0 #fff0a6,
+        8.6rem -0.85rem 0 #ffb13b;
+      animation: twinkle 1200ms steps(2, end) infinite;
+    }
+
+    .helper-stack {
+      width: min(18rem, 100%);
+      display: grid;
+      gap: 0.7rem;
+    }
+
+    .helper-line,
+    .name-chip,
+    .hint-box {
+      color: #fff4d3;
+      background: rgba(3, 7, 12, 0.76);
+      border: 3px solid #315b55;
+      box-shadow:
+        inset -3px -3px 0 rgba(0, 0, 0, 0.28),
+        inset 3px 3px 0 rgba(105, 169, 143, 0.16);
+    }
+
+    .helper-line {
+      padding: 0.72rem;
+      font-family: "Courier New", monospace;
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    .name-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+
+    .name-chip {
+      min-width: 4.2rem;
+      padding: 0.62rem;
+      text-align: center;
+      font-size: 0.55rem;
+      line-height: 1.5;
+    }
+
+    .name-chip strong {
+      display: block;
+      margin-bottom: 0.35rem;
+      color: #ffc46a;
+      font-size: 0.78rem;
+    }
+
+    .ready-art {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+    }
+
+    .slide-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+
+    .pixel-button,
+    .soft-button {
+      min-height: 3.15rem;
+      border: 4px solid var(--wood-dark);
+      transition: transform 120ms ease, filter 160ms ease, box-shadow 160ms ease;
+    }
+
+    .pixel-button {
+      padding: 0 1.1rem;
+      color: #1f0c02;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -5px -5px 0 #8d3a08,
+        inset 5px 5px 0 #ffd06b,
+        0 5px 0 #1f0c02,
+        0 0 1.1rem rgba(255, 122, 24, 0.22);
+      font-size: 0.62rem;
+    }
+
+    .soft-button {
+      padding: 0 1rem;
+      color: #ffe8b4;
+      background: rgba(22, 36, 38, 0.78);
+      border-color: #315b55;
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.3),
+        inset 4px 4px 0 rgba(105, 169, 143, 0.16);
+      font-size: 0.58rem;
+    }
+
+    .pixel-button:hover,
+    .soft-button:hover {
+      filter: brightness(1.08);
+    }
+
+    .pixel-button:disabled,
+    .soft-button:disabled {
+      opacity: 0.48;
+      cursor: not-allowed;
+      filter: grayscale(0.45);
+    }
+
+    .mission-card {
+      position: relative;
+      width: min(88rem, calc(100vw - 3rem));
+      height: min(43rem, calc(100vh - 6.6rem));
+      min-height: 34rem;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      padding: 0.95rem;
+      background:
+        linear-gradient(90deg, rgba(255, 198, 64, 0.08), transparent 11%, transparent 89%, rgba(123, 66, 28, 0.18)),
+        linear-gradient(rgba(50, 26, 13, 0.96), rgba(8, 10, 16, 0.92)),
+        repeating-linear-gradient(90deg, rgba(255, 188, 92, 0.045) 0 3px, transparent 3px 23px);
+      border-color: #8d4a1c;
+      transform: rotate(-0.18deg);
+    }
+
+    .mission-card::before,
+    .mission-card::after {
+      content: "";
+      position: absolute;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .mission-card::before {
+      left: 1.15rem;
+      right: 1.15rem;
+      top: 0.45rem;
+      height: 0.55rem;
+      background: rgba(255, 198, 64, 0.13);
+      box-shadow:
+        13rem 0.1rem 0 rgba(255, 122, 24, 0.09),
+        39rem 0.04rem 0 rgba(122, 163, 106, 0.08);
+    }
+
+    .mission-card::after {
+      width: 0.85rem;
+      height: 0.85rem;
+      right: 1.1rem;
+      top: 1rem;
+      background: #7aa36a;
+      box-shadow:
+        -1.35rem 0.25rem 0 #c07a36,
+        -0.55rem 1.35rem 0 #c4606e;
+    }
+
+    .mission-top {
+      position: relative;
+      z-index: 2;
+      padding: 0.15rem 0.2rem 0.85rem;
+      border-bottom: 0;
+    }
+
+    .mission-top::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0.25rem;
+      bottom: 0;
+      height: 3px;
+      background:
+        linear-gradient(90deg, rgba(255, 198, 64, 0.22), rgba(95, 167, 160, 0.3), rgba(196, 96, 110, 0.18));
+      box-shadow: 0 0 0.75rem rgba(255, 122, 24, 0.12);
+    }
+
+    .mission-brand {
+      min-width: 0;
+      display: grid;
+      gap: 0.28rem;
+    }
+
+    .mission-title {
+      margin: 0;
+      color: #fff4d3;
+      font-size: 1rem;
+      line-height: 1.35;
+      text-shadow: 0 0 1rem rgba(255, 122, 24, 0.28);
+    }
+
+    .name-tools {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      min-width: 0;
+    }
+
+    .name-tools label {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 0;
+      color: rgba(255, 242, 206, 0.72);
+      font-size: 0.58rem;
+      line-height: 1.6;
+    }
+
+    .name-tools input {
+      width: 10.5rem;
+      min-height: 2.5rem;
+      padding: 0.55rem;
+      color: #fff7df;
+      background:
+        radial-gradient(circle at 90% 30%, rgba(255, 198, 64, 0.08), transparent 4rem),
+        rgba(2, 5, 12, 0.78);
+      border: 3px solid #5f7770;
+      box-shadow:
+        inset 4px 4px 0 rgba(0, 0, 0, 0.42),
+        inset -4px -4px 0 rgba(122, 163, 106, 0.14);
+      font-size: 0.62rem;
+      outline: none;
+    }
+
+    .hint-wrap {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+    }
+
+    .hint-button {
+      display: grid;
+      place-items: center;
+      width: 2.35rem;
+      height: 2.35rem;
+      color: #241100;
+      background: linear-gradient(#d6eca9, #7aa36a);
+      border: 3px solid var(--wood-dark);
+      box-shadow:
+        inset -3px -3px 0 #4a713e,
+        inset 3px 3px 0 #eff9c8,
+        0 3px 0 #1f0c02;
+      font-size: 0.78rem;
+      line-height: 1;
+    }
+
+    .hint-button[aria-expanded="true"] {
+      filter: brightness(1.08);
+    }
+
+    .hint-popout {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 0.55rem);
+      right: -0.15rem;
+      width: min(22rem, calc(100vw - 2rem));
+      padding: 0.78rem;
+      color: rgba(255, 242, 206, 0.92);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255, 198, 64, 0.1), transparent 7rem),
+        rgba(4, 7, 12, 0.96);
+      border: 3px solid rgba(122, 163, 106, 0.72);
+      box-shadow:
+        0 0 0 3px rgba(16, 7, 2, 0.82),
+        inset -3px -3px 0 rgba(0, 0, 0, 0.28),
+        inset 3px 3px 0 rgba(214, 236, 169, 0.08),
+        0 1rem 2rem rgba(0, 0, 0, 0.46);
+      font-family: var(--readable-pixel);
+      font-size: 1.2rem;
+      line-height: 1.05;
+    }
+
+    .board-pill {
+      color: rgba(255, 242, 206, 0.7);
+      font-size: 0.62rem;
+      line-height: 1.6;
+      white-space: nowrap;
+    }
+
+    .mission-body {
+      position: relative;
+      z-index: 2;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(18rem, 0.86fr) minmax(28rem, 1.22fr) minmax(18rem, 0.72fr);
+      gap: 0.85rem;
+      padding-top: 0.85rem;
+    }
+
+    .target-panel,
+    .code-panel,
+    .terminal-panel {
+      position: relative;
+      min-height: 0;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(255, 198, 64, 0.09), transparent 8rem),
+        linear-gradient(rgba(9, 18, 18, 0.82), rgba(3, 7, 11, 0.9)),
+        repeating-linear-gradient(90deg, rgba(255, 188, 92, 0.02) 0 2px, transparent 2px 18px);
+      border: 3px solid rgba(95, 167, 160, 0.68);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.34),
+        inset 4px 4px 0 rgba(90, 132, 122, 0.12),
+        0 1.2rem 3.2rem rgba(0, 0, 0, 0.42);
+    }
+
+    .target-panel::before,
+    .code-panel::before,
+    .terminal-panel::before {
+      content: "";
+      position: absolute;
+      top: -0.62rem;
+      left: 1.2rem;
+      width: 3.6rem;
+      height: 1rem;
+      background: rgba(255, 198, 64, 0.3);
+      border: 2px solid rgba(46, 19, 5, 0.72);
+      box-shadow:
+        inset -3px -3px 0 rgba(141, 58, 8, 0.24),
+        inset 3px 3px 0 rgba(255, 240, 166, 0.18),
+        0 0.35rem 0.85rem rgba(0, 0, 0, 0.26);
+      transform: rotate(-4deg);
+    }
+
+    .target-panel {
+      transform: rotate(-0.35deg);
+      border-color: rgba(122, 163, 106, 0.7);
+    }
+
+    .code-panel {
+      transform: rotate(0.18deg);
+    }
+
+    .terminal-panel {
+      transform: rotate(0.32deg);
+      border-color: rgba(196, 96, 110, 0.58);
+    }
+
+    .code-panel::before {
+      left: auto;
+      right: 1.5rem;
+      width: 4.2rem;
+      background: rgba(95, 167, 160, 0.32);
+      transform: rotate(3deg);
+    }
+
+    .terminal-panel::before {
+      left: 50%;
+      width: 3.25rem;
+      background: rgba(196, 96, 110, 0.28);
+      transform: translateX(-50%) rotate(-2deg);
+    }
+
+    .target-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 0.78rem;
+      padding: 0.82rem;
+    }
+
+    .terminal-panel {
+      display: grid;
+      grid-template-rows: auto auto auto auto minmax(0, 1fr);
+      padding: 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.8rem;
+      line-height: 1.55;
+    }
+
+    .mini-label {
+      margin: 0 0 0.4rem;
+      color: rgba(255, 242, 206, 0.58);
+      font-size: 0.52rem;
+      line-height: 1.6;
+    }
+
+    .panel-copy {
+      margin-top: 0.45rem;
+      font-size: 1.2rem;
+    }
+
+    .letter-board {
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      gap: 0.45rem;
+      overflow: auto;
+      padding-right: 0.1rem;
+    }
+
+    .letter-tile {
+      display: grid;
+      grid-template-columns: 2rem minmax(0, 1fr) 1rem;
+      gap: 0.55rem;
+      align-items: center;
+      padding: 0.48rem;
+      background:
+        linear-gradient(90deg, rgba(122, 163, 106, 0.08), transparent 45%),
+        rgba(3, 7, 12, 0.42);
+      border: 2px solid rgba(255, 198, 64, 0.12);
+      color: rgba(255, 242, 206, 0.8);
+    }
+
+    .letter-tile.active {
+      border-color: rgba(255, 198, 64, 0.74);
+      background:
+        linear-gradient(90deg, rgba(255, 198, 64, 0.13), rgba(95, 167, 160, 0.06)),
+        rgba(3, 7, 12, 0.62);
+      box-shadow: 0 0 1.35rem rgba(255, 122, 24, 0.13);
+    }
+
+    .letter-tile.done {
+      border-color: rgba(122, 163, 106, 0.85);
+      color: #e5ffe7;
+    }
+
+    .letter {
+      display: grid;
+      place-items: center;
+      width: 1.85rem;
+      height: 1.85rem;
+      color: #241100;
+      background: linear-gradient(#ffd36f, #f09a22);
+      border: 3px solid var(--wood-dark);
+      box-shadow: inset -3px -3px 0 #8d3a08, inset 3px 3px 0 #ffe08c;
+      font-size: 0.6rem;
+    }
+
+    .letter-tile:nth-child(3n + 2) .letter {
+      background: linear-gradient(#f4c8a1, #d8874a);
+    }
+
+    .letter-tile:nth-child(3n) .letter {
+      background: linear-gradient(#c5d995, #7aa36a);
+    }
+
+    .letter-code {
+      min-width: 0;
+      color: #fff1c7;
+      font-family: var(--readable-pixel);
+      font-size: 1.08rem;
+      line-height: 1;
+    }
+
+    .letter-status {
+      width: 0.72rem;
+      height: 0.72rem;
+      justify-self: end;
+      background: rgba(255, 242, 206, 0.18);
+      box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.26);
+    }
+
+    .letter-tile.done .letter-status {
+      background: #b4d98a;
+      box-shadow: 0 0 0.8rem rgba(180, 217, 138, 0.45);
+    }
+
+    .hint-box {
+      padding: 0.75rem;
+      font-family: var(--readable-pixel);
+      font-size: 1.25rem;
+      line-height: 1.05;
+    }
+
+    .current-card {
+      position: relative;
+      min-height: 9.4rem;
+      display: grid;
+      grid-template-columns: 4.5rem minmax(0, 1fr);
+      gap: 0.8rem;
+      align-items: center;
+      padding: 0.86rem;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 50%, rgba(255, 198, 64, 0.24), transparent 5.6rem),
+        radial-gradient(circle at 90% 12%, rgba(196, 96, 110, 0.12), transparent 5rem),
+        linear-gradient(rgba(60, 32, 15, 0.9), rgba(6, 11, 16, 0.9));
+      border: 3px solid #9f5624;
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.3),
+        inset 4px 4px 0 rgba(255, 195, 100, 0.12),
+        0 0 1.2rem rgba(255, 122, 24, 0.12);
+      transform: rotate(-0.65deg);
+    }
+
+    .current-card::after {
+      content: "";
+      position: absolute;
+      right: 0.85rem;
+      bottom: 0.75rem;
+      width: 2.4rem;
+      height: 0.55rem;
+      background: rgba(255, 198, 64, 0.55);
+      box-shadow:
+        -2.4rem -1.2rem 0 rgba(255, 122, 24, 0.42),
+        -4.5rem 0.25rem 0 rgba(255, 240, 166, 0.42);
+      animation: twinkle 1300ms steps(2, end) infinite;
+    }
+
+    .current-letter {
+      display: grid;
+      place-items: center;
+      width: 4.2rem;
+      height: 4.2rem;
+      color: #241100;
+      background:
+        linear-gradient(135deg, #fff0a6 0 21%, #ffd36f 21% 68%, #f09a22 68%);
+      border: 4px solid var(--wood-dark);
+      box-shadow:
+        inset -5px -5px 0 #8d3a08,
+        inset 5px 5px 0 #ffe08c,
+        0 0 1rem rgba(255, 122, 24, 0.24);
+      font-size: 1.2rem;
+    }
+
+    .current-copy {
+      min-width: 0;
+    }
+
+    .current-title {
+      margin: 0;
+      color: #ffc46a;
+      font-size: 0.68rem;
+      line-height: 1.55;
+    }
+
+    .current-pattern {
+      margin: 0.5rem 0 0;
+      color: #fff4d3;
+      font-family: var(--readable-pixel);
+      font-size: 1.62rem;
+      line-height: 1;
+    }
+
+    .name-meter {
+      display: flex;
+      gap: 0.3rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 0.65rem;
+    }
+
+    .meter-step {
+      width: 1.25rem;
+      height: 0.62rem;
+      background: rgba(255, 242, 206, 0.16);
+      box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.25);
+    }
+
+    .meter-step:nth-child(2n) {
+      height: 0.82rem;
+      transform: translateY(0.08rem);
+    }
+
+    .meter-step.done {
+      background: #b4d98a;
+      box-shadow: 0 0 0.75rem rgba(180, 217, 138, 0.4);
+    }
+
+    .meter-step.active {
+      background: #ffd36f;
+      box-shadow: 0 0 0.9rem rgba(255, 198, 64, 0.58);
+    }
+
+    .code-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+
+    .code-top,
+    .terminal-top {
+      min-height: 3.1rem;
+      padding: 0.75rem 0.85rem;
+      color: #ffc46a;
+      background: rgba(0, 0, 0, 0.25);
+      border-bottom: 3px solid #29504c;
+      font-size: 0.58rem;
+      line-height: 1.5;
+    }
+
+    .write-brief {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 0.75rem;
+      align-items: center;
+      padding: 0.85rem;
+      background:
+        linear-gradient(90deg, rgba(196, 96, 110, 0.08), rgba(255, 122, 24, 0.1), transparent),
+        rgba(1, 4, 9, 0.42);
+      border-bottom: 3px solid rgba(41, 80, 76, 0.82);
+    }
+
+    .brief-icon {
+      display: grid;
+      place-items: center;
+      width: 2.6rem;
+      height: 2.6rem;
+      color: #241100;
+      background: linear-gradient(#d6eca9, #7aa36a);
+      border: 3px solid var(--wood-dark);
+      box-shadow: inset -3px -3px 0 #4a713e, inset 3px 3px 0 #eff9c8;
+      font-size: 0.72rem;
+    }
+
+    .brief-text {
+      margin: 0;
+      color: rgba(255, 242, 206, 0.84);
+      font-family: var(--readable-pixel);
+      font-size: 1.25rem;
+      line-height: 1.03;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 0;
+      resize: none;
+      border: 0;
+      outline: none;
+      padding: 1.15rem;
+      color: #fff6dc;
+      background:
+        repeating-linear-gradient(transparent 0 2.85rem, rgba(255, 198, 64, 0.04) 2.85rem calc(2.85rem + 2px)),
+        repeating-linear-gradient(90deg, transparent 0 5rem, rgba(95, 167, 160, 0.028) 5rem calc(5rem + 2px)),
+        radial-gradient(circle at 50% 105%, rgba(255, 122, 24, 0.07), transparent 26rem),
+        rgba(2, 5, 10, 0.76);
+      font-family: "Courier New", monospace;
+      font-size: 1.05rem;
+      line-height: 1.72;
+      letter-spacing: 0;
+      tab-size: 2;
+    }
+
+    .quick-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.65rem;
+      padding: 0.85rem;
+      border-top: 3px solid rgba(41, 80, 76, 0.82);
+    }
+
+    .quick-row .pixel-button {
+      min-height: 3rem;
+    }
+
+    .quick-row .pixel-button:nth-child(1) {
+      background: linear-gradient(#f8c866, #d87b2d);
+    }
+
+    .quick-row .pixel-button:nth-child(2) {
+      background: linear-gradient(#e0a060, #a95232);
+    }
+
+    .quick-row .pixel-button:nth-child(3) {
+      background: linear-gradient(#d6eca9, #7aa36a);
+      box-shadow:
+        inset -5px -5px 0 #4a713e,
+        inset 5px 5px 0 #eff9c8,
+        0 5px 0 #1f0c02,
+        0 0 1.1rem rgba(122, 163, 106, 0.22);
+    }
+
+    .helper-note {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.55rem;
+      padding: 0 0.85rem 0.85rem;
+      display: none;
+    }
+
+    .helper-note span {
+      min-width: 0;
+      padding: 0.55rem;
+      color: rgba(255, 242, 206, 0.76);
+      background: rgba(0, 0, 0, 0.24);
+      border: 2px solid rgba(255, 198, 64, 0.12);
+      font-family: var(--readable-pixel);
+      font-size: 1.12rem;
+      line-height: 1;
+    }
+
+    .terminal-panel {
+      overflow: hidden;
+    }
+
+    .action-stack {
+      display: grid;
+      gap: 0.65rem;
+      padding: 0.85rem;
+      border-bottom: 3px solid #29504c;
+    }
+
+    .status {
+      min-height: 6.2rem;
+      margin: 0;
+      padding: 0.9rem;
+      color: rgba(255, 242, 206, 0.86);
+      background: rgba(1, 4, 9, 0.72);
+      border-bottom: 3px solid #29504c;
+      font-size: 1.28rem;
+    }
+
+    .terminal-hint {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 0.55rem;
+      align-items: center;
+      padding: 0.75rem 0.85rem;
+      color: rgba(255, 242, 206, 0.74);
+      background:
+        linear-gradient(90deg, rgba(196, 96, 110, 0.08), rgba(122, 163, 106, 0.06)),
+        rgba(0, 0, 0, 0.2);
+      border-bottom: 3px solid rgba(41, 80, 76, 0.82);
+      font-family: var(--readable-pixel);
+      font-size: 1.16rem;
+      line-height: 1;
+    }
+
+    .hint-spark {
+      width: 0.95rem;
+      height: 0.95rem;
+      background: #c4606e;
+      box-shadow: 0 0 0.85rem rgba(196, 96, 110, 0.48);
+      animation: twinkle 1200ms steps(2, end) infinite;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      padding: 0.85rem;
+      color: #ffdda2;
+      background: #05070b;
+      font-family: "Courier New", monospace;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      letter-spacing: 0;
+    }
+
+    .finish-check {
+      position: fixed;
+      left: 40%;
+      top: 38%;
+      z-index: 25;
+      width: min(29rem, 40vw);
+      padding: 1rem;
+      color: #fff3d2;
+      background:
+        linear-gradient(rgba(42, 25, 13, 0.96), rgba(6, 9, 14, 0.92)),
+        radial-gradient(circle at 35% 100%, rgba(255, 122, 24, 0.18), transparent 14rem);
+      border: 4px solid #8b4c1f;
+      box-shadow:
+        inset -5px -5px 0 rgba(0, 0, 0, 0.32),
+        inset 5px 5px 0 rgba(255, 198, 106, 0.14),
+        0 0 0 4px rgba(22, 8, 2, 0.82),
+        0 1rem 3rem rgba(0, 0, 0, 0.5),
+        0 0 2.2rem rgba(255, 122, 24, 0.25);
+      font-family: var(--readable-pixel);
+      font-size: clamp(1.35rem, 2.35vw, 2.05rem);
+      line-height: 1;
+      transform: translate(-50%, -50%) rotate(-1deg);
+    }
+
+    .finish-button {
+      position: fixed;
+      left: 62%;
+      top: 62%;
+      z-index: 26;
+      width: min(25rem, 35vw);
+      min-height: 6rem;
+      padding: 1rem;
+      color: #fff3d2;
+      background:
+        linear-gradient(rgba(42, 25, 13, 0.96), rgba(6, 9, 14, 0.92)),
+        radial-gradient(circle at 35% 100%, rgba(255, 122, 24, 0.18), transparent 14rem);
+      border: 4px solid #8b4c1f;
+      box-shadow:
+        inset -5px -5px 0 rgba(0, 0, 0, 0.32),
+        inset 5px 5px 0 rgba(255, 198, 106, 0.14),
+        0 0 0 4px rgba(22, 8, 2, 0.82),
+        0 1rem 3rem rgba(0, 0, 0, 0.5),
+        0 0 2.2rem rgba(255, 122, 24, 0.25);
+      font-size: clamp(0.82rem, 1.8vw, 1.12rem);
+      transform: translate(-50%, -50%) rotate(1deg);
+    }
+
+    .finish-button:active {
+      transform: translate(-50%, -50%) rotate(1deg) translateY(3px);
+    }
+
+    .workshop {
+      place-items: stretch;
+      padding: clamp(4.8rem, 7vh, 5.8rem) clamp(1rem, 3vw, 3rem) clamp(1rem, 3vh, 2rem);
+      overflow: hidden;
+    }
+
+    .workshop::before,
+    .workshop::after {
+      content: "";
+      position: fixed;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .workshop::before {
+      left: 6vw;
+      bottom: 12vh;
+      width: 1.1rem;
+      height: 1.1rem;
+      background: rgba(255, 198, 64, 0.48);
+      box-shadow:
+        7vw -13vh 0 rgba(196, 96, 110, 0.34),
+        18vw -5vh 0 rgba(122, 163, 106, 0.36),
+        60vw -16vh 0 rgba(255, 198, 64, 0.28),
+        72vw -1vh 0 rgba(95, 167, 160, 0.3);
+      animation: twinkle 1600ms steps(2, end) infinite;
+    }
+
+    .workshop::after {
+      right: 7vw;
+      top: 18vh;
+      width: 3.8rem;
+      height: 0.65rem;
+      background: rgba(255, 198, 64, 0.28);
+      box-shadow:
+        -12vw 21vh 0 rgba(196, 96, 110, 0.2),
+        -54vw 51vh 0 rgba(122, 163, 106, 0.22);
+    }
+
+    .workshop .mission-card {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: block;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .workshop .mission-card::before,
+    .workshop .mission-card::after {
+      display: none;
+    }
+
+    .workshop .mission-top {
+      position: absolute;
+      z-index: 7;
+      top: 0.2rem;
+      left: clamp(4rem, 8vw, 7rem);
+      width: min(37rem, calc(100vw - 8rem));
+      min-height: 4.4rem;
+      align-items: center;
+      padding: 0.72rem 0.82rem;
+      background:
+        radial-gradient(circle at 8% 20%, rgba(255, 198, 64, 0.16), transparent 7rem),
+        linear-gradient(rgba(49, 29, 16, 0.92), rgba(6, 10, 16, 0.84));
+      border: 3px solid rgba(141, 74, 28, 0.82);
+      box-shadow:
+        0 0 0 3px rgba(28, 12, 4, 0.84),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.28),
+        inset 4px 4px 0 rgba(255, 195, 100, 0.12),
+        0 1rem 2.4rem rgba(0, 0, 0, 0.42);
+      transform: rotate(-1.1deg);
+    }
+
+    .workshop .mission-top::after {
+      display: none;
+    }
+
+    .workshop .mission-title {
+      font-size: 0.78rem;
+    }
+
+    .workshop .kicker {
+      font-size: 0.5rem;
+    }
+
+    .workshop .name-tools {
+      justify-content: flex-end;
+    }
+
+    .workshop .name-tools input {
+      width: 7.8rem;
+      min-height: 2.15rem;
+      border-color: rgba(122, 163, 106, 0.78);
+    }
+
+    .workshop .soft-button {
+      min-height: 2.2rem;
+      padding: 0 0.7rem;
+    }
+
+    .workshop .board-pill {
+      display: none;
+    }
+
+    .workshop .mission-body {
+      position: static;
+      display: block;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      z-index: auto;
+    }
+
+    .workshop .target-panel,
+    .workshop .code-panel,
+    .workshop .terminal-panel {
+      position: absolute;
+      z-index: 4;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(255, 198, 64, 0.13), transparent 10rem),
+        linear-gradient(rgba(11, 20, 20, 0.86), rgba(2, 5, 10, 0.86));
+      border-width: 3px;
+      box-shadow:
+        0 0 0 3px rgba(2, 5, 8, 0.76),
+        inset -4px -4px 0 rgba(0, 0, 0, 0.28),
+        inset 4px 4px 0 rgba(255, 195, 100, 0.08),
+        0 1.2rem 2.7rem rgba(0, 0, 0, 0.42),
+        0 0 2rem rgba(255, 122, 24, 0.08);
+      backdrop-filter: blur(1px);
+    }
+
+    .workshop .target-panel {
+      left: clamp(1rem, 3vw, 2.6rem);
+      top: clamp(6rem, 14vh, 8.1rem);
+      width: min(27rem, 34vw);
+      height: min(31rem, calc(100vh - 10rem));
+      border-color: rgba(122, 163, 106, 0.72);
+      transform: rotate(-1.4deg);
+      z-index: 5;
+    }
+
+    .workshop .code-panel {
+      left: 50%;
+      top: clamp(5.9rem, 13vh, 7.8rem);
+      width: min(44rem, 52vw);
+      height: min(34rem, calc(100vh - 9rem));
+      transform: translateX(-45%) rotate(0.65deg);
+      z-index: 4;
+    }
+
+    .workshop .terminal-panel {
+      right: clamp(1rem, 3.2vw, 3rem);
+      bottom: clamp(1rem, 4vh, 2rem);
+      width: min(25rem, 30vw);
+      height: min(25rem, calc(100vh - 15rem));
+      border-color: rgba(196, 96, 110, 0.62);
+      transform: rotate(1.25deg);
+      z-index: 6;
+    }
+
+    .workshop .target-panel::before,
+    .workshop .code-panel::before,
+    .workshop .terminal-panel::before {
+      top: -0.78rem;
+      height: 1.15rem;
+      border-color: rgba(46, 19, 5, 0.64);
+    }
+
+    .workshop .target-panel::after,
+    .workshop .code-panel::after,
+    .workshop .terminal-panel::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      width: 0.72rem;
+      height: 0.72rem;
+      right: 0.8rem;
+      bottom: 0.8rem;
+      background: rgba(255, 198, 64, 0.36);
+      box-shadow:
+        -1.2rem 0.35rem 0 rgba(122, 163, 106, 0.24),
+        0.22rem -1.2rem 0 rgba(196, 96, 110, 0.18);
+    }
+
+    .workshop .target-panel {
+      grid-template-rows: auto auto minmax(0, 1fr);
+      padding: 0.95rem;
+    }
+
+    .workshop .current-card {
+      min-height: 8.2rem;
+      grid-template-columns: 4.2rem minmax(0, 1fr);
+      transform: rotate(0.8deg);
+      border-color: rgba(255, 198, 64, 0.58);
+    }
+
+    .workshop .current-letter {
+      width: 3.9rem;
+      height: 3.9rem;
+    }
+
+    .workshop .current-pattern {
+      font-size: 1.45rem;
+    }
+
+    .workshop .letter-board {
+      padding: 0.1rem 0.2rem 0.25rem 0;
+    }
+
+    .workshop .letter-tile {
+      transform: translateX(0);
+    }
+
+    .workshop .letter-tile:nth-child(2n) {
+      transform: translateX(0.28rem);
+    }
+
+    .workshop .code-top,
+    .workshop .terminal-top {
+      background:
+        linear-gradient(90deg, rgba(255, 198, 64, 0.08), transparent),
+        rgba(0, 0, 0, 0.28);
+      border-bottom-color: rgba(95, 167, 160, 0.55);
+    }
+
+    .workshop .write-brief {
+      border-bottom-color: rgba(141, 74, 28, 0.62);
+    }
+
+    .workshop textarea {
+      min-height: 0;
+      background:
+        repeating-linear-gradient(transparent 0 2.85rem, rgba(255, 198, 64, 0.045) 2.85rem calc(2.85rem + 2px)),
+        radial-gradient(circle at 72% 105%, rgba(196, 96, 110, 0.05), transparent 18rem),
+        rgba(2, 5, 10, 0.74);
+    }
+
+    .workshop .quick-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      background: rgba(32, 15, 7, 0.44);
+      border-top-color: rgba(141, 74, 28, 0.62);
+    }
+
+    .workshop .action-stack {
+      padding: 0.75rem;
+      gap: 0.58rem;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(255, 198, 64, 0.08), transparent 8rem),
+        rgba(0, 0, 0, 0.18);
+      border-bottom-color: rgba(196, 96, 110, 0.42);
+    }
+
+    .workshop .action-stack .pixel-button {
+      min-height: 3rem;
+      background: linear-gradient(#f1b552, #cf7730);
+    }
+
+    .workshop .action-stack .pixel-button:nth-child(2) {
+      background: linear-gradient(#d6eca9, #7aa36a);
+      box-shadow:
+        inset -5px -5px 0 #4a713e,
+        inset 5px 5px 0 #eff9c8,
+        0 5px 0 #1f0c02,
+        0 0 1.1rem rgba(122, 163, 106, 0.18);
+    }
+
+    .workshop .action-stack .pixel-button:nth-child(3) {
+      background: linear-gradient(#df9d8a, #a95232);
+    }
+
+    .workshop .action-stack .pixel-button:nth-child(4) {
+      background: linear-gradient(#d78b9a, #a34a61);
+    }
+
+    .workshop .status {
+      min-height: 5.6rem;
+      background:
+        radial-gradient(circle at 100% 100%, rgba(255, 198, 64, 0.05), transparent 10rem),
+        rgba(1, 4, 9, 0.7);
+      border-bottom-color: rgba(95, 167, 160, 0.42);
+    }
+
+    .workshop pre {
+      background: rgba(2, 5, 9, 0.86);
+    }
+
+    /* Clean app layout for the actual coding step. */
+    .workshop {
+      place-items: center;
+      padding: clamp(4.8rem, 7vh, 5.6rem) clamp(1rem, 3vw, 2.5rem) clamp(1rem, 3vh, 2rem);
+      overflow: auto;
+    }
+
+    .workshop::before,
+    .workshop::after {
+      display: none;
+    }
+
+    .workshop .mission-card {
+      width: min(76rem, calc(100vw - 3rem));
+      height: min(42rem, calc(100vh - 7rem));
+      min-height: 34rem;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      padding: 1rem;
+      background:
+        radial-gradient(circle at 50% 115%, rgba(255, 122, 24, 0.12), transparent 26rem),
+        linear-gradient(rgba(24, 15, 10, 0.94), rgba(4, 8, 13, 0.94));
+      border: 4px solid #74421f;
+      box-shadow:
+        0 0 0 4px rgba(24, 10, 3, 0.9),
+        inset -5px -5px 0 rgba(0, 0, 0, 0.32),
+        inset 5px 5px 0 rgba(255, 197, 108, 0.1),
+        0 1.4rem 4rem rgba(0, 0, 0, 0.52);
+      transform: none;
+    }
+
+    .workshop .mission-card::before,
+    .workshop .mission-card::after,
+    .workshop .target-panel::before,
+    .workshop .target-panel::after,
+    .workshop .code-panel::before,
+    .workshop .code-panel::after,
+    .workshop .terminal-panel::before,
+    .workshop .terminal-panel::after {
+      display: none;
+    }
+
+    .workshop .mission-top {
+      position: static;
+      width: auto;
+      min-height: 0;
+      display: flex;
+      padding: 0 0 0.85rem;
+      background: transparent;
+      border: 0;
+      border-bottom: 3px solid rgba(255, 198, 64, 0.18);
+      box-shadow: none;
+      transform: none;
+    }
+
+    .workshop .mission-title {
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .workshop .kicker {
+      font-size: 0.52rem;
+    }
+
+    .workshop .name-tools {
+      gap: 0.65rem;
+      justify-content: flex-end;
+    }
+
+    .workshop .name-tools label {
+      color: rgba(255, 242, 206, 0.64);
+      font-size: 0.52rem;
+    }
+
+    .workshop .name-tools input {
+      width: 8.8rem;
+      min-height: 2.35rem;
+      background: rgba(2, 5, 12, 0.72);
+      border-color: rgba(95, 167, 160, 0.56);
+    }
+
+    .workshop .soft-button {
+      min-height: 2.35rem;
+      padding: 0 0.75rem;
+    }
+
+    .workshop .board-pill {
+      display: inline;
+      color: rgba(255, 242, 206, 0.62);
+      font-size: 0.54rem;
+    }
+
+    .workshop .mission-body {
+      position: static;
+      display: grid;
+      grid-template-columns: minmax(15rem, 0.68fr) minmax(0, 1.45fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 0.9rem;
+      width: 100%;
+      height: 100%;
+      padding-top: 0.9rem;
+    }
+
+    .workshop .target-panel,
+    .workshop .code-panel,
+    .workshop .terminal-panel {
+      position: static;
+      width: auto;
+      height: auto;
+      min-height: 0;
+      background:
+        radial-gradient(circle at 50% 110%, rgba(255, 122, 24, 0.055), transparent 18rem),
+        rgba(3, 7, 12, 0.82);
+      border: 3px solid rgba(95, 167, 160, 0.42);
+      box-shadow:
+        inset -4px -4px 0 rgba(0, 0, 0, 0.26),
+        inset 4px 4px 0 rgba(116, 144, 124, 0.08);
+      transform: none;
+      backdrop-filter: none;
+    }
+
+    .workshop .target-panel {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      padding: 0.9rem;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 0.75rem;
+      border-color: rgba(122, 163, 106, 0.48);
+    }
+
+    .workshop .code-panel {
+      grid-column: 2;
+      grid-row: 1;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+
+    .workshop .terminal-panel {
+      grid-column: 2;
+      grid-row: 2;
+      display: grid;
+      grid-template-columns: minmax(18rem, 0.95fr) minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      overflow: hidden;
+    }
+
+    .workshop .mini-label,
+    .workshop .terminal-top,
+    .workshop .terminal-hint,
+    .workshop .helper-note,
+    .workshop .write-brief .brief-icon {
+      display: none;
+    }
+
+    .workshop .panel-title {
+      font-size: 0.68rem;
+    }
+
+    .workshop .name-meter {
+      margin-top: 0.55rem;
+      gap: 0.25rem;
+    }
+
+    .workshop .meter-step {
+      width: 1.05rem;
+      height: 0.5rem;
+    }
+
+    .workshop .meter-step:nth-child(2n) {
+      height: 0.5rem;
+      transform: none;
+    }
+
+    .workshop .current-card {
+      min-height: 7.4rem;
+      grid-template-columns: 3.6rem minmax(0, 1fr);
+      gap: 0.7rem;
+      padding: 0.75rem;
+      background:
+        radial-gradient(circle at 18% 50%, rgba(255, 198, 64, 0.18), transparent 4.8rem),
+        rgba(13, 19, 20, 0.82);
+      border-color: rgba(255, 198, 64, 0.34);
+      box-shadow: inset -3px -3px 0 rgba(0, 0, 0, 0.24);
+      transform: none;
+    }
+
+    .workshop .current-letter {
+      width: 3.3rem;
+      height: 3.3rem;
+      font-size: 1rem;
+    }
+
+    .workshop .current-title {
+      font-size: 0.54rem;
+    }
+
+    .workshop .current-pattern {
+      font-size: 1.35rem;
+    }
+
+    .workshop .letter-board {
+      gap: 0.4rem;
+      padding: 0;
+    }
+
+    .workshop .letter-tile,
+    .workshop .letter-tile:nth-child(2n) {
+      transform: none;
+    }
+
+    .workshop .letter-tile {
+      grid-template-columns: 2rem minmax(0, 1fr) 1rem;
+      padding: 0.45rem;
+      background: rgba(0, 3, 8, 0.45);
+      border-color: rgba(255, 198, 64, 0.08);
+    }
+
+    .workshop .letter-code {
+      display: none;
+    }
+
+    .workshop .letter-status {
+      justify-self: end;
+    }
+
+    .workshop .code-top {
+      min-height: 2.8rem;
+      padding: 0.72rem 0.85rem;
+      background: rgba(0, 0, 0, 0.24);
+      border-bottom-color: rgba(95, 167, 160, 0.38);
+    }
+
+    .workshop .code-top span:last-child {
+      display: none;
+    }
+
+    .workshop .write-brief {
+      display: block;
+      padding: 0.72rem 0.85rem;
+      background: rgba(0, 0, 0, 0.16);
+      border-bottom-color: rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .brief-text {
+      font-size: 1.1rem;
+      color: rgba(255, 242, 206, 0.78);
+    }
+
+    .workshop textarea {
+      padding: 1rem;
+      background:
+        repeating-linear-gradient(transparent 0 2.8rem, rgba(255, 198, 64, 0.032) 2.8rem calc(2.8rem + 2px)),
+        rgba(1, 4, 9, 0.8);
+      font-size: 1rem;
+      line-height: 1.68;
+    }
+
+    .workshop .quick-row {
+      padding: 0.75rem;
+      gap: 0.55rem;
+      background: rgba(0, 0, 0, 0.18);
+      border-top-color: rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .quick-row .pixel-button {
+      min-height: 2.8rem;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+    }
+
+    .workshop .action-stack {
+      grid-column: 1;
+      grid-row: 1 / 3;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+      padding: 0.75rem;
+      background: transparent;
+      border-bottom: 0;
+      border-right: 3px solid rgba(95, 167, 160, 0.28);
+    }
+
+    .workshop .action-stack .pixel-button,
+    .workshop .action-stack .pixel-button:nth-child(n) {
+      min-height: 2.85rem;
+      padding: 0 0.65rem;
+      background: linear-gradient(#f4b945, #e89122);
+      box-shadow:
+        inset -4px -4px 0 #8d3a08,
+        inset 4px 4px 0 #ffd06b,
+        0 4px 0 #1f0c02;
+      font-size: 0.52rem;
+    }
+
+    .workshop .status {
+      grid-column: 2;
+      grid-row: 1;
+      min-height: 0;
+      padding: 0.78rem 0.85rem;
+      background: rgba(0, 0, 0, 0.16);
+      border-bottom: 3px solid rgba(95, 167, 160, 0.28);
+      font-size: 1.16rem;
+    }
+
+    .workshop pre {
+      grid-column: 2;
+      grid-row: 2;
+      max-height: 6rem;
+      background: rgba(1, 4, 9, 0.76);
+      color: rgba(255, 221, 162, 0.86);
+      font-size: 0.72rem;
+    }
+
+    .compile-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 240ms ease, visibility 240ms ease;
+      background: rgba(0, 0, 0, 0.4);
+    }
+
+    body.is-compiling .compile-overlay {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .compile-cloud {
+      width: min(34rem, calc(100vw - 2rem));
+      padding: 1rem;
+      background: rgba(19, 10, 5, 0.94);
+      border: 4px solid #8d3a08;
+      box-shadow: 0 0 0 4px var(--wood-dark), 0 0 3rem rgba(255, 122, 24, 0.28);
+      color: var(--cream);
+      text-align: center;
+    }
+
+    .compile-title {
+      color: #ffc46a;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 760px) {
+      .finish-check {
+        left: 1rem;
+        right: 1rem;
+        top: 42%;
+        width: auto;
+        transform: translateY(-50%) rotate(-1deg);
+      }
+
+      .finish-button {
+        left: auto;
+        right: 1rem;
+        top: 64%;
+        width: min(21rem, calc(100vw - 2rem));
+        transform: translateY(-50%) rotate(1deg);
+      }
+
+      .finish-button:active {
+        transform: translateY(-50%) rotate(1deg) translateY(3px);
+      }
+    }
+
+    .compile-progress-shell {
+      height: 1.2rem;
+      margin: 1rem 0 0.7rem;
+      background: #08090d;
+      border: 3px solid #29504c;
+      overflow: hidden;
+    }
+
+    .compile-progress-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff7a18, #ffc640);
+      transition: width 180ms steps(6, end);
+    }
+
+    .compile-percent {
+      color: rgba(255, 242, 206, 0.78);
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+
+    @keyframes twinkle {
+      0%,
+      100% {
+        opacity: 0.45;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      body {
+        overflow: auto;
+      }
+
+      .site {
+        min-height: 100vh;
+        height: auto;
+      }
+
+      .deck,
+      .workshop {
+        position: relative;
+        min-height: 100vh;
+      }
+
+      .mission-card {
+        height: auto;
+        min-height: 0;
+      }
+
+      .workshop .mission-card {
+        display: grid;
+        height: auto;
+        min-height: 0;
+        gap: 1rem;
+      }
+
+      .workshop .mission-top,
+      .workshop .target-panel,
+      .workshop .code-panel,
+      .workshop .terminal-panel {
+        position: relative;
+        inset: auto;
+        width: 100%;
+        height: auto;
+        min-height: 20rem;
+        transform: none;
+      }
+
+      .workshop .mission-top {
+        min-height: 0;
+        left: auto;
+        top: auto;
+      }
+
+      .mission-body {
+        grid-template-columns: 1fr;
+      }
+
+      .workshop .mission-body {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        height: auto;
+      }
+
+      .target-panel,
+      .code-panel,
+      .terminal-panel {
+        min-height: 20rem;
+      }
+
+      .mission-card,
+      .target-panel,
+      .code-panel,
+      .terminal-panel,
+      .current-card {
+        transform: none;
+      }
+
+      .mission-card::before,
+      .mission-card::after {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .slide-card {
+        min-height: 0;
+      }
+
+      .slide-body {
+        grid-template-columns: 1fr;
+      }
+
+      .slide-art {
+        min-height: 11rem;
+      }
+
+      .slide-title {
+        font-size: 1.1rem;
+      }
+
+      .slide-copy,
+      .panel-copy,
+      .status {
+        font-size: 1.25rem;
+      }
+
+      .mission-top {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .quick-row,
+      .helper-note {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="site" aria-label="Firelight Morse tutorial">
+    <canvas id="scene-canvas" aria-hidden="true"></canvas>
+    <div class="vignette" aria-hidden="true"></div>
+    <a class="back" href="../tutorial.html">Back</a>
+
+    <section class="deck" id="deck" aria-label="Morse lesson slides">
+      <article class="slide-card">
+        <div class="slide-top">
+          <p class="slide-kicker" id="slide-kicker">Second Tutorial</p>
+          <div class="spark-track" id="spark-track" aria-label="Lesson progress"></div>
+        </div>
+        <div class="slide-body">
+          <div>
+            <h1 class="slide-title" id="slide-title">Teach your LED to speak.</h1>
+            <p class="slide-copy" id="slide-copy"></p>
+          </div>
+          <div class="slide-art" id="slide-art" aria-hidden="true"></div>
+        </div>
+        <div class="slide-actions">
+          <button class="soft-button" id="prev-slide" type="button">Back</button>
+          <button class="pixel-button" id="next-slide" type="button">Next</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="workshop" id="workshop" aria-label="Build your Morse signal" hidden>
+      <article class="mission-card">
+        <div class="mission-top">
+          <div class="mission-brand">
+            <p class="kicker">Second Tutorial</p>
+            <h2 class="mission-title">Morse Name Signal</h2>
+          </div>
+          <div class="name-tools">
+            <label>
+              Name
+              <input id="student-name" type="text" maxlength="12" autocomplete="name" />
+            </label>
+            <span class="hint-wrap">
+              <button class="hint-button" id="morse-hint" type="button" aria-label="Morse hint" aria-expanded="false" aria-controls="morse-hint-popout">?</button>
+              <span class="hint-popout" id="morse-hint-popout" hidden>Tap or write the morse code per each letter so if it says dash dash dot click dash dash dot and then click pause when u are finished a letter.</span>
+            </span>
+            <button class="soft-button" id="use-name" type="button">Set</button>
+            <span class="board-pill">Arduino Nano</span>
+          </div>
+        </div>
+
+        <div class="mission-body">
+          <section class="target-panel" aria-label="Name pattern">
+            <div>
+              <p class="mini-label">Signal path</p>
+              <h2 class="panel-title" id="target-title">Build your name</h2>
+              <div class="name-meter" id="name-meter" aria-hidden="true"></div>
+            </div>
+            <div class="current-card">
+              <div class="current-letter" id="current-letter">J</div>
+              <div class="current-copy">
+                <p class="current-title" id="current-title">Next letter</p>
+                <p class="current-pattern" id="next-hint">J = dot(); dash(); dash(); dash();</p>
+              </div>
+            </div>
+            <div class="letter-board" id="letter-board" aria-live="polite"></div>
+          </section>
+
+          <section class="code-panel" aria-label="Code challenge">
+            <div class="code-top">
+              <span>Your lines</span>
+              <span>only dot, dash, pause</span>
+            </div>
+            <div class="write-brief">
+              <span class="brief-icon" id="brief-icon">J</span>
+              <p class="brief-text" id="brief-text">Write the pattern shown on the left.</p>
+            </div>
+            <textarea id="code" spellcheck="false" aria-label="Write Morse code calls"></textarea>
+            <div class="quick-row" aria-label="Code helpers">
+              <button class="pixel-button" type="button" data-insert="dot();">dot();</button>
+              <button class="pixel-button" type="button" data-insert="dash();">dash();</button>
+              <button class="pixel-button" type="button" data-insert="delay(600);">pause</button>
+            </div>
+            <div class="helper-note" aria-label="Helper meanings">
+              <span>dot(); short blink</span>
+              <span>dash(); long blink</span>
+              <span>delay(600); next letter</span>
+            </div>
+          </section>
+
+          <section class="terminal-panel" aria-label="Signal controls">
+            <div class="terminal-top">
+              <span>Camp Terminal</span>
+              <span>Morse</span>
+            </div>
+            <div class="action-stack">
+              <button class="pixel-button" id="check" type="button">Check signal</button>
+              <button class="pixel-button" id="compile" type="button" disabled>Compile</button>
+              <button class="pixel-button" id="connect" type="button" disabled>Connect to board</button>
+              <button class="pixel-button" id="upload" type="button" disabled>Send to board</button>
+            </div>
+            <div class="terminal-hint">
+              <span class="hint-spark" aria-hidden="true"></span>
+              <span>First make every letter glow. Then compile, connect, and send.</span>
+            </div>
+            <div class="status" id="status">Type the Morse calls for your name.</div>
+            <pre id="log" aria-live="polite"></pre>
+          </section>
+        </div>
+      </article>
+    </section>
+
+    <div class="compile-overlay" aria-live="polite" aria-hidden="true">
+      <div class="compile-cloud">
+        <div class="compile-title" id="compile-title">Compiling name signal...</div>
+        <div class="compile-progress-shell">
+          <div class="compile-progress-bar" id="compile-progress-bar"></div>
+        </div>
+        <div class="compile-percent" id="compile-percent">0%</div>
+      </div>
+    </div>
+    <div class="finish-check" id="finish-check" hidden>Go check your Arduino to see it blinking!</div>
+    <button class="finish-button" id="finish-tutorial" type="button" hidden>Finish tutorial!</button>
+  </main>
+
+  <script type="module">
+    const ARDUINO_API_URL = "https://fya5q3cjgtd6loh65krkrknqce0ulqbk.lambda-url.eu-west-1.on.aws";
+    const MORSE = {
+      A: ".-", B: "-...", C: "-.-.", D: "-..", E: ".", F: "..-.", G: "--.", H: "....",
+      I: "..", J: ".---", K: "-.-", L: ".-..", M: "--", N: "-.", O: "---", P: ".--.",
+      Q: "--.-", R: ".-.", S: "...", T: "-", U: "..-", V: "...-", W: ".--", X: "-..-",
+      Y: "-.--", Z: "--.."
+    };
+    const BOARD = {
+      fqbn: "arduino:avr:nano",
+      baud: 57600,
+      pageSize: 128
+    };
+
+    const deck = document.querySelector("#deck");
+    const workshop = document.querySelector("#workshop");
+    const slideKicker = document.querySelector("#slide-kicker");
+    const slideTitle = document.querySelector("#slide-title");
+    const slideCopy = document.querySelector("#slide-copy");
+    const slideArt = document.querySelector("#slide-art");
+    const sparkTrack = document.querySelector("#spark-track");
+    const prevSlideButton = document.querySelector("#prev-slide");
+    const nextSlideButton = document.querySelector("#next-slide");
+    const nameInput = document.querySelector("#student-name");
+    const useNameButton = document.querySelector("#use-name");
+    const hintButton = document.querySelector("#morse-hint");
+    const hintPopout = document.querySelector("#morse-hint-popout");
+    const targetTitle = document.querySelector("#target-title");
+    const nameMeter = document.querySelector("#name-meter");
+    const currentLetter = document.querySelector("#current-letter");
+    const currentTitle = document.querySelector("#current-title");
+    const nextHint = document.querySelector("#next-hint");
+    const letterBoard = document.querySelector("#letter-board");
+    const briefIcon = document.querySelector("#brief-icon");
+    const briefText = document.querySelector("#brief-text");
+    const codeInput = document.querySelector("#code");
+    const checkButton = document.querySelector("#check");
+    const compileButton = document.querySelector("#compile");
+    const connectButton = document.querySelector("#connect");
+    const uploadButton = document.querySelector("#upload");
+    const statusBox = document.querySelector("#status");
+    const logBox = document.querySelector("#log");
+    const compileTitle = document.querySelector("#compile-title");
+    const compileProgressBar = document.querySelector("#compile-progress-bar");
+    const compilePercent = document.querySelector("#compile-percent");
+    const finishCheck = document.querySelector("#finish-check");
+    const finishTutorialButton = document.querySelector("#finish-tutorial");
+    const insertButtons = [...document.querySelectorAll("[data-insert]")];
+
+    let studentName = cleanName(window.localStorage.getItem("firelight-student-name") || "James");
+    let slideIndex = 0;
+    let port;
+    let compileResult;
+    let compileProgress = 0;
+    let compileProgressTimer;
+    let finishCheckTimer;
+    let finishTutorialTimer;
+
+    function cleanName(value) {
+      const letters = String(value || "").toUpperCase().replace(/[^A-Z]/g, "");
+      return letters || "JAMES";
+    }
+
+    function titleName(value) {
+      return value.charAt(0) + value.slice(1).toLowerCase();
+    }
+
+    function expectedLetters() {
+      return [...studentName].map((letter) => ({ letter, morse: MORSE[letter] })).filter((item) => item.morse);
+    }
+
+    function wordsForMorse(morse) {
+      return morse.replaceAll(".", "dot ").replaceAll("-", "dash ").trim();
+    }
+
+    function commandForSymbol(symbol) {
+      return symbol === "." ? "dot();" : "dash();";
+    }
+
+    function commandsForLetter(item) {
+      return item.morse.split("").map(commandForSymbol);
+    }
+
+    function expectedTokens() {
+      const tokens = [];
+      expectedLetters().forEach((item, index, list) => {
+        tokens.push(...item.morse.split(""));
+        if (index < list.length - 1) tokens.push("/");
+      });
+      return tokens;
+    }
+
+    function buildSlides() {
+      const first = expectedLetters()[0] || { letter: "J", morse: ".---" };
+      return [
+        {
+          kicker: "Second Tutorial",
+          title: "Teach your LED to speak.",
+          copy: "Morse code turns light into letters. A quick blink is a dot. A long blink is a dash.",
+          art: lampArt()
+        },
+        {
+          kicker: "Tiny code first",
+          title: "You only write the calls.",
+          copy: "Firelight already knows how to blink. Your job is to call dot(); dash(); and delay(600); between letters.",
+          art: helperArt()
+        },
+        {
+          kicker: `${titleName(studentName)} in Morse`,
+          title: `${first.letter} starts with ${wordsForMorse(first.morse)}.`,
+          copy: `For each letter, copy the pattern into real code. ${first.letter} becomes ${commandsForLetter(first).join(" ")}`,
+          art: nameArt()
+        },
+        {
+          kicker: "Your turn",
+          title: `Build ${titleName(studentName)} one line at a time.`,
+          copy: "The next screen checks your signal as you type. When every letter glows, compile and send it to the Nano.",
+          art: readyArt()
+        }
+      ];
+    }
+
+    function lampArt() {
+      return `
+        <div class="lamp-art">
+          <div class="signal-beam"></div>
+          <div class="lamp-light"></div>
+          <div class="lamp-stand"></div>
+        </div>
+      `;
+    }
+
+    function helperArt() {
+      return `
+        <div class="helper-stack">
+          <div class="helper-line">dot();<br><span>short blink</span></div>
+          <div class="helper-line">dash();<br><span>long blink</span></div>
+          <div class="helper-line">delay(600);<br><span>new letter</span></div>
+        </div>
+      `;
+    }
+
+    function nameArt() {
+      return `
+        <div class="name-preview">
+          ${expectedLetters().slice(0, 8).map((item) => `
+            <span class="name-chip"><strong>${item.letter}</strong>${wordsForMorse(item.morse)}</span>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function readyArt() {
+      return `
+        <div class="ready-art">
+          <div class="coach"><span class="coach-face"></span></div>
+        </div>
+      `;
+    }
+
+    function renderSlide() {
+      const slides = buildSlides();
+      const slide = slides[slideIndex];
+      slideKicker.textContent = slide.kicker;
+      slideTitle.textContent = slide.title;
+      slideCopy.textContent = slide.copy;
+      slideArt.innerHTML = slide.art;
+      sparkTrack.innerHTML = slides.map((_, index) => {
+        const state = index < slideIndex ? "done" : index === slideIndex ? "active" : "";
+        return `<span class="spark-dot ${state}"></span>`;
+      }).join("");
+      prevSlideButton.disabled = slideIndex === 0;
+      nextSlideButton.textContent = slideIndex === slides.length - 1 ? "Start coding" : "Next";
+    }
+
+    function showWorkshop() {
+      deck.hidden = true;
+      workshop.hidden = false;
+      renderWorkshop();
+      window.setTimeout(() => codeInput.focus(), 80);
+    }
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    function hideFinishScreens() {
+      clearTimeout(finishCheckTimer);
+      clearTimeout(finishTutorialTimer);
+      finishCheck.hidden = true;
+      finishTutorialButton.hidden = true;
+    }
+
+    function queueFinishScreens() {
+      hideFinishScreens();
+      finishCheckTimer = window.setTimeout(() => {
+        finishCheck.hidden = false;
+      }, 1600);
+      finishTutorialTimer = window.setTimeout(() => {
+        finishTutorialButton.hidden = false;
+        finishTutorialButton.focus();
+      }, 3800);
+    }
+
+    function log(message) {
+      logBox.textContent += `${message}\n`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function lineNumberAt(text, index) {
+      return text.slice(0, index).split(/\r?\n/).length;
+    }
+
+    function parseChallenge() {
+      const source = codeInput.value.replace(/\/\/.*$/gm, "");
+      const tokens = [];
+      const invalid = [];
+      const tokenRegex = /\b(dot|dash)\s*\(\s*\)\s*;|delay\s*\(\s*600\s*\)\s*;/g;
+      let cursor = 0;
+      let match;
+      while ((match = tokenRegex.exec(source))) {
+        const between = source.slice(cursor, match.index);
+        if (between.trim()) {
+          invalid.push({ line: lineNumberAt(source, cursor), text: between.trim() });
+        }
+        if (match[1] === "dot") tokens.push(".");
+        else if (match[1] === "dash") tokens.push("-");
+        else tokens.push("/");
+        cursor = tokenRegex.lastIndex;
+      }
+      const tail = source.slice(cursor);
+      if (tail.trim()) {
+        invalid.push({ line: lineNumberAt(source, cursor), text: tail.trim() });
+      }
+      return { tokens, invalid };
+    }
+
+    function matchingLetters(tokens) {
+      let cursor = 0;
+      let done = 0;
+      const list = expectedLetters();
+      for (let index = 0; index < list.length; index += 1) {
+        const required = list[index].morse.split("");
+        const got = tokens.slice(cursor, cursor + required.length);
+        if (got.join("") !== required.join("")) break;
+        cursor += required.length;
+        if (index < list.length - 1) {
+          if (tokens[cursor] !== "/") break;
+          cursor += 1;
+        }
+        done += 1;
+      }
+      return done;
+    }
+
+    function challengeComplete(parsed = parseChallenge()) {
+      const got = parsed.tokens.join("");
+      const expected = expectedTokens().join("");
+      return parsed.invalid.length === 0 && (got === expected || got === `${expected}/`);
+    }
+
+    function renderLetters(done = 0) {
+      letterBoard.innerHTML = "";
+      expectedLetters().forEach((item, index) => {
+        const tile = document.createElement("div");
+        tile.className = "letter-tile";
+        tile.classList.toggle("done", index < done);
+        tile.classList.toggle("active", index === done);
+        tile.innerHTML = `
+          <span class="letter">${item.letter}</span>
+          <span class="letter-code">${commandsForLetter(item).join(" ")}</span>
+          <span class="letter-status" aria-hidden="true"></span>
+        `;
+        letterBoard.append(tile);
+      });
+    }
+
+    function renderMeter(done = 0) {
+      nameMeter.innerHTML = "";
+      expectedLetters().forEach((_, index) => {
+        const step = document.createElement("span");
+        step.className = "meter-step";
+        step.classList.toggle("done", index < done);
+        step.classList.toggle("active", index === done);
+        nameMeter.append(step);
+      });
+    }
+
+    function renderHint(done, parsed) {
+      const letters = expectedLetters();
+      if (parsed.invalid.length) {
+        const first = parsed.invalid[0];
+        currentTitle.textContent = "Fix this";
+        currentLetter.textContent = "!";
+        briefIcon.textContent = "!";
+        briefText.textContent = "Use only dot(); dash(); or delay(600);";
+        nextHint.textContent = `Line ${first.line}`;
+        return;
+      }
+      if (done >= letters.length) {
+        currentTitle.textContent = "Signal ready";
+        currentLetter.textContent = "OK";
+        briefIcon.textContent = "OK";
+        briefText.textContent = "Compile it, then send it to the Nano.";
+        nextHint.textContent = `${titleName(studentName)} is ready`;
+        return;
+      }
+      const current = letters[done];
+      currentTitle.textContent = done === 0 ? "First letter" : "Next letter";
+      currentLetter.textContent = current.letter;
+      briefIcon.textContent = current.letter;
+      const pause = done > 0 ? "Add pause first, then write this pattern." : "Write this pattern.";
+      briefText.textContent = pause;
+      nextHint.textContent = `${current.letter} = ${commandsForLetter(current).join(" ")}`;
+    }
+
+    function checkChallenge(showMessage = true) {
+      const parsed = parseChallenge();
+      const done = matchingLetters(parsed.tokens);
+      const complete = challengeComplete(parsed);
+      renderLetters(done);
+      renderMeter(done);
+      renderHint(done, parsed);
+      compileButton.disabled = !complete;
+      if (showMessage) {
+        if (parsed.invalid.length) {
+          setStatus("Fix the highlighted line.");
+        } else if (complete) {
+          setStatus("Ready to compile.");
+        } else {
+          setStatus(`${done} of ${expectedLetters().length} letters done.`);
+        }
+      }
+      return complete;
+    }
+
+    function renderWorkshop() {
+      nameInput.value = titleName(studentName);
+      targetTitle.textContent = `Build ${titleName(studentName)}`;
+      renderLetters(0);
+      renderMeter(0);
+      renderHint(0, { tokens: [], invalid: [] });
+      checkChallenge(false);
+    }
+
+    function resetForName(nextName) {
+      studentName = cleanName(nextName);
+      window.localStorage.setItem("firelight-student-name", titleName(studentName));
+      codeInput.value = "";
+      compileResult = null;
+      compileButton.disabled = true;
+      connectButton.disabled = true;
+      uploadButton.disabled = true;
+      hideFinishScreens();
+      logBox.textContent = "";
+      setStatus(`New signal loaded for ${titleName(studentName)}.`);
+      renderSlide();
+      renderWorkshop();
+    }
+
+    function insertSnippet(snippet) {
+      const start = codeInput.selectionStart;
+      const end = codeInput.selectionEnd;
+      const prefix = codeInput.value.slice(0, start);
+      const suffix = codeInput.value.slice(end);
+      const needsBreak = prefix && !prefix.endsWith("\n") ? "\n" : "";
+      const line = `${needsBreak}${snippet}\n`;
+      codeInput.value = `${prefix}${line}${suffix}`;
+      codeInput.focus();
+      const next = start + line.length;
+      codeInput.setSelectionRange(next, next);
+      checkChallenge(false);
+    }
+
+    function fullSketch() {
+      const bodyLines = codeInput.value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("//"))
+        .map((line) => `  ${line}`)
+        .join("\n");
+
+      return `void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  // ${titleName(studentName)} in Morse
+${bodyLines}
+  delay(1400);
+}
+
+void dot() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(200);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(200);
+}
+
+void dash() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(600);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(200);
+}
+`;
+    }
+
+    function setCompileProgress(value, label = "Compiling name signal...") {
+      compileProgress = Math.max(0, Math.min(100, Math.round(value)));
+      compileTitle.textContent = label;
+      compileProgressBar.style.width = `${compileProgress}%`;
+      compilePercent.textContent = `${compileProgress}%`;
+    }
+
+    function startCompileOverlay() {
+      clearInterval(compileProgressTimer);
+      document.body.classList.add("is-compiling");
+      setCompileProgress(4);
+      compileProgressTimer = setInterval(() => {
+        if (compileProgress >= 95) {
+          setCompileProgress(95, "Still compiling...");
+          return;
+        }
+        setCompileProgress(Math.min(95, compileProgress + Math.floor(Math.random() * 9) + 4));
+      }, 520);
+    }
+
+    function finishCompileOverlay(success) {
+      clearInterval(compileProgressTimer);
+      setCompileProgress(success ? 100 : compileProgress, success ? "Name signal compiled!" : "Compile failed");
+      window.setTimeout(() => {
+        document.body.classList.remove("is-compiling");
+      }, success ? 650 : 1100);
+    }
+
+    function base64ToText(value) {
+      const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+
+    function setHintOpen(isOpen) {
+      hintButton.setAttribute("aria-expanded", String(isOpen));
+      hintPopout.hidden = !isOpen;
+    }
+
+    prevSlideButton.addEventListener("click", () => {
+      slideIndex = Math.max(0, slideIndex - 1);
+      renderSlide();
+    });
+
+    nextSlideButton.addEventListener("click", () => {
+      const slides = buildSlides();
+      if (slideIndex < slides.length - 1) {
+        slideIndex += 1;
+        renderSlide();
+      } else {
+        showWorkshop();
+      }
+    });
+
+    insertButtons.forEach((button) => {
+      button.addEventListener("click", () => insertSnippet(button.dataset.insert));
+    });
+
+    useNameButton.addEventListener("click", () => resetForName(nameInput.value));
+    hintButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setHintOpen(hintPopout.hidden);
+    });
+    hintPopout.addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => setHintOpen(false));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") setHintOpen(false);
+    });
+    nameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") resetForName(nameInput.value);
+    });
+    codeInput.addEventListener("input", () => {
+      hideFinishScreens();
+      checkChallenge(false);
+    });
+    checkButton.addEventListener("click", () => checkChallenge(true));
+
+    compileButton.addEventListener("click", async () => {
+      if (!checkChallenge(true)) return;
+      compileButton.disabled = true;
+      uploadButton.disabled = true;
+      hideFinishScreens();
+      logBox.textContent = "";
+      setStatus("Compiling your Morse name...");
+      startCompileOverlay();
+
+      try {
+        const res = await fetch(`${ARDUINO_API_URL}/compile`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            fqbn: BOARD.fqbn,
+            sketchName: "NameSignal",
+            code: fullSketch()
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Compile failed");
+        compileResult = data;
+        log(data.stderr || data.stdout || "Compile complete.");
+        setStatus("Compiled. Connect your Nano, then send it.");
+        connectButton.disabled = false;
+        uploadButton.disabled = !port;
+        finishCompileOverlay(true);
+      } catch (error) {
+        setStatus(error.message);
+        log(String(error.stack || error));
+        finishCompileOverlay(false);
+      } finally {
+        compileButton.disabled = !checkChallenge(false);
+      }
+    });
+
+    connectButton.addEventListener("click", async () => {
+      if (!("serial" in navigator)) {
+        setStatus("Web Serial needs Chrome or Edge over HTTPS or localhost.");
+        return;
+      }
+      try {
+        setStatus("Pick your Arduino Nano serial port.");
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: BOARD.baud, bufferSize: 1024 });
+        setStatus("Nano connected. Send your name to the board.");
+        uploadButton.disabled = !compileResult;
+      } catch (error) {
+        setStatus(error.message || "Connection cancelled.");
+      }
+    });
+
+    uploadButton.addEventListener("click", async () => {
+      if (!port || !compileResult) return;
+      uploadButton.disabled = true;
+      hideFinishScreens();
+      try {
+        const hex = compileResult.artifacts.find((artifact) => artifact.name.endsWith(".hex"));
+        if (!hex) throw new Error("Compile succeeded but no .hex file was returned.");
+        await uploadAvrHex(port, base64ToText(hex.contentBase64), BOARD);
+        setStatus(`Upload finished. Watch the LED spell ${titleName(studentName)}.`);
+        queueFinishScreens();
+      } catch (error) {
+        setStatus(`Upload failed: ${error.message}`);
+        log(String(error.stack || error));
+      } finally {
+        uploadButton.disabled = false;
+      }
+    });
+
+    finishTutorialButton.addEventListener("click", () => {
+      window.localStorage.setItem("firelight-second-tutorial-complete", "true");
+      window.location.href = "../dashboard.html";
+    });
+
+    function parseIntelHex(hex) {
+      const memory = new Map();
+      let upper = 0;
+      let max = 0;
+      for (const rawLine of hex.trim().split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (line[0] !== ":") throw new Error("Invalid HEX line.");
+        const bytes = [];
+        for (let i = 1; i < line.length; i += 2) bytes.push(Number.parseInt(line.slice(i, i + 2), 16));
+        const len = bytes[0];
+        const addr = (bytes[1] << 8) | bytes[2];
+        const type = bytes[3];
+        const data = bytes.slice(4, 4 + len);
+        const sum = bytes.reduce((acc, byte) => (acc + byte) & 0xff, 0);
+        if (sum !== 0) throw new Error("HEX checksum failed.");
+        if (type === 0x00) {
+          const absolute = upper + addr;
+          data.forEach((byte, index) => memory.set(absolute + index, byte));
+          max = Math.max(max, absolute + data.length);
+        } else if (type === 0x01) {
+          break;
+        } else if (type === 0x04) {
+          upper = ((data[0] << 8) | data[1]) << 16;
+        }
+      }
+      const image = new Uint8Array(max).fill(0xff);
+      for (const [addr, byte] of memory) image[addr] = byte;
+      return image;
+    }
+
+    async function uploadAvrHex(serialPort, hex, board) {
+      const image = parseIntelHex(hex);
+      const writer = serialPort.writable.getWriter();
+      const reader = serialPort.readable.getReader();
+      const rxQueue = [];
+      async function readByte(timeout = 1000) {
+        if (rxQueue.length) return rxQueue.shift();
+        const timer = new Promise((_, reject) => setTimeout(() => reject(new Error("Serial timeout")), timeout));
+        const read = reader.read().then(({ value, done }) => {
+          if (done || !value?.length) throw new Error("Serial disconnected");
+          rxQueue.push(...value);
+          return rxQueue.shift();
+        });
+        return Promise.race([read, timer]);
+      }
+      async function command(bytes, timeout) {
+        await writer.write(new Uint8Array([...bytes, 0x20]));
+        const first = await readByte(timeout);
+        const second = await readByte(timeout);
+        if (first !== 0x14 || second !== 0x10) {
+          throw new Error(`Bootloader rejected command (${first.toString(16)} ${second.toString(16)}).`);
+        }
+      }
+      try {
+        log(`Flashing ${image.length} bytes...`);
+        await serialPort.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        await serialPort.setSignals({ dataTerminalReady: true, requestToSend: true });
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        let synced = false;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            await command([0x30], 500);
+            synced = true;
+            break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 80));
+          }
+        }
+        if (!synced) throw new Error("Could not sync with bootloader.");
+        await command([0x50], 1000);
+        for (let offset = 0; offset < image.length; offset += board.pageSize) {
+          const page = image.slice(offset, offset + board.pageSize);
+          const wordAddress = offset >> 1;
+          await command([0x55, wordAddress & 0xff, (wordAddress >> 8) & 0xff], 1000);
+          await command([0x64, (page.length >> 8) & 0xff, page.length & 0xff, 0x46, ...page], 2000);
+          log(`Wrote ${Math.min(offset + board.pageSize, image.length)} / ${image.length}`);
+        }
+        await command([0x51], 1000);
+      } finally {
+        reader.releaseLock();
+        writer.releaseLock();
+      }
+    }
+
+    function setupSceneCanvas() {
+      const canvas = document.querySelector("#scene-canvas");
+      const ctx = canvas.getContext("2d");
+      const baseWidth = 360;
+      const baseHeight = 202;
+      let frame = 0;
+
+      function px(x, y, w, h, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      }
+
+      function poly(points, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      function tree(x, y, scale) {
+        px(x - 2 * scale, y - 24 * scale, 4 * scale, 28 * scale, "#2b1a0f");
+        poly([[x, y - 64 * scale], [x - 22 * scale, y - 28 * scale], [x + 22 * scale, y - 28 * scale]], "#0c2b28");
+        poly([[x, y - 48 * scale], [x - 26 * scale, y - 12 * scale], [x + 26 * scale, y - 12 * scale]], "#123b34");
+        poly([[x, y - 30 * scale], [x - 20 * scale, y + 5 * scale], [x + 20 * scale, y + 5 * scale]], "#0d302b");
+      }
+
+      function drawCampfire(x, y) {
+        px(x - 20, y + 10, 40, 5, "#2d180c");
+        px(x - 24, y + 13, 18, 4, "#5b2c12");
+        px(x + 6, y + 13, 18, 4, "#5b2c12");
+        px(x - 2, y - 10 + Math.round(Math.sin(frame / 10) * 2), 5, 18, "#fff0a6");
+        px(x - 9, y - 4 + Math.round(Math.cos(frame / 9) * 2), 9, 19, "#ff8a19");
+        px(x + 2, y - 1 + Math.round(Math.sin(frame / 8) * 2), 9, 16, "#f44313");
+      }
+
+      function draw() {
+        const scale = Math.max(canvas.width / baseWidth, canvas.height / baseHeight);
+        const width = canvas.width / scale;
+        const height = canvas.height / scale;
+        const offsetX = (baseWidth - width) / 2;
+        const offsetY = (baseHeight - height) / 2;
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(scale, 0, 0, scale, -offsetX * scale, -offsetY * scale);
+        const gradient = ctx.createLinearGradient(0, 0, 0, baseHeight);
+        gradient.addColorStop(0, "#050918");
+        gradient.addColorStop(0.55, "#102b46");
+        gradient.addColorStop(1, "#101410");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, baseWidth, baseHeight);
+        for (let i = 0; i < 70; i += 1) {
+          const x = (i * 47) % baseWidth;
+          const y = 8 + ((i * 29) % 70);
+          const bright = (i + Math.floor(frame / 18)) % 6 === 0;
+          px(x, y, bright ? 2 : 1, bright ? 2 : 1, bright ? "#fff0bd" : "#5b7392");
+        }
+        poly([[0, 112], [42, 48], [87, 112]], "#0b2133");
+        poly([[58, 120], [124, 44], [184, 120]], "#12314d");
+        poly([[238, 116], [314, 44], [382, 116]], "#102d45");
+        px(0, 108, 360, 94, "#0c1e1b");
+        poly([[0, 158], [70, 126], [135, 140], [202, 120], [282, 136], [360, 120], [360, 202], [0, 202]], "#173b32");
+        poly([[0, 180], [82, 166], [151, 178], [225, 162], [288, 175], [360, 166], [360, 202], [0, 202]], "#1b332c");
+        tree(22, 146, 0.72);
+        tree(321, 145, 0.82);
+        tree(286, 139, 0.56);
+        drawCampfire(180, 164);
+        px(0, 195, baseWidth, 7, "#030509");
+        ctx.restore();
+      }
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(canvas.clientWidth * dpr);
+        canvas.height = Math.floor(canvas.clientHeight * dpr);
+        draw();
+      }
+
+      function animate() {
+        frame += 1;
+        draw();
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      animate();
+    }
+
+    nameInput.value = titleName(studentName);
+    codeInput.value = "";
+    renderSlide();
+    renderWorkshop();
+    setupSceneCanvas();
+  </script>
+</body>
+</html>
