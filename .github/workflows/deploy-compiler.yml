@@ -1631,6 +1631,10 @@ jobs:
     needs:
       - verify
       - plan
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     environment:
