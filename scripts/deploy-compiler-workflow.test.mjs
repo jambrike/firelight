@@ -237,6 +237,12 @@ test("saved plans use an immutable protected S3 handoff and apply without replan
   assert.ok(occurrences("aws s3api get-object") === 4);
   assert.equal(occurrences("aws s3api head-object"), 6);
   assert.equal(occurrences("--version-id"), 6);
+  assert.equal(
+    occurrences(
+      'if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt" && [[ -s "$state_file" ]]; then',
+    ),
+    2,
+  );
   assert.ok(occurrences(".VersionId") >= 8);
   assert.ok(occurrences('--expected-bucket-owner "$AWS_ACCOUNT_ID"') >= 12);
   assert.ok(

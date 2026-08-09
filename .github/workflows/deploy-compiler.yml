@@ -395,7 +395,7 @@ jobs:
           variables_sha256="$(sha256sum "$variables_path" | cut -d' ' -f1)"
           terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
           state_file="$config_dir/state-before.json"
-          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt"; then
+          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt" && [[ -s "$state_file" ]]; then
             state_serial="$(jq -r '.serial' "$state_file")"
             state_lineage="$(jq -r '.lineage' "$state_file")"
             if [[ ! "$state_serial" =~ ^[0-9]+$ || ! "$state_lineage" =~ ^[0-9a-f-]{36}$ ]]; then
@@ -749,7 +749,7 @@ jobs:
           fi
           terraform init -input=false -lockfile=readonly -reconfigure -backend-config="$backend_path"
           state_file="$config_dir/state-before.json"
-          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt"; then
+          if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt" && [[ -s "$state_file" ]]; then
             current_serial="$(jq -r '.serial' "$state_file")"
             current_lineage="$(jq -r '.lineage' "$state_file")"
           else
