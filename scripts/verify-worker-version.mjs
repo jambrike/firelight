@@ -131,12 +131,14 @@ export async function requestCloudflare(configuration, fetchImpl, url) {
   );
   const body = parseJsonBytes(bytes);
   if (!response.ok) fail(cloudflareErrorCode(response));
+  const hasNoErrors = body?.errors === null ||
+    (Array.isArray(body?.errors) && body.errors.length === 0);
+  const hasValidMessages = body?.messages === null || Array.isArray(body?.messages);
   if (
     !isRecord(body) ||
     body.success !== true ||
-    !Array.isArray(body.errors) ||
-    body.errors.length !== 0 ||
-    !Array.isArray(body.messages) ||
+    !hasNoErrors ||
+    !hasValidMessages ||
     !isRecord(body.result)
   ) {
     fail("INVALID_CLOUDFLARE_RESPONSE");

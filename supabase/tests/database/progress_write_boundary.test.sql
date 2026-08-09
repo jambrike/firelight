@@ -4,6 +4,33 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(32);
 
+-- Hosted release acceptance runs again after the rollout has permanently
+-- contracted browser writes. Recreate the compatibility boundary inside this
+-- transaction so the expand/contract assertions remain repeatable; rollback
+-- restores the real hosted boundary when the test completes.
+grant select, insert, update
+on table public.lesson_progress
+to authenticated;
+
+drop policy if exists lesson_progress_insert_own on public.lesson_progress;
+create policy lesson_progress_insert_own
+on public.lesson_progress for insert
+to authenticated
+with check (
+  user_id = (select auth.uid())
+  and (select public.firelight_has_current_access())
+);
+
+drop policy if exists lesson_progress_update_own on public.lesson_progress;
+create policy lesson_progress_update_own
+on public.lesson_progress for update
+to authenticated
+using (user_id = (select auth.uid()))
+with check (
+  user_id = (select auth.uid())
+  and (select public.firelight_has_current_access())
+);
+
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.lesson_progress'::regclass),
   'lesson progress remains protected by RLS'
