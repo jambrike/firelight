@@ -82,6 +82,11 @@ test("compiler deployment is manual-only, exact-confirmed, and pinned to current
   );
   assert.ok(occurrences("git rev-parse FETCH_HEAD") >= 4);
   assert.match(workflow, /uses: \.\/\.github\/workflows\/ci\.yml/u);
+  const applyJob = workflow.slice(workflow.indexOf("\n  apply:"));
+  assert.match(
+    applyJob,
+    /apply:\n {4}needs:\n {6}- verify\n {6}- plan\n {4}if: >-\n {6}always\(\) &&\n {6}needs\.verify\.result == 'success' &&\n {6}needs\.plan\.result == 'success'/u,
+  );
   assert.match(
     workflow,
     /^env:\n {2}FIRELIGHT_COMPILER_RELEASE_BUILD_ID: \$\{\{ github\.sha \}\}$/mu,
