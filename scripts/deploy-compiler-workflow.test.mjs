@@ -237,12 +237,22 @@ test("saved plans use an immutable protected S3 handoff and apply without replan
   assert.ok(occurrences("aws s3api get-object") === 4);
   assert.equal(occurrences("aws s3api head-object"), 6);
   assert.equal(occurrences("--version-id"), 6);
+  assert.equal(occurrences("aws s3api list-objects-v2"), 2);
   assert.equal(
     occurrences(
-      'if terraform state pull > "$state_file" 2> "$config_dir/state-error.txt" && [[ -s "$state_file" ]]; then',
+      'state_key="firelight/compiler/$FIRELIGHT_COMPILER_ENVIRONMENT/terraform.tfstate"',
     ),
     2,
   );
+  assert.equal(
+    occurrences(
+      `state_object_count="$(jq --arg key "$state_key" '[.Contents[]? | select(.Key == $key)] | length' "$state_listing")"`,
+    ),
+    2,
+  );
+  assert.equal(occurrences('if [[ "$state_object_count" == "1" ]]; then'), 2);
+  assert.equal(occurrences('elif [[ "$state_object_count" == "0" ]]; then'), 2);
+  assert.equal(occurrences('terraform state pull > "$state_file"'), 2);
   assert.ok(occurrences(".VersionId") >= 8);
   assert.ok(occurrences('--expected-bucket-owner "$AWS_ACCOUNT_ID"') >= 12);
   assert.ok(
