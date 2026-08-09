@@ -194,6 +194,12 @@ test("production release proves retained Pages and preserves the overlay cutover
     (source.match(/FIRELIGHT_PEER_PROJECT_REF_IDENTITY_HASH:/gu) ?? []).length,
   );
   assert.match(source, /FIRELIGHT_EXPECTED_ORGANIZATION_IDENTITY_HASH/u);
+  assert.equal(
+    (source.match(
+      /FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: \$\{\{ inputs\.database_bootstrap_confirmation \}\}/gu,
+    ) ?? []).length,
+    4,
+  );
   assert.match(source, /node scripts\/verify-legacy-pages\.mjs/u);
   assert.doesNotMatch(source, /pages_deployment_id|pages_commit_sha/u);
   assert.match(

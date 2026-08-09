@@ -279,6 +279,7 @@ jobs:
       - name: Fingerprint remote migration history for approval
         id: remote-migrations
         env:
+          FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/verify-migration-state.mjs >> "$GITHUB_OUTPUT"
@@ -480,6 +481,7 @@ jobs:
         run: npx supabase link --project-ref "$SUPABASE_PROJECT_REF"
       - name: Require unchanged remote migration history after approval
         env:
+          FIRELIGHT_DATABASE_BOOTSTRAP_CONFIRMATION: ${{ inputs.database_bootstrap_confirmation }}
           FIRELIGHT_EXPECTED_MIGRATION_STATE_HASH: ${{ needs.preview-production-migrations.outputs.migration-state-hash }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
