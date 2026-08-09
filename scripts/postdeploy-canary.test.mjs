@@ -7,6 +7,7 @@ import {
   FIRELIGHT_BOARD_FQBN,
   buildFirstSparkProgressReplay,
   fetchBounded,
+  makeSupabaseFetch,
   parseDataEnvelope,
   parsePostdeployEnvironment,
   readBoundedBytes,
@@ -442,6 +443,19 @@ test("bounded fetch fails closed when its deadline expires", async () => {
     fetchBounded(stalledFetch, BASE_URL, {}, { timeoutMs: 1, maximumBytes: 10 }),
     assertCanaryCode("REQUEST_TIMEOUT"),
   );
+});
+
+test("Supabase fetch wrapper preserves bodyless response statuses", async () => {
+  const wrappedFetch = makeSupabaseFetch(async () =>
+    new Response(null, { status: 204 }),
+  );
+
+  const response = await wrappedFetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    method: "POST",
+  });
+
+  assert.equal(response.status, 204);
+  assert.equal(await response.text(), "");
 });
 
 test("compile validation binds the source, artifact hash, and Intel HEX image", () => {

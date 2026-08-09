@@ -801,13 +801,16 @@ export async function loadFirstSparkLesson(repositoryRoot) {
   }
 }
 
-function makeSupabaseFetch(fetchImpl) {
+export function makeSupabaseFetch(fetchImpl) {
   return async (input, init = {}) => {
     const { response, bytes } = await fetchBounded(fetchImpl, input, init, {
       timeoutMs: AUTH_TIMEOUT_MS,
       maximumBytes: MAX_AUTH_RESPONSE_BYTES,
     });
-    return new Response(bytes, {
+    const body = response.status === 204 || response.status === 205 || response.status === 304
+      ? null
+      : bytes;
+    return new Response(body, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
