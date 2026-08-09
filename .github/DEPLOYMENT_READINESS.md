@@ -60,10 +60,11 @@ secrets to pull-request jobs.
 The logical Supabase mapping is source-pinned in
 `.github/supabase-project-anchors.json`, outside every protected environment.
 It contains only domain-separated organization and project-ref SHA-256 values,
-never raw refs. Its organization and staging entries intentionally remain
-`PENDING_*` until the second hosted project exists, so every web or Auth
-mutation fails before entering a protected target. Replace those placeholders
-only in a reviewed change after two operators confirm both provider projects;
+never raw refs. The organization and production entries are provider-verified;
+the staging entry intentionally remains `PENDING_*` until the second hosted
+project exists, so every web or Auth mutation fails before entering a protected
+target. Replace that placeholder only in a reviewed change after two operators
+confirm both provider projects;
 the strict verifier rejects placeholders, extra fields, noncanonical bytes,
 zero values, and equal staging/production refs.
 
@@ -182,10 +183,11 @@ immediately before each Terraform apply.
   identity has only the intended admin role.
 - [ ] Confirm hosted backups, recovery ownership, alerts, and Management API
   token scope for both projects.
-- [ ] Replace the pending source-pinned organization and staging project-ref
-  fingerprints, verify that both canonical project labels are distinct, and
-  require review for every future anchor change. Do not copy these anchors into
-  environment-scoped variables, where they could be swapped with the secrets.
+- [ ] Replace the pending source-pinned staging project-ref fingerprint,
+  reverify the organization fingerprint and that both canonical project labels
+  are distinct, and require review for every future anchor change. Do not copy
+  these anchors into environment-scoped variables, where they could be swapped
+  with the secrets.
 
 ## Compiler and application evidence
 
