@@ -4,6 +4,32 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(40);
 
+-- Exercise the previous browser-compatible progress path even after a hosted
+-- release has permanently contracted writes to the Worker. These changes are
+-- test-transaction local and roll back to the live boundary at completion.
+grant select, insert, update
+on table public.lesson_progress
+to authenticated;
+
+drop policy if exists lesson_progress_insert_own on public.lesson_progress;
+create policy lesson_progress_insert_own
+on public.lesson_progress for insert
+to authenticated
+with check (
+  user_id = (select auth.uid())
+  and (select public.firelight_has_current_access())
+);
+
+drop policy if exists lesson_progress_update_own on public.lesson_progress;
+create policy lesson_progress_update_own
+on public.lesson_progress for update
+to authenticated
+using (user_id = (select auth.uid()))
+with check (
+  user_id = (select auth.uid())
+  and (select public.firelight_has_current_access())
+);
+
 select has_table(
   'public',
   'hardware_upload_evidence',

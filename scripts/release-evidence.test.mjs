@@ -135,7 +135,15 @@ test("capture binds the latest 100% deployment to verified version metadata", as
       : url.searchParams.has("deployable")
         ? { items: [versionSummary()] }
         : versionDetail();
-    return new Response(JSON.stringify(envelope(result)));
+    const body = url.searchParams.has("deployable")
+      ? {
+          ...envelope(result),
+          errors: null,
+          messages: null,
+          result_info: { page: 1, per_page: 20 },
+        }
+      : envelope(result);
+    return new Response(JSON.stringify(body));
   });
   assert.deepEqual(evidence, {
     schema: RELEASE_EVIDENCE_SCHEMA,
