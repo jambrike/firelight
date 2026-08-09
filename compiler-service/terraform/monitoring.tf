@@ -129,7 +129,6 @@ data "aws_iam_policy_document" "compiler_alerts_topic" {
       "SNS:Publish",
       "SNS:SetTopicAttributes",
       "SNS:Subscribe",
-      "SNS:Unsubscribe",
     ]
     resources = [aws_sns_topic.compiler_alerts.arn]
   }
