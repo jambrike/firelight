@@ -199,7 +199,7 @@ test.describe("high-risk account and curriculum journeys", () => {
 
     await homeLink.click();
     await expect(
-      page.getByRole("heading", { level: 1, name: "Build real robots, one spark at a time." }),
+      page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
     expect(pageErrors).toEqual([]);
     expectHermeticRequests(mocks);

@@ -17,6 +17,7 @@ import {
 
 const DESKTOP = { width: 1_440, height: 1_000 };
 const MOBILE = { width: 390, height: 844 };
+const SHORT_MOBILE = { width: 390, height: 667 };
 
 async function openApp(
   page: Page,
@@ -48,9 +49,34 @@ test.describe("deterministic accessibility and visual states", () => {
     const mocks = await openApp(page, "/", "anonymous");
 
     await expect(
-      page.getByRole("heading", { level: 1, name: "Build real robots, one spark at a time." }),
+      page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
     await assertAccessibleVisual(page, mocks, "public-home.png");
+  });
+
+  test("mobile public home", async ({ page }) => {
+    await page.setViewportSize(MOBILE);
+    const mocks = await openApp(page, "/", "anonymous");
+
+    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Begin the first spark" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Preview the trail" })).toBeVisible();
+    await assertAccessibleVisual(page, mocks, "mobile-public-home.png");
+  });
+
+  test("short mobile home keeps the start action above the fold", async ({ page }) => {
+    await page.setViewportSize(SHORT_MOBILE);
+    const mocks = await openApp(page, "/", "anonymous");
+    const startLink = page.getByRole("link", { name: "Begin the first spark" });
+
+    await expect(startLink).toBeVisible();
+    const startBox = await startLink.boundingBox();
+    expect(startBox).not.toBeNull();
+    expect((startBox?.y ?? 0) + (startBox?.height ?? 0)).toBeLessThanOrEqual(
+      SHORT_MOBILE.height,
+    );
+    await expectNoHorizontalOverflow(page);
+    expectHermeticRequests(mocks);
   });
 
   test("mobile auth entry", async ({ page }) => {
@@ -153,7 +179,7 @@ test.describe("authorization and keyboard focus", () => {
   test("skip link and client route changes move focus to main content", async ({ page }) => {
     const mocks = await openApp(page, "/", "anonymous");
     await expect(
-      page.getByRole("heading", { level: 1, name: "Build real robots, one spark at a time." }),
+      page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
 
     await page.keyboard.press("Tab");
