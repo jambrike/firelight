@@ -9,7 +9,7 @@ import { routeManifest } from "./route-manifest";
 import { AppRoutes } from "./routes";
 
 const routeCases = [
-  ["/", "Build real robots, one spark at a time."],
+  ["/", "Firelight"],
   ["/kit", "Everything needed for the first six builds."],
   ["/auth", "Your builds should be waiting when you return."],
   ["/activate", "Match this kit to your camp."],

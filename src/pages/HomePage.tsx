@@ -7,23 +7,31 @@ import { lessonCatalog } from "../features/lessons/catalog";
 export function HomePage() {
   return (
     <>
-      <section className="home-hero page-section">
+      <section className="home-hero" aria-labelledby="home-title">
+        <CampfireScene />
+        <div className="home-hero__vignette" aria-hidden="true" />
         <div className="home-hero__copy">
           <p className="eyebrow">Welcome to the campfire of inventors.</p>
-          <h1>Build real robots, one spark at a time.</h1>
-          <p className="lede">
-            Learn electronics, code, and robotics by building real things with a
-            guided Arduino Nano kit.
+          <h1 id="home-title">Firelight</h1>
+          <p className="home-hero__tagline">Build real robots, one spark at a time.</p>
+          <p className="home-hero__summary">
+            Learn electronics and code by building real things with a guided Arduino Nano kit.
           </p>
+          <ul className="home-hero__proof" aria-label="Firelight platform highlights">
+            <li>6 guided builds</li>
+            <li>Browser upload</li>
+            <li>Progress saved</li>
+          </ul>
+        </div>
+        <div className="home-hero__start">
+          <p className="hero-note">Pull up a log. Curiosity is the only prerequisite.</p>
           <div className="button-row">
             <PixelLink to="/auth">Begin the first spark</PixelLink>
             <PixelLink to="/learn" secondary>
               Preview the trail
             </PixelLink>
           </div>
-          <p className="hero-note">Pull up a log. Curiosity is the only prerequisite.</p>
         </div>
-        <CampfireScene />
       </section>
 
       <section className="page-section story-section" aria-labelledby="story-title">
