@@ -48,35 +48,39 @@ test.describe("deterministic accessibility and visual states", () => {
     await page.setViewportSize(DESKTOP);
     const mocks = await openApp(page, "/", "anonymous");
 
-    await expect(page.getByRole("button", { name: "Skip intro" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Skip intro" })).toHaveCount(0);
     await expectNoAxeViolations(page);
     await expectNoHorizontalOverflow(page);
-    await page.getByRole("button", { name: "Skip intro" }).click();
-    await expect(
-      page.getByRole("heading", { level: 1, name: "Firelight" }),
-    ).toBeVisible();
     await assertAccessibleVisual(page, mocks, "public-home.png");
+
+    await page.getByRole("button", { name: "Begin the first spark" }).click();
+    await expect(page.getByRole("button", { name: "Skip intro" })).toBeVisible();
+    await page.getByRole("button", { name: "Skip intro" }).click();
+    await expect(page).toHaveURL("http://127.0.0.1:4173/auth?next=/learn/first-spark");
+    await expect(page.getByRole("heading", { level: 1, name: "Your builds should be waiting when you return." })).toBeVisible();
   });
 
   test("mobile public home", async ({ page }) => {
     await page.setViewportSize(MOBILE);
     const mocks = await openApp(page, "/", "anonymous");
 
+    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Buy a Kit!" })).toBeVisible();
+    await assertAccessibleVisual(page, mocks, "mobile-public-home.png");
+
+    await page.getByRole("button", { name: "Begin the first spark" }).click();
     await expect(page.getByText("Tap to continue")).toBeVisible();
     await expectNoAxeViolations(page);
     await expectNoHorizontalOverflow(page);
     await page.getByRole("button", { name: "Skip intro" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Begin the first spark" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Buy a Kit!" })).toBeVisible();
-    await assertAccessibleVisual(page, mocks, "mobile-public-home.png");
+    await expect(page).toHaveURL("http://127.0.0.1:4173/auth?next=/learn/first-spark");
   });
 
   test("short mobile home keeps the start action above the fold", async ({ page }) => {
     await page.setViewportSize(SHORT_MOBILE);
     const mocks = await openApp(page, "/", "anonymous");
-    await page.getByRole("button", { name: "Skip intro" }).click();
-    const startLink = page.getByRole("link", { name: "Begin the first spark" });
+    const startLink = page.getByRole("button", { name: "Begin the first spark" });
 
     await expect(startLink).toBeVisible();
     const startBox = await startLink.boundingBox();
@@ -93,6 +97,20 @@ test.describe("deterministic accessibility and visual states", () => {
 
     await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Skip intro" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Begin the first spark" })).toHaveAttribute(
+      "href",
+      "/learn/first-spark",
+    );
+    expectHermeticRequests(mocks);
+  });
+
+  test("the signed-out Firelight brand replays the opening story", async ({ page }) => {
+    const mocks = await openApp(page, "/auth", "anonymous");
+
+    await page.getByRole("link", { name: "Firelight home" }).first().click();
+    await expect(page).toHaveURL(/\/\?intro=1$/);
+    await expect(page.getByRole("button", { name: "Skip intro" })).toBeVisible();
+    await expect(page.locator(".firelight-intro__campfire")).toBeVisible();
     expectHermeticRequests(mocks);
   });
 
