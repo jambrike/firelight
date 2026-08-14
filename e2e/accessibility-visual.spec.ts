@@ -60,7 +60,7 @@ test.describe("deterministic accessibility and visual states", () => {
 
     await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Begin the first spark" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Preview the trail" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Buy a Kit!" })).toBeVisible();
     await assertAccessibleVisual(page, mocks, "mobile-public-home.png");
   });
 
@@ -188,8 +188,8 @@ test.describe("authorization and keyboard focus", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#main-content")).toBeFocused();
 
-    const previewLink = page.getByRole("link", { name: "Preview the trail" });
-    await previewLink.focus();
+    const learnLink = page.getByRole("link", { name: "Learn" });
+    await learnLink.focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/learn$/);
     await expect(page.locator("#main-content")).toBeFocused();

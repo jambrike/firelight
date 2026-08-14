@@ -102,7 +102,7 @@ describe("Firelight routes", () => {
     const user = userEvent.setup();
     renderPath("/");
 
-    await user.click(screen.getByRole("link", { name: "Preview the trail" }));
+    await user.click(screen.getByRole("link", { name: "Learn" }));
 
     expect(
       await screen.findByRole("heading", {
