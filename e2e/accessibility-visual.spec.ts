@@ -48,6 +48,10 @@ test.describe("deterministic accessibility and visual states", () => {
     await page.setViewportSize(DESKTOP);
     const mocks = await openApp(page, "/", "anonymous");
 
+    await expect(page.getByRole("button", { name: "Skip intro" })).toBeVisible();
+    await expectNoAxeViolations(page);
+    await expectNoHorizontalOverflow(page);
+    await page.getByRole("button", { name: "Skip intro" }).click();
     await expect(
       page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
@@ -58,6 +62,10 @@ test.describe("deterministic accessibility and visual states", () => {
     await page.setViewportSize(MOBILE);
     const mocks = await openApp(page, "/", "anonymous");
 
+    await expect(page.getByText("Tap to continue")).toBeVisible();
+    await expectNoAxeViolations(page);
+    await expectNoHorizontalOverflow(page);
+    await page.getByRole("button", { name: "Skip intro" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Begin the first spark" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Buy a Kit!" })).toBeVisible();
@@ -67,6 +75,7 @@ test.describe("deterministic accessibility and visual states", () => {
   test("short mobile home keeps the start action above the fold", async ({ page }) => {
     await page.setViewportSize(SHORT_MOBILE);
     const mocks = await openApp(page, "/", "anonymous");
+    await page.getByRole("button", { name: "Skip intro" }).click();
     const startLink = page.getByRole("link", { name: "Begin the first spark" });
 
     await expect(startLink).toBeVisible();
@@ -76,6 +85,14 @@ test.describe("deterministic accessibility and visual states", () => {
       SHORT_MOBILE.height,
     );
     await expectNoHorizontalOverflow(page);
+    expectHermeticRequests(mocks);
+  });
+
+  test("authenticated learners do not receive the opening story", async ({ page }) => {
+    const mocks = await openApp(page, "/", "activated");
+
+    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Skip intro" })).toHaveCount(0);
     expectHermeticRequests(mocks);
   });
 
@@ -177,7 +194,7 @@ test.describe("authorization and keyboard focus", () => {
   });
 
   test("skip link and client route changes move focus to main content", async ({ page }) => {
-    const mocks = await openApp(page, "/", "anonymous");
+    const mocks = await openApp(page, "/", "activated");
     await expect(
       page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
