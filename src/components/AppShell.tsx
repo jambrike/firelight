@@ -18,6 +18,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
   const identity = useIdentity();
   const mainRef = useRef<HTMLElement>(null);
   const previousLocationRef = useRef(location);
+  const isHomepage = location === "/";
 
   const isActive = (path: string) =>
     path === "/learn" ? location.startsWith("/learn") : location === path;
@@ -37,7 +38,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
-      <header className="site-header">
+      {isHomepage ? null : <header className="site-header">
         <div className="site-header__inner">
           <Brand />
           <button
@@ -84,11 +85,11 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
             </Link>
           </nav>
         </div>
-      </header>
+      </header>}
       <main id="main-content" ref={mainRef} tabIndex={-1}>
         {children}
       </main>
-      <footer className="site-footer">
+      {isHomepage ? null : <footer className="site-footer">
         <div>
           <Brand />
           <p>Real circuits. Real code. One small spark at a time.</p>
@@ -98,7 +99,7 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
           <Link to="/learn">Build path</Link>
           <Link to="/admin">Pilot support</Link>
         </nav>
-      </footer>
+      </footer>}
     </div>
   );
 }
