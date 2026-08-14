@@ -89,7 +89,7 @@ test.describe("deterministic accessibility and visual states", () => {
   });
 
   test("authenticated learners do not receive the opening story", async ({ page }) => {
-    const mocks = await openApp(page, "/", "activated");
+    const mocks = await openApp(page, "/", "learner");
 
     await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Skip intro" })).toHaveCount(0);
@@ -194,7 +194,7 @@ test.describe("authorization and keyboard focus", () => {
   });
 
   test("skip link and client route changes move focus to main content", async ({ page }) => {
-    const mocks = await openApp(page, "/", "activated");
+    const mocks = await openApp(page, "/", "learner");
     await expect(
       page.getByRole("heading", { level: 1, name: "Firelight" }),
     ).toBeVisible();
