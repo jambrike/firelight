@@ -198,10 +198,15 @@ test.describe("high-risk account and curriculum journeys", () => {
     await expectNoAxeViolations(page);
 
     await homeLink.click();
+    await expect(page.getByRole("heading", { level: 1, name: "Firelight" })).toBeVisible();
+    await page.getByRole("button", { name: "Begin the first spark" }).click();
     await expect(page.getByRole("button", { name: "Skip intro" })).toBeVisible();
     await page.getByRole("button", { name: "Skip intro" }).click();
     await expect(
-      page.getByRole("heading", { level: 1, name: "Firelight" }),
+      page.getByRole("heading", {
+        level: 1,
+        name: "Your builds should be waiting when you return.",
+      }),
     ).toBeVisible();
     expect(pageErrors).toEqual([]);
     expectHermeticRequests(mocks);

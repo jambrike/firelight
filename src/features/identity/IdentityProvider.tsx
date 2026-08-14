@@ -21,6 +21,14 @@ function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : "Firelight could not complete the request.";
 }
 
+function accountConfirmationRedirect(): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  const suffix = next === "/learn/first-spark"
+    ? `?next=${encodeURIComponent(next)}`
+    : "";
+  return `${window.location.origin}/auth${suffix}`;
+}
+
 function purgeBrowserLegacyPlaintextPassword(): void {
   try {
     purgeLegacyPlaintextPassword(window.localStorage);
@@ -284,7 +292,7 @@ export function IdentityProvider({ children }: { readonly children: ReactNode })
           password,
           options: {
             data: { display_name: displayName.trim() },
-            emailRedirectTo: `${window.location.origin}/auth`,
+            emailRedirectTo: accountConfirmationRedirect(),
           },
         });
         if (signUpError) throw signUpError;

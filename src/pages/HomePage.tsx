@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useIdentity } from "../features/identity/identity-context";
 import { CampfireScene } from "../components/CampfireScene";
 
@@ -30,16 +30,21 @@ function holdDelay(line: string): number {
 
 export function HomePage() {
   const identity = useIdentity();
+  const [, navigate] = useLocation();
   const authenticated = identity.status === "authenticated";
+  const [introStarted, setIntroStarted] = useState(
+    () => new URLSearchParams(window.location.search).get("intro") === "1",
+  );
   const [introComplete, setIntroComplete] = useState(false);
   const [lineIndex, setLineIndex] = useState(0);
   const [displayedLine, setDisplayedLine] = useState("");
   const timerRef = useRef<number | null>(null);
   const characterIndexRef = useRef(0);
   const introRequired = identity.status === "anonymous" || identity.status === "error";
-  const introVisible = introRequired && !introComplete;
-  const introBlocking = identity.status === "loading" || introVisible;
+  const introVisible = introRequired && introStarted && !introComplete;
+  const introBlocking = introVisible || (introStarted && identity.status === "loading");
   const currentLine = openingStory[lineIndex];
+  const nextLessonPath = `/learn/${identity.data?.nextLesson?.id ?? "first-spark"}`;
 
   const clearStoryTimer = useCallback(() => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
@@ -50,6 +55,15 @@ export function HomePage() {
     clearStoryTimer();
     setIntroComplete(true);
     setDisplayedLine("");
+    if (introRequired) navigate("/auth?next=/learn/first-spark");
+  }, [clearStoryTimer, introRequired, navigate]);
+
+  const startIntro = useCallback(() => {
+    clearStoryTimer();
+    setLineIndex(0);
+    setDisplayedLine("");
+    setIntroComplete(false);
+    setIntroStarted(true);
   }, [clearStoryTimer]);
 
   const continueStory = useCallback(() => {
@@ -169,9 +183,20 @@ export function HomePage() {
 
       <div className="old-home__actions">
         <p>Pull up a log.</p>
-        <Link className="old-home__cta" to={authenticated ? "/camp" : "/auth"}>
-          Begin the first spark
-        </Link>
+        {authenticated ? (
+          <Link className="old-home__cta" to={nextLessonPath}>
+            Begin the first spark
+          </Link>
+        ) : (
+          <button
+            className="old-home__cta"
+            type="button"
+            disabled={identity.status === "loading"}
+            onClick={startIntro}
+          >
+            {identity.status === "loading" ? "Checking your camp…" : "Begin the first spark"}
+          </button>
+        )}
       </div>
       </div>
 
@@ -204,6 +229,13 @@ export function HomePage() {
                   {displayedLine === currentLine ? currentLine : ""}
                 </span>
               </button>
+              <div className="firelight-intro__campfire" aria-hidden="true">
+                <span className="firelight-intro__flame firelight-intro__flame--outer" />
+                <span className="firelight-intro__flame firelight-intro__flame--middle" />
+                <span className="firelight-intro__flame firelight-intro__flame--core" />
+                <span className="firelight-intro__ember firelight-intro__ember--one" />
+                <span className="firelight-intro__ember firelight-intro__ember--two" />
+              </div>
               <button
                 className="firelight-intro__skip"
                 type="button"

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IdentityContext, anonymousIdentity } from "../features/identity/identity-context";
@@ -10,6 +10,40 @@ afterEach(() => {
 });
 
 describe("identity pages", () => {
+  it("continues from the opening story into the first tutorial after sign-in", async () => {
+    window.history.replaceState(null, "", "/auth?next=/learn/first-spark");
+    render(
+      <IdentityContext.Provider
+        value={{
+          ...anonymousIdentity,
+          status: "authenticated",
+          data: {
+            profile: {
+              id: "user-id",
+              displayName: "Ada",
+              role: "learner",
+              email: "ada@example.com",
+              emailConfirmed: true,
+              createdAt: "2026-08-06T00:00:00.000Z",
+              updatedAt: "2026-08-06T00:00:00.000Z",
+            },
+            activation: null,
+            progress: [],
+            achievements: [],
+            nextLesson: { id: "first-spark", title: "First Spark" },
+          },
+        }}
+      >
+        <AuthPage />
+      </IdentityContext.Provider>,
+    );
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/learn/first-spark");
+    });
+    expect(window.location.search).toBe("");
+  });
+
   it("submits signup with a builder name, email, and password", async () => {
     const user = userEvent.setup();
     const signUp = vi.fn(async () => undefined);

@@ -2321,11 +2321,18 @@ label.identity-form input {
     0 5px 0 #1f0c02,
     0 0 1.35rem rgba(255, 122, 24, 0.28);
   color: #220f00;
+  cursor: pointer;
   font-family: var(--font-pixel);
   font-size: 0.64rem;
   line-height: 1.5;
   text-align: center;
   text-decoration: none;
+}
+
+.old-home__cta:disabled {
+  cursor: wait;
+  filter: saturate(0.55);
+  opacity: 0.82;
 }
 
 .old-home__cta:active {
@@ -2478,8 +2485,116 @@ label.identity-form input {
 }
 
 .firelight-intro[data-loading="true"]::before,
-.firelight-intro[data-loading="true"]::after {
+.firelight-intro[data-loading="true"]::after,
+.firelight-intro[data-loading="true"] .firelight-intro__campfire {
   display: none;
+}
+
+.firelight-intro__campfire {
+  position: absolute;
+  z-index: 1;
+  bottom: 12vh;
+  left: 50%;
+  width: clamp(4.5rem, 8vw, 7rem);
+  height: clamp(6rem, 15vh, 9rem);
+  transform: translateX(-50%);
+  filter: drop-shadow(0 0 1.25rem rgba(255, 96, 8, 0.74));
+  pointer-events: none;
+}
+
+.firelight-intro__flame {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  display: block;
+  transform: translateX(-50%);
+  transform-origin: 50% 100%;
+  image-rendering: pixelated;
+}
+
+.firelight-intro__flame--outer {
+  width: 100%;
+  height: 100%;
+  background: #d72f08;
+  clip-path: polygon(
+    45% 0,
+    64% 18%,
+    62% 35%,
+    78% 27%,
+    91% 53%,
+    86% 79%,
+    100% 79%,
+    82% 100%,
+    18% 100%,
+    0 79%,
+    14% 79%,
+    9% 55%,
+    29% 30%,
+    35% 47%
+  );
+  animation: intro-flame-outer 780ms steps(3, end) infinite alternate;
+}
+
+.firelight-intro__flame--middle {
+  width: 68%;
+  height: 72%;
+  background: #ff8018;
+  clip-path: polygon(52% 0, 76% 31%, 68% 49%, 86% 58%, 80% 100%, 17% 100%, 10% 66%, 34% 39%, 39% 57%);
+  animation: intro-flame-middle 620ms steps(3, end) infinite alternate;
+}
+
+.firelight-intro__flame--core {
+  width: 36%;
+  height: 43%;
+  background: #ffe06c;
+  clip-path: polygon(52% 0, 88% 47%, 76% 100%, 18% 100%, 7% 58%, 36% 28%);
+  box-shadow: 0 0 1.2rem rgba(255, 216, 74, 0.72);
+  animation: intro-flame-core 500ms steps(2, end) infinite alternate;
+}
+
+.firelight-intro__ember {
+  position: absolute;
+  width: 0.38rem;
+  height: 0.38rem;
+  background: #ffc640;
+  box-shadow: 0 0 0.65rem #ff7a18;
+}
+
+.firelight-intro__ember--one {
+  top: 18%;
+  left: 18%;
+  animation: intro-ember-rise 1.35s steps(4, end) infinite;
+}
+
+.firelight-intro__ember--two {
+  top: 34%;
+  right: 8%;
+  animation: intro-ember-rise 1.7s 420ms steps(4, end) infinite;
+}
+
+@keyframes intro-flame-outer {
+  to {
+    transform: translateX(-50%) scaleX(0.88) scaleY(1.06);
+  }
+}
+
+@keyframes intro-flame-middle {
+  to {
+    transform: translateX(-45%) scaleX(1.08) scaleY(0.93);
+  }
+}
+
+@keyframes intro-flame-core {
+  to {
+    transform: translateX(-55%) scaleY(1.08);
+  }
+}
+
+@keyframes intro-ember-rise {
+  to {
+    opacity: 0;
+    transform: translate(0.7rem, -3.3rem);
+  }
 }
 
 .firelight-intro__hint {

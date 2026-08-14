@@ -82,10 +82,39 @@ export function CampfireScene() {
       pixel(x - 18, y + 9, 36, 5, "#2d180c");
       pixel(x - 22, y + 12, 18, 4, "#5b2c12");
       pixel(x + 4, y + 12, 18, 4, "#5b2c12");
-      pixel(x - 2, y - 9 + Math.round(Math.sin(animation / 10) * 2), 5, 17, "#fff0a6");
-      pixel(x - 8, y - 4 + Math.round(Math.cos(animation / 9) * 2), 8, 18, "#ff8a19");
-      pixel(x + 2, y - 2 + Math.round(Math.sin(animation / 8) * 2), 8, 16, "#f44313");
-      pixel(x - 4, y - 17, 7, 10, "#ffc93f");
+      const sway = Math.round(Math.sin(animation / 8) * 2);
+      polygon(
+        [
+          [x, y + 9],
+          [x - 11, y + 3],
+          [x - 9, y - 8],
+          [x - 4, y - 15],
+          [x - 3, y - 28],
+          [x + 2 + sway, y - 21],
+          [x + 6, y - 30],
+          [x + 11, y - 12],
+          [x + 10, y + 2],
+        ],
+        "#e83b0c",
+      );
+      polygon(
+        [
+          [x, y + 8],
+          [x - 6, y + 2],
+          [x - 4, y - 8],
+          [x + sway, y - 18],
+          [x + 3, y - 8],
+          [x + 7, y - 2],
+          [x + 6, y + 7],
+        ],
+        "#ff8a19",
+      );
+      polygon(
+        [[x, y + 7], [x - 3, y + 1], [x, y - 8], [x + 4, y], [x + 3, y + 7]],
+        "#ffe46a",
+      );
+      pixel(x - 12 + sway, y - 24, 2, 2, "#ffc640");
+      pixel(x + 13 - sway, y - 18, 2, 2, "#ff7a18");
     };
 
     const draw = () => {
@@ -147,7 +176,9 @@ export function CampfireScene() {
       drawBench(104, 161, false);
       drawBench(255, 161, true);
       drawBackpack(306, 158);
-      drawCampfire(180, 161);
+      // Keep the flame above the start controls even when the wide pixel scene
+      // is cropped into a phone viewport.
+      drawCampfire(180, view.innerWidth <= 768 ? 85 : 135);
       pixel(0, 195, SCENE_WIDTH, 7, "#030509");
       context.restore();
     };

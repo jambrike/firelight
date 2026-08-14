@@ -1,6 +1,7 @@
 import { KeyRound, MailCheck, UserRound } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SyntheticEvent } from "react";
+import { useLocation } from "wouter";
 import { PageIntro, Panel, PixelLink, StatusRegion } from "../components/ui";
 import { useIdentity } from "../features/identity/identity-context";
 
@@ -22,8 +23,15 @@ function clearRecoveryParameters(): void {
   );
 }
 
+function requestedTutorialPath(): string | null {
+  const requested = new URLSearchParams(window.location.search).get("next");
+  return requested === "/learn/first-spark" ? requested : null;
+}
+
 export function AuthPage() {
   const identity = useIdentity();
+  const [, navigate] = useLocation();
+  const tutorialPath = requestedTutorialPath();
   const [mode, setMode] = useState<AuthMode>(() =>
     identity.recoveryMode || new URLSearchParams(window.location.search).get("mode") === "reset"
       ? "reset"
@@ -34,6 +42,17 @@ export function AuthPage() {
   const [password, setPassword] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (
+      tutorialPath &&
+      identity.status === "authenticated" &&
+      identity.data &&
+      mode !== "reset"
+    ) {
+      navigate(tutorialPath, { replace: true });
+    }
+  }, [identity.data, identity.status, mode, navigate, tutorialPath]);
 
   const submit = async () => {
     setSubmitting(true);
